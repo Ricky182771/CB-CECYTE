@@ -1,0 +1,160 @@
+#include "chatbot/curl_transport.h"
+
+#include <curl/curl.h>
+
+#include <cctype>
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+
+namespace chatbot {
+namespace {
+
+/// Inicialización global de curl exactamente una vez, con limpieza al salir
+/// del proceso (RAII, sección 8).
+class GlobalCurlInit {
+public:
+    GlobalCurlInit() { curl_global_init(CURL_GLOBAL_DEFAULT); }
+    ~GlobalCurlInit() { curl_global_cleanup(); }
+};
+
+void ensure_curl_global_init() {
+    static const GlobalCurlInit guard;
+}
+
+struct CurlHandleDeleter {
+    void operator()(CURL* handle) const { curl_easy_cleanup(handle); }
+};
+
+struct SlistDeleter {
+    void operator()(curl_slist* list) const { curl_slist_free_all(list); }
+};
+
+/// Quita espacios y saltos de línea de los extremos.
+std::string trim(std::string text) {
+    const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+    std::size_t begin = 0;
+    while (begin < text.size() && is_space(static_cast<unsigned char>(text[begin]))) {
+        ++begin;
+    }
+    std::size_t end = text.size();
+    while (end > begin && is_space(static_cast<unsigned char>(text[end - 1]))) {
+        --end;
+    }
+    return text.substr(begin, end - begin);
+}
+
+/// Comparación de cadenas sin distinguir mayúsculas (para nombres de cabecera).
+bool equals_case_insensitive(std::string_view left, std::string_view right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        const auto lc = static_cast<unsigned char>(left[i]);
+        const auto rc = static_cast<unsigned char>(right[i]);
+        if (std::tolower(lc) != std::tolower(rc)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+size_t write_body_callback(char* data, size_t size, size_t count, void* userdata) {
+    auto* body = static_cast<std::string*>(userdata);
+    body->append(data, size * count);
+    return size * count;
+}
+
+size_t header_callback(char* data, size_t size, size_t count, void* userdata) {
+    auto* retry_after = static_cast<std::optional<std::string>*>(userdata);
+    const size_t total = size * count;
+    const std::string line{data, total};
+
+    const size_t colon = line.find(':');
+    if (colon != std::string::npos &&
+        equals_case_insensitive(trim(line.substr(0, colon)), "retry-after")) {
+        *retry_after = trim(line.substr(colon + 1));
+    }
+    return total;
+}
+
+} // namespace
+
+struct CurlTransport::Impl {
+    Impl() {
+        ensure_curl_global_init();
+        handle.reset(curl_easy_init());
+    }
+
+    std::unique_ptr<CURL, CurlHandleDeleter> handle;
+};
+
+CurlTransport::CurlTransport() : impl_(std::make_unique<Impl>()) {}
+
+CurlTransport::~CurlTransport() = default;
+
+HttpResponse CurlTransport::send(const HttpRequest& request) {
+    HttpResponse response;
+    if (impl_->handle == nullptr) {
+        response.error = "libcurl no pudo inicializarse";
+        return response;
+    }
+    CURL* handle = impl_->handle.get();
+    curl_easy_reset(handle);
+
+    char error_buffer[CURL_ERROR_SIZE] = {};
+
+    // Cabeceras. La key vive solo aquí y nunca se imprime ni se guarda (sección 9).
+    std::unique_ptr<curl_slist, SlistDeleter> headers;
+    headers.reset(curl_slist_append(nullptr, "Content-Type: application/json"));
+    const std::string authorization = "Authorization: Bearer " + request.api_key;
+    headers.reset(curl_slist_append(headers.release(), authorization.c_str()));
+
+    CURLcode setup = CURLE_OK;
+    const auto set = [&handle, &setup](CURLoption option, auto value) {
+        if (setup == CURLE_OK) {
+            setup = curl_easy_setopt(handle, option, value);
+        }
+    };
+
+    set(CURLOPT_URL, request.url.c_str());
+    set(CURLOPT_POST, 1L);
+    set(CURLOPT_POSTFIELDS, request.body.c_str());
+    set(CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
+    set(CURLOPT_HTTPHEADER, headers.get());
+    // Timeout total (0 = sin límite) y 10 s para establecer conexión (sección 8).
+    set(CURLOPT_TIMEOUT_MS, static_cast<long>(request.timeout.count()));
+    set(CURLOPT_CONNECTTIMEOUT_MS, 10000L);
+    set(CURLOPT_WRITEFUNCTION, write_body_callback);
+    set(CURLOPT_WRITEDATA, &response.body);
+    set(CURLOPT_HEADERFUNCTION, header_callback);
+    set(CURLOPT_HEADERDATA, &response.retry_after);
+    set(CURLOPT_ERRORBUFFER, error_buffer);
+    set(CURLOPT_NOSIGNAL, 1L);
+
+    if (setup != CURLE_OK) {
+        response = HttpResponse{};
+        response.error =
+            std::string{"no se pudo preparar la petición: "} + curl_easy_strerror(setup);
+        return response;
+    }
+
+    const CURLcode result = curl_easy_perform(handle);
+    if (result != CURLE_OK) {
+        // Descarta capturas parciales: sin respuesta completa no hay cuerpo válido.
+        response = HttpResponse{};
+        response.timed_out = (result == CURLE_OPERATION_TIMEDOUT);
+        response.error = error_buffer[0] != '\0' ? std::string{error_buffer}
+                                                 : std::string{curl_easy_strerror(result)};
+        return response;
+    }
+
+    long status_code = 0;
+    curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status_code);
+    response.status = static_cast<int>(status_code);
+    return response;
+}
+
+} // namespace chatbot

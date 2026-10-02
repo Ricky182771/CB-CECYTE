@@ -1,0 +1,58 @@
+// smoke.cpp — programa desechable para probar el núcleo a mano (sección 5).
+//
+// Uso (el usuario lo corre; las pruebas automáticas nunca llaman a la API):
+//
+//   export CHAT_API_KEY="nvapi-..."
+//   export CHAT_MODEL="meta/llama-3.1-8b-instruct"
+//   ./build/dev/tools/smoke "¿Cómo estás?"
+//
+// Si no se pasa el mensaje como argumento, se usa uno de ejemplo.
+// Muestra la respuesta del asistente o el tipo de error; nunca imprime la key.
+
+#include "chatbot/chat_client.h"
+#include "chatbot/config.h"
+#include "chatbot/curl_transport.h"
+#include "chatbot/error.h"
+#include "chatbot/result.h"
+#include "chatbot/types.h"
+
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+int main(int argc, char* argv[]) {
+    const chatbot::ConfigOptions options; // Lee el entorno real.
+    const chatbot::Result<chatbot::Config> config = chatbot::load_config(options);
+    if (config.is_error()) {
+        const chatbot::ChatError& error = config.error();
+        std::cerr << "[" << chatbot::error_kind_label(error.kind) << "] "
+                  << error.message << '\n';
+        return 1;
+    }
+
+    const std::string prompt =
+        argc > 1 ? std::string{argv[1]} : std::string{"Salúdame en una frase."};
+
+    std::vector<chatbot::Message> messages;
+    messages.push_back(chatbot::Message{chatbot::Role::System, "Eres un asistente breve."});
+    messages.push_back(chatbot::Message{chatbot::Role::User, prompt});
+
+    chatbot::ChatClient client(config.value(),
+                               std::make_unique<chatbot::CurlTransport>());
+    const chatbot::Result<std::string> response = client.complete(messages);
+
+    if (response.is_ok()) {
+        std::cout << response.value() << '\n';
+        return 0;
+    }
+
+    const chatbot::ChatError& error = response.error();
+    std::cerr << "[" << chatbot::error_kind_label(error.kind) << "]"
+              << " http_status=" << error.http_status;
+    if (error.retry_after.has_value()) {
+        std::cerr << " retry_after=" << error.retry_after->count() << "s";
+    }
+    std::cerr << ": " << error.message << '\n';
+    return 1;
+}

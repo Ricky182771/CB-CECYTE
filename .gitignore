@@ -1,0 +1,15 @@
+# Directorios de compilación
+/build*/
+
+# Archivos locales de configuración y claves (nunca versionar secretos)
+config.json
+*.local.json
+.env
+.env.*
+*.key
+
+# Editor y sistema
+.vscode/
+.idea/
+*.swp
+.DS_Store
