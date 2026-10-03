@@ -6,6 +6,8 @@
 // App::Post.
 
 #include "conversation.h"
+#include "conversation_list.h"
+#include "conversation_store.h"
 #include "request_runner.h"
 
 #include "chatbot/chat_client.h"
@@ -27,6 +29,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -41,6 +44,59 @@ using chatbot::cli::EntryKind;
 
 /// Líneas que mueve cada paso de la rueda del ratón.
 constexpr int kWheelStep = 3;
+
+/// Valor de una variable de entorno, o nullopt si no existe.
+std::optional<std::string> env_value(const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr ? std::optional<std::string>{value} : std::nullopt;
+}
+
+/// Traduce una tecla de FTXUI a la de la lista de conversaciones.
+chatbot::cli::ListKey list_key(const ftxui::Event& event) {
+    using chatbot::cli::ListKey;
+    const std::pair<const ftxui::Event*, ListKey> keys[] = {
+        {&ftxui::Event::ArrowUp, ListKey::Up},     {&ftxui::Event::ArrowDown, ListKey::Down},
+        {&ftxui::Event::PageUp, ListKey::PageUp},  {&ftxui::Event::PageDown, ListKey::PageDown},
+        {&ftxui::Event::Home, ListKey::Home},      {&ftxui::Event::End, ListKey::End},
+        {&ftxui::Event::Return, ListKey::Enter},   {&ftxui::Event::Escape, ListKey::Escape},
+        {&ftxui::Event::Delete, ListKey::Delete},
+    };
+    for (const auto& [ftxui_event, key] : keys) {
+        if (event == *ftxui_event) {
+            return key;
+        }
+    }
+    return ListKey::Other;
+}
+
+/// Dibuja la lista de conversaciones; la fila seleccionada lleva el foco para
+/// que el marco la mantenga a la vista.
+ftxui::Element render_list(const chatbot::cli::ConversationList& list) {
+    if (list.empty()) {
+        return ftxui::text(std::string{chatbot::cli::ConversationList::kEmptyMessage}) |
+               ftxui::dim;
+    }
+    ftxui::Elements rows;
+    for (std::size_t i = 0; i < list.items().size(); ++i) {
+        const chatbot::cli::ConversationSummary& item = list.items()[i];
+        ftxui::Element row = ftxui::hbox({
+            ftxui::text(list.is_current(i) ? "● " : "  "),
+            ftxui::text(item.title) | (item.readable ? ftxui::bold : ftxui::dim) |
+                ftxui::flex_shrink,
+            ftxui::text("  "),
+            ftxui::text(chatbot::cli::ConversationList::details(item)) | ftxui::dim,
+            ftxui::filler(),
+        });
+        if (!item.readable) {
+            row = row | ftxui::dim;
+        }
+        if (i == list.selected()) {
+            row = row | ftxui::inverted | ftxui::focus;
+        }
+        rows.push_back(std::move(row));
+    }
+    return ftxui::vbox(std::move(rows));
+}
 
 /// Dibuja una entrada de la conversación con su etiqueta.
 ftxui::Element render_entry(const Entry& entry) {
@@ -152,16 +208,25 @@ int main() {
                   << config.error().message << '\n';
         return 1;
     }
-    const std::string title = "Chatbot CECyTE — " + config.value().model;
+    const std::string model = config.value().model;
 
     // El orden de declaración importa: se destruyen en orden inverso. El
     // runner se destruye antes que screen y client (cancela y hace join del
     // hilo, que usa ambos). Las tareas que queden en la cola de screen apuntan
-    // a conversation, input_text, scroll y last_dropped: van antes que screen.
+    // a conversation, input_text, scroll, last_dropped y store: van antes que
+    // screen.
+    const chatbot::cli::ConversationStore store{
+        chatbot::cli::resolve_data_dir(env_value("CHAT_DATA_DIR"), env_value("XDG_DATA_HOME"),
+                                       env_value("HOME"))
+            .value_or("")};
     chatbot::cli::Conversation conversation;
     std::string input_text;
     Scroll scroll;
     std::size_t last_dropped = 0;
+    chatbot::cli::ConversationList list;
+    bool list_open = false;
+    std::string flash;     ///< Aviso de la línea de estado hasta la siguiente tecla.
+    ftxui::Box list_box;   ///< Zona visible de la lista (para PgUp/PgDn).
     chatbot::ChatClient client(config.value(), std::make_unique<chatbot::CurlTransport>());
     auto screen = ftxui::App::Fullscreen();
     chatbot::cli::RequestRunner runner(
@@ -186,18 +251,66 @@ int main() {
         runner.start(
             std::move(*messages),
             [&conversation](std::string delta) { conversation.append_delta(delta); },
-            [&conversation, &input_text,
-             &last_dropped](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
+            [&conversation, &input_text, &last_dropped, &store,
+             &model](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
                 last_dropped = dropped;
                 const std::optional<std::string> restored =
-                    result.is_ok() ? conversation.finish_success(result.value().finish_reason)
-                                   : std::optional<std::string>{
-                                         conversation.finish_error(result.error())};
+                    result.is_ok()
+                        ? conversation.finish_success(result.value().finish_reason, model)
+                        : std::optional<std::string>{conversation.finish_error(result.error())};
+                if (!restored.has_value()) {
+                    // Par usuario/asistente completo: es lo único que se guarda.
+                    chatbot::cli::save_conversation(conversation, store);
+                }
                 // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
                 if (restored.has_value() && input_text.empty()) {
                     input_text = *restored;
                 }
             });
+    };
+
+    // Empieza una conversación nueva (la actual ya quedó guardada si tenía pares).
+    const auto new_conversation = [&] {
+        conversation = chatbot::cli::Conversation{};
+        last_dropped = 0;
+        scroll.to_bottom();
+    };
+
+    // Ejecuta lo que pidió la lista de conversaciones.
+    const auto apply_list_action = [&](const chatbot::cli::ListAction& action) {
+        using Type = chatbot::cli::ListAction::Type;
+        switch (action.type) {
+        case Type::None:
+            break;
+        case Type::Close:
+            list_open = false;
+            break;
+        case Type::Open: {
+            const chatbot::cli::LoadResult loaded = store.load(action.id);
+            if (!loaded.conversation.has_value()) {
+                flash = loaded.error;
+                break;
+            }
+            conversation = chatbot::cli::Conversation::from_stored(*loaded.conversation);
+            const std::string used = conversation.last_model();
+            if (!used.empty() && used != model) {
+                conversation.add_notice("Esta conversación usó " + used + "; se continúa con " +
+                                        model + ".");
+            }
+            last_dropped = 0;
+            scroll.to_bottom();
+            list_open = false;
+            break;
+        }
+        case Type::Delete:
+            if (const std::optional<std::string> error = store.remove(action.id)) {
+                flash = "No se pudo borrar la conversación: " + *error;
+            } else if (action.id == conversation.id()) {
+                new_conversation(); // Se borró la que estaba abierta.
+            }
+            list.refresh(store.list());
+            break;
+        }
     };
 
     ftxui::InputOption input_option;
@@ -210,20 +323,41 @@ int main() {
         ftxui::Input(&input_text, "Escribe tu mensaje y presiona Enter", input_option);
 
     const ftxui::Component layout = ftxui::Renderer(input, [&] {
-        ftxui::Elements entries;
-        for (const Entry& entry : conversation.entries()) {
-            if (!entries.empty()) {
-                entries.push_back(ftxui::text(""));
+        ftxui::Element body;
+        if (list_open) {
+            body = render_list(list) | ftxui::yframe | ftxui::reflect(list_box) | ftxui::flex;
+        } else {
+            ftxui::Elements entries;
+            for (const Entry& entry : conversation.entries()) {
+                if (!entries.empty()) {
+                    entries.push_back(ftxui::text(""));
+                }
+                entries.push_back(render_entry(entry));
             }
-            entries.push_back(render_entry(entry));
+            body = scroll.apply(ftxui::vbox(std::move(entries)));
         }
 
         ftxui::Elements status;
+        if (list_open) {
+            if (const std::optional<std::string> question = list.confirmation()) {
+                status.push_back(ftxui::text(*question) | ftxui::bold);
+            } else {
+                status.push_back(
+                    ftxui::text("Enter abre · Supr borra · Esc vuelve a la conversación") |
+                    ftxui::dim);
+            }
+        }
+        if (!flash.empty()) {
+            status.push_back(ftxui::text(flash) | ftxui::bold);
+        }
         if (runner.busy()) {
             status.push_back(ftxui::text("Pensando… (Esc para cancelar)"));
         }
-        if (scroll.has_more_below()) {
-            status.push_back(ftxui::text("↓ Hay más abajo (End)") | ftxui::bold);
+        if (!list_open && scroll.has_more_below()) {
+            // Con texto en la caja, End mueve el cursor: el aviso sugiere PgDn.
+            status.push_back(ftxui::text(input_text.empty() ? "↓ Hay más abajo (End)"
+                                                            : "↓ Hay más abajo (PgDn)") |
+                             ftxui::bold);
         }
         if (last_dropped > 0) {
             status.push_back(ftxui::text("Se omitieron " + std::to_string(last_dropped) +
@@ -242,9 +376,15 @@ int main() {
             status_line.push_back(ftxui::text(""));
         }
 
+        const std::string title =
+            "Chatbot CECyTE — " + model + " — " +
+            (conversation.title().empty() ? std::string{"Nueva conversación"}
+                                          : conversation.title());
         return ftxui::vbox({
-            ftxui::text(title) | ftxui::bold,
-            scroll.apply(ftxui::vbox(std::move(entries))),
+            // Si no cabe, se encoge el título y el aviso de teclas queda entero.
+            ftxui::hbox({ftxui::text(title) | ftxui::bold | ftxui::flex_shrink, ftxui::filler(),
+                         ftxui::text(" Ctrl+O conversaciones · Ctrl+N nueva") | ftxui::dim}),
+            std::move(body),
             ftxui::separator(),
             ftxui::hbox(std::move(status_line)),
             ftxui::hbox({ftxui::text("> "), input->Render() | ftxui::flex}),
@@ -258,6 +398,37 @@ int main() {
     const ftxui::Component root = ftxui::CatchEvent(layout, [&](ftxui::Event event) {
         if (event == ftxui::Event::CtrlC) {
             screen.Exit();
+            return true;
+        }
+        if (event == ftxui::Event::Custom) {
+            return false; // Solo pide redibujar.
+        }
+        if (!event.is_mouse()) {
+            flash.clear(); // El aviso dura hasta la siguiente tecla.
+        }
+        if (event == ftxui::Event::CtrlN || event == ftxui::Event::CtrlO) {
+            if (runner.busy()) {
+                flash = "Espera la respuesta o cancélala con Esc.";
+                return true;
+            }
+            if (event == ftxui::Event::CtrlN) {
+                list_open = false;
+                new_conversation();
+            } else {
+                list.open(store.list(), conversation.id());
+                list_open = true;
+            }
+            return true;
+        }
+        if (list_open) {
+            // La lista recibe todas las teclas; la caja de entrada, ninguna.
+            if (event.is_mouse()) {
+                return true;
+            }
+            const int visible_rows = std::max(1, list_box.y_max - list_box.y_min + 1);
+            apply_list_action(list.handle(list_key(event),
+                                          event.is_character() ? event.character() : std::string{},
+                                          static_cast<std::size_t>(visible_rows)));
             return true;
         }
         if (event == ftxui::Event::Escape) {

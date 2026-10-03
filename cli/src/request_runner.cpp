@@ -37,6 +37,7 @@ bool RequestRunner::busy() const {
 
 void RequestRunner::cancel() {
     if (state_->busy && token_ != nullptr) {
+        state_->cancel_requested = true;
         token_->cancel();
     }
 }
@@ -50,6 +51,7 @@ bool RequestRunner::start(std::vector<Message> history, OnDelta on_delta, OnDone
     }
     token_ = std::make_unique<CancelToken>();
     state_->busy = true;
+    state_->cancel_requested = false;
 
     worker_ = std::thread([&client = client_, limit = history_limit_bytes_, post = post_,
                            state = state_, token = token_.get(), history = std::move(history),
@@ -84,6 +86,14 @@ bool RequestRunner::start(std::vector<Message> history, OnDelta on_delta, OnDone
 
         post([state, on_done, result, dropped] {
             state->busy = false;
+            // Si el usuario canceló después de que el hilo terminó, pero antes
+            // de que este aviso llegara a la interfaz, la cancelación gana.
+            if (state->cancel_requested && result.is_ok()) {
+                on_done(ChatError{ErrorKind::Cancelled, 0, "Petición cancelada por el usuario.",
+                                  std::nullopt},
+                        dropped);
+                return;
+            }
             on_done(result, dropped);
         });
     });

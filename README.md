@@ -63,6 +63,16 @@ Las variables de entorno (`CHAT_BASE_URL`, `CHAT_MODEL`, `CHAT_TIMEOUT`, `CHAT_H
 
 `CHAT_HISTORY_LIMIT` (o `history_limit` en el archivo) limita cuánto historial se envía en cada mensaje. Se mide en bytes del texto, más o menos un carácter por byte (los acentos y la ñ cuentan doble). El valor por defecto es 32000; `0` significa sin límite. Si la conversación pasa del límite, se omiten los mensajes más antiguos y la línea de estado lo avisa. Si el servidor rechaza la petición por demasiado larga, el chatbot recorta el historial a la mitad (del límite o del tamaño real, lo que sea menor) y reintenta una vez.
 
+#### Conversaciones guardadas
+
+Cada conversación se guarda sola después de cada respuesta completa, en un archivo `.json` por conversación dentro de:
+
+- `CHAT_DATA_DIR`, si la defines;
+- si no, `$XDG_DATA_HOME/chatbot/conversations` (solo si `XDG_DATA_HOME` es una ruta absoluta);
+- si no, `~/.local/share/chatbot/conversations`.
+
+Los archivos contienen **el texto completo de tus conversaciones**. Por eso la carpeta se crea con permisos 0700 y los archivos con 0600 (solo tu usuario puede leerlos). Para borrar una conversación, usa Supr en la lista (Ctrl+O); para borrarlas todas, borra la carpeta. Si un archivo está dañado o es de una versión más nueva del programa, aparece en la lista como ilegible y el programa nunca lo modifica.
+
 #### Depuración
 
 `CHAT_DEBUG_SSE=/ruta/archivo` (solo por variable de entorno) guarda en ese archivo, por cada intento de petición (tanto las respuestas por fragmentos, que usa la interfaz, como las completas, que usa `tools/smoke` sin `--stream`), la fecha, el modelo, el número de intento, el estado HTTP y el cuerpo crudo de la respuesta. Nunca guarda la key, las cabeceras ni lo que tú envías, pero **sí contiene las respuestas del modelo, es decir, la conversación**. Úsalo solo para diagnosticar un problema y borra el archivo después. Si no se puede escribir, el chatbot sigue funcionando sin avisar.
@@ -86,8 +96,12 @@ Teclas:
 | PgUp / PgDn | Sube o baja una pantalla del historial |
 | Rueda del ratón | Sube o baja unas 3 líneas |
 | Home / End | Con la caja vacía, va al inicio o al final del historial; con texto, mueve el cursor de la caja |
+| Ctrl+N | Empieza una conversación nueva |
+| Ctrl+O | Abre la lista de conversaciones guardadas |
 | Ctrl+C | Sale |
 
-Si subes en el historial, la vista se queda donde está aunque llegue texto nuevo, y la línea de estado muestra `↓ Hay más abajo (End)` (con la caja vacía, End regresa al final). Al enviar un mensaje, la vista regresa abajo.
+En la lista de conversaciones: ↑/↓, PgUp/PgDn y Home/End para moverte; Enter abre; Supr borra (pide confirmación: solo `s` borra); Esc vuelve a la conversación sin cambiar nada. Mientras hay una respuesta en curso, Ctrl+N y Ctrl+O no hacen nada: espera la respuesta o cancélala con Esc.
+
+Si subes en el historial, la vista se queda donde está aunque llegue texto nuevo, y la línea de estado muestra `↓ Hay más abajo (End)`, o `(PgDn)` si hay texto en la caja (porque ahí End mueve el cursor). Al enviar un mensaje, la vista regresa abajo.
 
 El chatbot captura el ratón para la rueda. Para seleccionar texto con el ratón, mantén Shift mientras arrastras, como en la mayoría de terminales con apps que usan el ratón.

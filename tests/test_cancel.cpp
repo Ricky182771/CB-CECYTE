@@ -193,3 +193,36 @@ TEST_CASE("complete_stream: respuesta cancelada del transporte no se reintenta",
     CHECK(harness.transport->requests.size() == 1);
     CHECK(harness.sleeper->sleeps.empty());
 }
+
+TEST_CASE("complete: cancelar durante un intento exitoso devuelve Cancelled", "[cancelacion]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, success_body(), std::nullopt, false, ""});
+    chatbot::CancelToken token;
+    harness.transport->on_send = [&token] { token.cancel(); };
+
+    const chatbot::Result<std::string> response =
+        harness.client->complete(sample_messages(), &token);
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == chatbot::ErrorKind::Cancelled);
+    CHECK(harness.transport->requests.size() == 1);
+}
+
+TEST_CASE("complete_stream: cancelar después de recibir todo devuelve Cancelled",
+          "[cancelacion]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(sse_ok());
+    chatbot::CancelToken token;
+
+    // El usuario cancela justo cuando llegó el último texto.
+    const chatbot::Result<chatbot::CompletionInfo> response = harness.client->complete_stream(
+        sample_messages(),
+        [&token](std::string_view) {
+            token.cancel();
+            return true;
+        },
+        &token);
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == chatbot::ErrorKind::Cancelled);
+    CHECK(harness.transport->requests.size() == 1);
+}

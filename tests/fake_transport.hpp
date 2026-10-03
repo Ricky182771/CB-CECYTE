@@ -28,9 +28,15 @@ public:
     std::vector<chatbot::HttpRequest> requests;
     /// Si es > 0, el cuerpo se entrega partido en trozos de ese tamaño.
     std::size_t chunk_size = 0;
+    /// Gancho opcional que se ejecuta dentro de cada petición, después de
+    /// registrarla (p. ej. para cancelar a mitad del intento).
+    std::function<void()> on_send;
 
     [[nodiscard]] chatbot::HttpResponse send(const chatbot::HttpRequest& request) override {
         requests.push_back(request);
+        if (on_send) {
+            on_send();
+        }
         return next_response();
     }
 
@@ -38,6 +44,9 @@ public:
         const chatbot::HttpRequest& request,
         const chatbot::StreamCallback& on_chunk) override {
         requests.push_back(request);
+        if (on_send) {
+            on_send();
+        }
         const chatbot::HttpResponse response = next_response();
         // Como en la red real: primero las cabeceras (estado) y luego el cuerpo.
         if (response.status != 0 && !response.body.empty()) {
