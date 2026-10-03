@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <string_view>
 
 namespace {
 using chatbot_test::make_client;
@@ -139,6 +140,37 @@ TEST_CASE("BadResponse no se reintenta", "[reintentos]") {
 
     const chatbot::Result<std::string> response = harness.client->complete(sample_messages());
     REQUIRE(response.is_error());
+    CHECK(harness.transport->requests.size() == 1);
+    CHECK(harness.sleeper->sleeps.empty());
+}
+
+TEST_CASE("Fallo de red no reintentable: 1 sola petición en complete", "[reintentos][permanente]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(chatbot::HttpResponse{
+        0, "", std::nullopt, false, "Protocol \"htps\" not supported", false, false});
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, success_body(), std::nullopt, false, ""});
+
+    const chatbot::Result<std::string> response = harness.client->complete(sample_messages());
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == chatbot::ErrorKind::Network);
+    CHECK(harness.transport->requests.size() == 1);
+    CHECK(harness.sleeper->sleeps.empty());
+}
+
+TEST_CASE("Fallo de red no reintentable: 1 sola petición en complete_stream",
+          "[reintentos][permanente]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(chatbot::HttpResponse{
+        0, "", std::nullopt, false, "SSL peer certificate was not OK", false, false});
+    harness.transport->responses.push_back(chatbot::HttpResponse{
+        200, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n", std::nullopt,
+        false, ""});
+
+    const chatbot::Result<void> response = harness.client->complete_stream(
+        sample_messages(), [](std::string_view) { return true; });
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == chatbot::ErrorKind::Network);
     CHECK(harness.transport->requests.size() == 1);
     CHECK(harness.sleeper->sleeps.empty());
 }

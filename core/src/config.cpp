@@ -4,12 +4,17 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cerrno>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace chatbot {
@@ -18,6 +23,15 @@ namespace {
 using nlohmann::json;
 
 const char* kDefaultBaseUrl = "https://integrate.api.nvidia.com/v1";
+
+/// Timeout máximo aceptado (1 hora). Evita desbordar la conversión a
+/// milisegundos con valores enormes.
+constexpr std::chrono::seconds kMaxTimeout{3600};
+
+/// Texto del máximo para los mensajes de error.
+std::string max_timeout_text() {
+    return std::to_string(kMaxTimeout.count()) + " segundos";
+}
 
 /// Lee el entorno real del proceso. Devuelve vacío si no existe la variable.
 std::string_view real_env(std::string_view name) {
@@ -51,6 +65,21 @@ std::optional<long long> parse_nonnegative_integer(std::string_view text) {
         return std::nullopt;
     }
     return value;
+}
+
+/// Indica si la URL empieza con https:// sin distinguir mayúsculas.
+bool starts_with_https(std::string_view url) {
+    constexpr std::string_view kScheme = "https://";
+    if (url.size() < kScheme.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < kScheme.size(); ++i) {
+        const auto c = static_cast<unsigned char>(url[i]);
+        if (std::tolower(c) != kScheme[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /// Aplica al config los valores presentes en el archivo JSON.
@@ -87,11 +116,18 @@ void apply_config_file(const std::string& path, Config& config) {
         if (!value.is_number_integer()) {
             throw std::runtime_error("\"timeout_seconds\" debe ser un número entero");
         }
-        const long long seconds = value.get<long long>();
-        if (seconds < 0) {
+        // Los enteros positivos se guardan sin signo: se comparan así para no
+        // convertir a long long un valor que no cabe.
+        if (value.is_number_unsigned()) {
+            if (value.get<std::uint64_t>() >
+                static_cast<std::uint64_t>(kMaxTimeout.count())) {
+                throw std::runtime_error("\"timeout_seconds\" no puede ser mayor que " +
+                                         max_timeout_text());
+            }
+        } else if (value.get<long long>() < 0) {
             throw std::runtime_error("\"timeout_seconds\" no puede ser negativo");
         }
-        config.timeout_seconds = std::chrono::seconds{seconds};
+        config.timeout_seconds = std::chrono::seconds{value.get<long long>()};
     }
 }
 
@@ -136,6 +172,21 @@ std::optional<ChatError> validate_config(const Config& config) {
             "Falta el modelo: defínelo en la variable de entorno CHAT_MODEL o "
             "en la llave \"model\" del archivo de configuración.", std::nullopt};
     }
+    if (!starts_with_https(config.base_url)) {
+        // Sin TLS la key viajaría en texto plano (sección 9).
+        return ChatError{
+            ErrorKind::Config, 0,
+            "La URL base debe empezar con https:// (CHAT_BASE_URL o \"base_url\" del "
+            "archivo de configuración); se recibió \"" + config.base_url + "\".",
+            std::nullopt};
+    }
+    if (config.timeout_seconds > kMaxTimeout) {
+        return ChatError{ErrorKind::Config, 0,
+                         "El timeout no puede ser mayor que " + max_timeout_text() +
+                             "; se recibió " +
+                             std::to_string(config.timeout_seconds.count()) + ".",
+                         std::nullopt};
+    }
     return std::nullopt;
 }
 
@@ -172,6 +223,12 @@ Result<Config> load_config(const ConfigOptions& options) {
             return ChatError{ErrorKind::Config, 0,
                              "CHAT_TIMEOUT debe ser un número entero de segundos; se recibió \"" +
                                  std::string{value} + "\".", std::nullopt};
+        }
+        if (*seconds > kMaxTimeout.count()) {
+            return ChatError{ErrorKind::Config, 0,
+                             "CHAT_TIMEOUT no puede ser mayor que " + max_timeout_text() +
+                                 "; se recibió \"" + std::string{value} + "\".",
+                             std::nullopt};
         }
         config.timeout_seconds = std::chrono::seconds{*seconds};
     }

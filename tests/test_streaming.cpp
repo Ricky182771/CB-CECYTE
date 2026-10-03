@@ -5,7 +5,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <catch2/matchers/catch_matchers_string.hpp>
+
 #include <chrono>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -193,6 +197,104 @@ TEST_CASE("complete_stream: BadResponse de un chunk no se reintenta", "[streamin
 
     REQUIRE(response.is_error());
     CHECK(response.error().kind == chatbot::ErrorKind::BadResponse);
+    CHECK(harness.transport->requests.size() == 1);
+    CHECK(harness.sleeper->sleeps.empty());
+}
+
+TEST_CASE("complete_stream: UTF-8 inválido no lanza y se sustituye por U+FFFD",
+          "[streaming][utf8]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, sse_flow(), std::nullopt, false, ""});
+    const std::vector<chatbot::Message> messages{
+        chatbot::Message{chatbot::Role::User, std::string("caf\xE9")}};
+
+    std::optional<chatbot::Result<void>> response;
+    REQUIRE_NOTHROW(response.emplace(harness.client->complete_stream(
+        messages, [](std::string_view) { return true; })));
+    REQUIRE(response->is_ok());
+    REQUIRE(harness.transport->requests.size() == 1);
+
+    const nlohmann::json body = nlohmann::json::parse(harness.transport->requests.front().body);
+    CHECK(body.at("messages")[0].at("content") == "caf\xEF\xBF\xBD");
+}
+
+TEST_CASE("complete_stream: callback que lanza devuelve Cancelled sin reintentar",
+          "[streaming][excepciones]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, sse_flow("parcial"), std::nullopt, false, ""});
+
+    std::optional<chatbot::Result<void>> response;
+    REQUIRE_NOTHROW(response.emplace(harness.client->complete_stream(
+        sample_messages(), [](std::string_view) -> bool {
+            throw std::runtime_error("fallo en la interfaz");
+        })));
+
+    REQUIRE(response->is_error());
+    CHECK(response->error().kind == chatbot::ErrorKind::Cancelled);
+    CHECK_THAT(response->error().message,
+               Catch::Matchers::ContainsSubstring("fallo en la interfaz"));
+    CHECK(harness.transport->requests.size() == 1);
+    CHECK(harness.sleeper->sleeps.empty());
+}
+
+TEST_CASE("complete_stream: primer chunk con content null se ignora", "[streaming][null]") {
+    auto harness = make_client();
+    std::string flow;
+    flow += "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n";
+    flow += "data: {\"choices\":[{\"delta\":{\"content\":\"Hola \"}}]}\n\n";
+    flow += "data: {\"choices\":[{\"delta\":{\"content\":\"mundo\"}}]}\n\n";
+    flow += "data: [DONE]\n\n";
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, flow, std::nullopt, false, ""});
+
+    std::string joined;
+    const chatbot::Result<void> response = harness.client->complete_stream(
+        sample_messages(), [&](std::string_view delta) {
+            joined += delta;
+            return true;
+        });
+
+    REQUIRE(response.is_ok());
+    CHECK(joined == "Hola mundo");
+}
+
+TEST_CASE("complete_stream: chunk final con choices vacío y usage se ignora",
+          "[streaming][null]") {
+    auto harness = make_client();
+    std::string flow;
+    flow += "data: {\"choices\":[{\"delta\":{\"content\":\"Hola \"}}]}\n\n";
+    flow += "data: {\"choices\":[{\"delta\":{\"content\":\"mundo\"}}]}\n\n";
+    flow += "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n";
+    flow += "data: [DONE]\n\n";
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, flow, std::nullopt, false, ""});
+
+    std::string joined;
+    const chatbot::Result<void> response = harness.client->complete_stream(
+        sample_messages(), [&](std::string_view delta) {
+            joined += delta;
+            return true;
+        });
+
+    REQUIRE(response.is_ok());
+    CHECK(joined == "Hola mundo");
+}
+
+TEST_CASE("complete_stream: error dentro del flujo con estado 200 conserva el mensaje",
+          "[streaming][null]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(chatbot::HttpResponse{
+        200, "data: {\"error\":{\"message\":\"Cuota agotada\"}}\n\n", std::nullopt, false,
+        ""});
+
+    const chatbot::Result<void> response = harness.client->complete_stream(
+        sample_messages(), [](std::string_view) { return true; });
+
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == chatbot::ErrorKind::BadResponse);
+    CHECK(response.error().message == "Cuota agotada");
     CHECK(harness.transport->requests.size() == 1);
     CHECK(harness.sleeper->sleeps.empty());
 }

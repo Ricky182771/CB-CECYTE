@@ -1,6 +1,7 @@
 #include "chatbot/chat_client.h"
 
 #include "chatbot/error.h"
+#include "error_body.h"
 #include "sse.h"
 
 #include <nlohmann/json.hpp>
@@ -9,6 +10,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,17 +33,6 @@ constexpr std::chrono::seconds kBaseDelay{1};
 /// Tope de espera entre intentos, también aplicado a Retry-After (decisión
 /// del usuario para evitar esperas absurdas).
 constexpr std::chrono::seconds kMaxDelay{60};
-
-/// Longitud máxima del mensaje extraído del cuerpo de un error.
-constexpr std::size_t kMaxErrorMessageLength = 300;
-
-/// Corta textos demasiado largos (sección 8).
-std::string truncate_message(const std::string& text) {
-    if (text.size() <= kMaxErrorMessageLength) {
-        return text;
-    }
-    return text.substr(0, kMaxErrorMessageLength) + "...";
-}
 
 /// Convierte un rol a su cadena del protocolo OpenAI. Valida el valor.
 Result<std::string_view> role_to_string(Role role) {
@@ -84,7 +75,9 @@ Result<std::string> build_request_body(std::string_view model,
                                      {"content", message.content}});
     }
     body["messages"] = std::move(json_messages);
-    return body.dump();
+    // replace: los bytes UTF-8 inválidos se sustituyen por U+FFFD en lugar de
+    // lanzar type_error 316 (las excepciones no cruzan la API pública).
+    return body.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
 /// URL final del endpoint: base sin "/" final + "/chat/completions".
@@ -94,30 +87,6 @@ std::string build_url(std::string_view base_url) {
         base.pop_back();
     }
     return base + "/chat/completions";
-}
-
-/// Intenta extraer el mensaje de error del cuerpo (error.message o detail,
-/// sección 8); si no hay, usa el texto alternativo.
-std::string extract_error_message(const std::string& body, const std::string& fallback) {
-    try {
-        const json document = json::parse(body);
-        if (!document.is_object()) {
-            return fallback;
-        }
-        if (document.contains("error")) {
-            const json& error = document.at("error");
-            if (error.is_object() && error.contains("message") &&
-                error.at("message").is_string()) {
-                return truncate_message(error.at("message").get<std::string>());
-            }
-        }
-        if (document.contains("detail") && document.at("detail").is_string()) {
-            return truncate_message(document.at("detail").get<std::string>());
-        }
-    } catch (const json::exception&) {
-        // Cuerpo no interpretable: se usa el texto alternativo.
-    }
-    return fallback;
 }
 
 /// Interpreta el valor crudo de Retry-After como segundos enteros, con el
@@ -202,6 +171,11 @@ Result<std::string> parse_success_response(const std::string& body) {
                              "\"choices[0].message\" no contiene \"content\".", std::nullopt};
         }
         const json& content = message.at("content");
+        if (content.is_null()) {
+            // Frecuente con modelos de razonamiento o llamadas a herramientas.
+            return ChatError{ErrorKind::BadResponse, 0,
+                             "El modelo no devolvió texto en la respuesta.", std::nullopt};
+        }
         if (!content.is_string()) {
             return ChatError{ErrorKind::BadResponse, 0,
                              "\"choices[0].message.content\" no es una cadena.", std::nullopt};
@@ -251,6 +225,7 @@ ChatError transport_error(const HttpResponse& response) {
 struct StreamAttemptOutcome {
     Result<void> result;          ///< Éxito o error final de la petición.
     bool delivered_any = false;   ///< Si ya se entregó al menos un delta.
+    bool retryable = true;        ///< false si el fallo de red es permanente.
 };
 
 /// Ejecuta un intento de streaming: consume el cuerpo conforme llega con el
@@ -299,8 +274,27 @@ StreamAttemptOutcome run_stream_attempt(const HttpRequest& request, Transport& t
                 }
                 if (delta.value().has_value() && !delta.value()->empty()) {
                     outcome.delivered_any = true;
-                    if (!on_delta(*delta.value())) {
-                        return false; // Cancelación: curl aborta con status == 0.
+                    // El callback es código de quien llama: si lanza, la
+                    // excepción no debe llegar a libcurl (frames de C).
+                    try {
+                        if (!on_delta(*delta.value())) {
+                            return false; // Cancelación: curl aborta con status == 0.
+                        }
+                    } catch (const std::exception& e) {
+                        abort_error = ChatError{
+                            ErrorKind::Cancelled, 0,
+                            "El callback de streaming lanzó una excepción: " +
+                                std::string{e.what()},
+                            std::nullopt};
+                        aborted = true;
+                        return false;
+                    } catch (...) {
+                        abort_error = ChatError{
+                            ErrorKind::Cancelled, 0,
+                            "El callback de streaming lanzó una excepción desconocida.",
+                            std::nullopt};
+                        aborted = true;
+                        return false;
                     }
                 }
             }
@@ -314,6 +308,7 @@ StreamAttemptOutcome run_stream_attempt(const HttpRequest& request, Transport& t
     if (response.status == 0) {
         // Red, timeout o cancelación desde el callback.
         outcome.result = transport_error(response);
+        outcome.retryable = response.retryable;
         return outcome;
     }
     if (response.status < 200 || response.status > 299) {
@@ -368,7 +363,7 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages) {
         // Sin respuesta HTTP: fallo de red o timeout de curl.
         if (response.status == 0) {
             ChatError error = transport_error(response);
-            if (attempt < kMaxRetries && is_retryable(error.kind)) {
+            if (attempt < kMaxRetries && is_retryable(error.kind) && response.retryable) {
                 sleeper().sleep_for(kBaseDelay * (1 << attempt));
                 continue;
             }
@@ -417,7 +412,7 @@ Result<void> ChatClient::complete_stream(const std::vector<Message>& messages,
         const bool can_retry = attempt < kMaxRetries &&
                                outcome.result.is_error() &&
                                is_retryable(outcome.result.error().kind) &&
-                               !outcome.delivered_any;
+                               outcome.retryable && !outcome.delivered_any;
 
         if (!can_retry) {
             return outcome.result;

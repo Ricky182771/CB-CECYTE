@@ -143,11 +143,38 @@ TEST_CASE("decode_openai_chunk: sin choices es BadResponse", "[sse]") {
     CHECK(delta.error().kind == chatbot::ErrorKind::BadResponse);
 }
 
-TEST_CASE("decode_openai_chunk: choices vacío es BadResponse", "[sse]") {
+TEST_CASE("decode_openai_chunk: choices vacío (chunk de usage) no aporta texto", "[sse][null]") {
     const chatbot::Result<std::optional<std::string>> delta = decode_openai_chunk(
-        R"({"choices":[]})");
+        R"({"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}})");
+    REQUIRE(delta.is_ok());
+    CHECK_FALSE(delta.value().has_value());
+}
+
+TEST_CASE("decode_openai_chunk: content null no aporta texto", "[sse][null]") {
+    const chatbot::Result<std::optional<std::string>> delta = decode_openai_chunk(
+        R"({"choices":[{"delta":{"role":"assistant","content":null}}]})");
+    REQUIRE(delta.is_ok());
+    CHECK_FALSE(delta.value().has_value());
+}
+
+TEST_CASE("decode_openai_chunk: error en el flujo devuelve el mensaje del servidor",
+          "[sse][null]") {
+    const chatbot::Result<std::optional<std::string>> delta = decode_openai_chunk(
+        R"({"error":{"message":"Modelo sobrecargado, intenta de nuevo"}})");
     REQUIRE(delta.is_error());
     CHECK(delta.error().kind == chatbot::ErrorKind::BadResponse);
+    CHECK(delta.error().message == "Modelo sobrecargado, intenta de nuevo");
+}
+
+TEST_CASE("decode_openai_chunk: error se revisa antes que choices y se trunca", "[sse][null]") {
+    const std::string long_message(1000, 'x');
+    const chatbot::Result<std::optional<std::string>> delta = decode_openai_chunk(
+        R"({"choices":[{"delta":{"content":"no"}}],"error":{"message":")" + long_message +
+        R"("}})");
+    REQUIRE(delta.is_error());
+    CHECK(delta.error().kind == chatbot::ErrorKind::BadResponse);
+    CHECK(delta.error().message.size() < long_message.size());
+    CHECK(delta.error().message.substr(0, 10) == "xxxxxxxxxx");
 }
 
 TEST_CASE("decode_openai_chunk: content que no es cadena es BadResponse", "[sse]") {
