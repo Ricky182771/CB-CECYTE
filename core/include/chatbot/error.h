@@ -17,7 +17,8 @@ enum class ErrorKind {
     Network,       ///< Fallo de red de curl.
     Timeout,       ///< Curl excedió el tiempo límite.
     BadResponse,   ///< Cuerpo inesperado o no interpretable.
-    Cancelled,     ///< Cancelado por el usuario (se usará en el hito 4).
+    InvalidRequest, ///< 400 / 413 / 422 (p. ej. contexto demasiado largo).
+    Cancelled,     ///< Cancelado por el usuario.
 };
 
 /// Error tipado que nunca viaja como excepción por la API pública.

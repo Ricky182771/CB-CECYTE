@@ -14,6 +14,25 @@ constexpr std::size_t kMaxErrorMessageLength = 300;
 
 } // namespace
 
+ErrorKind kind_for_http_status(int status) {
+    switch (status) {
+    case 401:
+    case 403:
+        return ErrorKind::Auth;
+    case 404:
+    case 410:
+        return ErrorKind::ModelNotFound;
+    case 429:
+        return ErrorKind::RateLimited;
+    case 400:
+    case 413:
+    case 422:
+        return ErrorKind::InvalidRequest;
+    default:
+        return status >= 500 && status <= 599 ? ErrorKind::Server : ErrorKind::BadResponse;
+    }
+}
+
 std::string truncate_message(const std::string& text) {
     if (text.size() <= kMaxErrorMessageLength) {
         return text;

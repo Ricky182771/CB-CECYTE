@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -199,4 +200,99 @@ TEST_CASE("Conversation: orden y roles del historial tras varias vueltas", "[con
 
     // En pantalla quedan todas las entradas, incluidos errores e incompletas.
     CHECK(conversation.entries().size() == 9);
+}
+
+namespace {
+chatbot::ChatError cancelled_error() {
+    return chatbot::ChatError{chatbot::ErrorKind::Cancelled, 0,
+                              "Petición cancelada por el usuario.", std::nullopt};
+}
+} // namespace
+
+TEST_CASE("Conversation: cancelada con texto parcial la marca (cancelada)",
+          "[conversacion][cancelacion]") {
+    Conversation conversation;
+    REQUIRE(conversation.submit("Hola").has_value());
+    conversation.append_delta("Respuesta a me");
+
+    CHECK(conversation.finish_error(cancelled_error()) == "Hola");
+    CHECK_FALSE(conversation.busy());
+    REQUIRE(conversation.entries().size() == 2); // Sin entrada de error.
+    const Entry& partial = conversation.entries()[1];
+    CHECK(partial.kind == EntryKind::Assistant);
+    CHECK(partial.cancelled);
+    CHECK_FALSE(partial.incomplete);
+    CHECK_FALSE(partial.in_progress);
+    REQUIRE(conversation.history().size() == 1); // Ni el usuario ni el parcial.
+    CHECK(conversation.history()[0].role == Role::System);
+}
+
+TEST_CASE("Conversation: cancelada sin texto agrega un aviso", "[conversacion][cancelacion]") {
+    Conversation conversation;
+    REQUIRE(conversation.submit("Hola").has_value());
+
+    CHECK(conversation.finish_error(cancelled_error()) == "Hola");
+    CHECK_FALSE(conversation.busy());
+    REQUIRE(conversation.entries().size() == 2);
+    CHECK(conversation.entries()[1].kind == EntryKind::Notice);
+    CHECK(conversation.entries()[1].text == "Respuesta cancelada.");
+    CHECK(conversation.history().size() == 1);
+    for (const Entry& entry : conversation.entries()) {
+        CHECK(entry.kind != EntryKind::Error);
+    }
+}
+
+namespace {
+/// Una vuelta con texto que termina con el finish_reason dado.
+Conversation finished_with(std::string_view finish_reason) {
+    Conversation conversation;
+    REQUIRE(conversation.submit("Hola").has_value());
+    conversation.append_delta("Texto real");
+    CHECK_FALSE(conversation.finish_success(finish_reason).has_value());
+    return conversation;
+}
+} // namespace
+
+TEST_CASE("Conversation: finish_reason stop o vacío no agrega nota", "[conversacion][finish]") {
+    for (const std::string_view reason : {std::string_view{"stop"}, std::string_view{""}}) {
+        const Conversation conversation = finished_with(reason);
+        REQUIRE(conversation.entries().size() == 2);
+        CHECK(conversation.entries()[1].note.empty());
+        REQUIRE(conversation.history().size() == 3);
+        CHECK(conversation.history()[2].content == "Texto real");
+    }
+}
+
+TEST_CASE("Conversation: finish_reason length entra al historial con nota",
+          "[conversacion][finish]") {
+    const Conversation conversation = finished_with("length");
+    CHECK(conversation.entries()[1].note == "(cortada por límite de tokens)");
+    CHECK_FALSE(conversation.entries()[1].incomplete);
+    REQUIRE(conversation.history().size() == 3);
+    CHECK(conversation.history()[2].role == Role::Assistant);
+    CHECK(conversation.history()[2].content == "Texto real");
+}
+
+TEST_CASE("Conversation: finish_reason content_filter", "[conversacion][finish]") {
+    const Conversation conversation = finished_with("content_filter");
+    CHECK(conversation.entries()[1].note == "(detenida por el filtro de contenido)");
+    CHECK(conversation.history().size() == 3);
+}
+
+TEST_CASE("Conversation: otro finish_reason muestra el valor", "[conversacion][finish]") {
+    const Conversation conversation = finished_with("tool_calls");
+    CHECK(conversation.entries()[1].note == "(terminó por: tool_calls)");
+    CHECK(conversation.history().size() == 3);
+}
+
+TEST_CASE("Conversation: finish_reason sin texto sigue siendo error", "[conversacion][finish]") {
+    Conversation conversation;
+    REQUIRE(conversation.submit("Hola").has_value());
+    const std::optional<std::string> restored = conversation.finish_success("length");
+    REQUIRE(restored.has_value());
+    CHECK(*restored == "Hola");
+    REQUIRE(conversation.entries().size() == 2);
+    CHECK(conversation.entries()[1].kind == EntryKind::Error);
+    CHECK(conversation.entries()[1].text == "[respuesta inválida] El modelo no devolvió texto.");
+    CHECK(conversation.history().size() == 1);
 }

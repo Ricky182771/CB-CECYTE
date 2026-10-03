@@ -29,9 +29,15 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 | 1 | Andamiaje + núcleo con petición simple (sin streaming) + errores tipados + configuración | Hecho |
 | 2 | Streaming SSE + parser + pruebas del parser | Hecho |
 | — | Correcciones del núcleo (excepciones, `content: null`, timeout de streaming, errores permanentes, límite de timeout) | Hecho |
-| 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | **Actual** |
-| 4 | Cancelación, scroll del historial, recorte de historial largo | Pendiente |
+| 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | Hecho |
+| 4 | Cancelación, scroll del historial, recorte de historial largo, prueba automatizada del hilo de trabajo (ver nota) | **Actual** |
 | 5 | Persistencia de conversaciones y render de markdown | Pendiente |
+
+**Nota para el hito 4: prueba con hilos** (sin loop de FTXUI). Implementada con `RequestRunner` (`cli/src/request_runner.*`) y `tests/test_request_runner.cpp`; el transporte que se bloquea quedó aparte, en `tests/blocking_transport.hpp`:
+
+- Extraer el hilo de trabajo de `cli/src/main.cpp` a una clase sin FTXUI que reciba una función para pasar tareas al hilo de la interfaz. En producción esa función hace `screen.Post` + `PostEvent(Event::Custom)`; en las pruebas, mete las tareas en una cola que la prueba vacía.
+- Agregar a `FakeTransport` un bloqueo controlable para detener el flujo a la mitad.
+- Correr la prueba con el preset `tsan`.
 
 Todo lo de hitos posteriores está **fuera de alcance** del hito actual. No lo adelantes.
 
@@ -60,7 +66,8 @@ chatbot/
 ├── cli/
 │   ├── CMakeLists.txt       # dependencia FTXUI, chatbot_cli_lib y ejecutable chatbot
 │   └── src/
-│       ├── conversation.h/.cpp  # lógica de la conversación (sin FTXUI ni hilos)
+│       ├── conversation.h/.cpp    # lógica de la conversación (sin FTXUI ni hilos)
+│       ├── request_runner.h/.cpp  # hilo de trabajo de la petición (sin FTXUI)
 │       └── main.cpp             # interfaz FTXUI (ejecutable chatbot)
 └── tests/
 ```
@@ -73,16 +80,18 @@ chatbot/
 
 - **Tipos básicos:** `Role` (`System`, `User`, `Assistant`), `Message { Role role; std::string content; }`, `Config`.
 - **Errores:** `ChatError { ErrorKind kind; int http_status; std::string message; std::optional<std::chrono::seconds> retry_after; }`.
-  `ErrorKind`: `Config`, `Auth`, `ModelNotFound`, `RateLimited`, `Server`, `Network`, `Timeout`, `BadResponse`, `Cancelled`.
+  `ErrorKind`: `Config`, `Auth`, `ModelNotFound`, `RateLimited`, `Server`, `Network`, `Timeout`, `BadResponse`, `InvalidRequest`, `Cancelled`.
 - **Resultado:** `Result<T>` mínimo sobre `std::variant<T, ChatError>`. Las excepciones pueden usarse internamente, **pero nunca cruzan la API pública**.
 - **Transporte:** interfaz `Transport` que hace el POST y devuelve estado HTTP, cabeceras relevantes (`Retry-After`) y cuerpo, o un error de red. `CurlTransport` es la implementación real; las pruebas usan un `FakeTransport`. Diséñala para poder agregar streaming en el hito 2 sin romper `complete`; si hace falta cambiar algo, pregunta.
-- **Cliente:** `ChatClient(Config, std::unique_ptr<Transport>)` con `complete(const std::vector<Message>&) -> Result<std::string>`.
+- **Cliente:** `ChatClient(Config, std::unique_ptr<Transport>)` con `complete(const std::vector<Message>&, const CancelToken* = nullptr) -> Result<std::string>` y `complete_stream(messages, on_delta, const CancelToken* = nullptr) -> Result<CompletionInfo>`. `CompletionInfo { std::string finish_reason; }` (`chatbot/completion_info.h`): el último `choices[0].finish_reason` no nulo que llegó, o vacío si nunca llegó.
+- **Cancelación:** `CancelToken` (`cancel()`, `is_cancelled()`, `wait_for(ms)`; seguro entre hilos, no copiable ni movible; quien lo crea lo mantiene vivo durante la petición). `ChatClient` lo revisa antes de cada intento, lo pasa al transporte (`HttpRequest::cancel`) y a la espera de reintento; si se cancela, el resultado es `Cancelled` y no se reintenta. `CurlTransport` lo revisa desde `CURLOPT_XFERINFOFUNCTION`, que libcurl llama alrededor de una vez por segundo aunque no lleguen datos: la latencia de cancelación es de ~1 s.
 - **Reintentos** (dentro de `ChatClient`):
   - Reintentar solo `RateLimited`, `Server`, `Network` y `Timeout`.
   - Máximo 3 reintentos, con espera exponencial desde 1 s. Si hay `Retry-After`, respetarlo.
-  - Nunca reintentar `Auth`, `ModelNotFound`, `BadResponse` ni `Config`.
-  - La espera se inyecta (interfaz `Sleeper` o similar) para que las pruebas no esperen de verdad.
-- El historial lo administra quien llama; el núcleo no lo guarda en el hito 1.
+  - Nunca reintentar `Auth`, `ModelNotFound`, `BadResponse`, `InvalidRequest`, `Config` ni `Cancelled`.
+  - La espera se inyecta (interfaz `Sleeper`: `bool sleep_for(std::chrono::milliseconds, const CancelToken*)`, que devuelve `false` si la cancelación interrumpió la espera) para que las pruebas no esperen de verdad.
+- El historial lo administra quien llama; el núcleo no lo guarda.
+- **Recorte del historial:** `trim_history(messages, limit_bytes) -> TrimResult{messages, dropped}` (función pura, `chatbot/history.h`). Nunca quita los mensajes `System` iniciales ni el último; quita los más viejos en pares usuario+asistente hasta caber en el límite (bytes UTF-8 de los `content`). `0` = sin límite.
 
 ## 7. Configuración
 
@@ -94,10 +103,13 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 | URL base | `CHAT_BASE_URL` | `base_url` | `https://integrate.api.nvidia.com/v1` |
 | Modelo | `CHAT_MODEL` | `model` | **ninguno** (error `Config` con mensaje claro si falta) |
 | Timeout (s): total en `complete`, por inactividad en `complete_stream` | `CHAT_TIMEOUT` | `timeout_seconds` | 120 |
+| Límite del historial que se envía, en bytes UTF-8 de los `content` (aproximadamente caracteres); `0` = sin límite | `CHAT_HISTORY_LIMIT` | `history_limit` | 32000 |
+| Archivo de volcado de depuración | `CHAT_DEBUG_SSE` | **nunca** | ninguno (sin volcado) |
 
 - Archivo: `$XDG_CONFIG_HOME/chatbot/config.json`, o `~/.config/chatbot/config.json` si no existe esa variable. Que el archivo no exista no es un error.
 - **Sin modelo por defecto a propósito:** los modelos de NIM se retiran con el tiempo y un nombre fijo en el código acabaría roto.
 - La key **solo** viene del entorno.
+- `CHAT_DEBUG_SSE=/ruta/archivo` (`Config::debug_sse_path`): `ChatClient` agrega al archivo, por cada intento de `complete` y de `complete_stream`, fecha y hora, modelo, número de intento, estado HTTP y el cuerpo crudo de la respuesta, más una línea separadora. Nunca escribe cabeceras, la key ni el cuerpo de la petición. Si no se puede abrir o escribir, se ignora en silencio. El archivo contiene la conversación: solo para diagnosticar.
 
 ## 8. HTTP y API
 
@@ -107,8 +119,12 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
   - 2xx: éxito.
   - 401 y 403: `Auth`.
   - 404 y 410: `ModelNotFound`.
+  - 400, 413 y 422: `InvalidRequest` (por ejemplo, "maximum context length exceeded").
   - 429: `RateLimited`.
   - 5xx: `Server`.
+  - Otros estados no exitosos: `BadResponse`.
+  - `Retry-After` (segundos enteros, con tope de 60 s) se respeta en todos los errores HTTP reintentables: 429 y 5xx.
+  - **Errores dentro del flujo** (evento SSE `{"error": {...}}` con estado 200, como manda NIM la sobrecarga): si `error.code` es un número o una cadena numérica, se clasifica con el mismo mapeo de estados HTTP; si no, por `error.type` sin distinguir mayúsculas (`overload`, `unavailable` o `server` → `Server`; `rate` o `exhausted` → `RateLimited`); si nada aplica, `BadResponse`. El mensaje es `error.message`, truncado. `complete_stream` los reintenta con la regla de siempre: solo si son reintentables y no se ha entregado ningún delta.
   - Fallo de curl: `Network` o `Timeout` según el código.
   - Cuerpo que no se puede interpretar: `BadResponse`.
 - En errores, intentar extraer el mensaje del cuerpo (`error.message` o `detail`); si no hay, usar el texto del estado HTTP. Truncar cuerpos largos.
@@ -154,7 +170,7 @@ cmake --preset asan && cmake --build --preset asan && ctest --preset asan --outp
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --output-on-failure
 ```
 
-Las pruebas de Catch2 no crean hilos: para cubrir los hilos de verdad, corre también `./build/tsan/cli/chatbot` con una conversación real y revisa que no aparezca `WARNING: ThreadSanitizer`.
+Las pruebas de `RequestRunner` y de `CancelToken` crean hilos (deben pasar con `tsan`). Aun así, corre también `./build/tsan/cli/chatbot` con una conversación real, cancelando un par de veces, y revisa que no aparezca `WARNING: ThreadSanitizer`: el loop de FTXUI no está en las pruebas.
 
 ## 12. Pruebas (Catch2)
 

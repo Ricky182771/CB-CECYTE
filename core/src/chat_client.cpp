@@ -1,5 +1,6 @@
 #include "chatbot/chat_client.h"
 
+#include "chatbot/cancel_token.h"
 #include "chatbot/error.h"
 #include "error_body.h"
 #include "sse.h"
@@ -10,8 +11,12 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <ctime>
 #include <exception>
+#include <fstream>
+#include <iomanip>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -105,6 +110,25 @@ std::optional<std::chrono::seconds> parse_retry_after(const std::optional<std::s
     return std::chrono::seconds{std::min<long long>(seconds, kMaxDelay.count())};
 }
 
+/// Indica si un tipo de error se reintenta (sección 6).
+bool is_retryable(ErrorKind kind) {
+    switch (kind) {
+    case ErrorKind::RateLimited:
+    case ErrorKind::Server:
+    case ErrorKind::Network:
+    case ErrorKind::Timeout:
+        return true;
+    case ErrorKind::Auth:
+    case ErrorKind::ModelNotFound:
+    case ErrorKind::BadResponse:
+    case ErrorKind::InvalidRequest:
+    case ErrorKind::Config:
+    case ErrorKind::Cancelled:
+        return false;
+    }
+    return false;
+}
+
 /// Mapea un estado HTTP distinto de 2xx a un ChatError (sección 8).
 ChatError map_http_error(int status, const std::string& body) {
     ChatError error;
@@ -112,23 +136,7 @@ ChatError map_http_error(int status, const std::string& body) {
     error.message = extract_error_message(
         body, "El servidor respondió con el estado HTTP " + std::to_string(status) + ".");
 
-    switch (status) {
-    case 401:
-    case 403:
-        error.kind = ErrorKind::Auth;
-        break;
-    case 404:
-    case 410:
-        error.kind = ErrorKind::ModelNotFound;
-        break;
-    case 429:
-        error.kind = ErrorKind::RateLimited;
-        break;
-    default:
-        error.kind = status >= 500 && status <= 599 ? ErrorKind::Server : ErrorKind::BadResponse;
-        break;
-    }
-
+    error.kind = kind_for_http_status(status);
     return error;
 }
 
@@ -136,7 +144,9 @@ ChatError map_http_error(int status, const std::string& body) {
 ChatError map_http_error(int status, const std::string& body,
                          const std::optional<std::string>& retry_after_raw) {
     ChatError error = map_http_error(status, body);
-    if (error.kind == ErrorKind::RateLimited) {
+    // Retry-After aplica a todos los errores HTTP reintentables (429 y 5xx,
+    // típicamente 503), con el mismo tope de kMaxDelay.
+    if (is_retryable(error.kind)) {
         error.retry_after = parse_retry_after(retry_after_raw);
     }
     return error;
@@ -188,31 +198,22 @@ Result<std::string> parse_success_response(const std::string& body) {
     }
 }
 
-/// Indica si un tipo de error se reintenta (sección 6).
-bool is_retryable(ErrorKind kind) {
-    switch (kind) {
-    case ErrorKind::RateLimited:
-    case ErrorKind::Server:
-    case ErrorKind::Network:
-    case ErrorKind::Timeout:
-        return true;
-    case ErrorKind::Auth:
-    case ErrorKind::ModelNotFound:
-    case ErrorKind::BadResponse:
-    case ErrorKind::Config:
-    case ErrorKind::Cancelled:
-        return false;
-    }
-    return false;
+/// Error de una petición cancelada (token, callback o transporte).
+ChatError cancelled_error() {
+    return ChatError{ErrorKind::Cancelled, 0, "Petición cancelada por el usuario.",
+                     std::nullopt};
+}
+
+/// Indica si el token existe y ya se canceló.
+bool is_cancelled(const CancelToken* cancel) {
+    return cancel != nullptr && cancel->is_cancelled();
 }
 
 /// Fallo de transporte sin respuesta HTTP: red, timeout o cancelación.
 ChatError transport_error(const HttpResponse& response) {
     ChatError error;
     if (response.cancelled) {
-        error.kind = ErrorKind::Cancelled;
-        error.message = "Petición cancelada por el usuario.";
-        return error;
+        return cancelled_error();
     }
     error.kind = response.timed_out ? ErrorKind::Timeout : ErrorKind::Network;
     error.message = !response.error.empty()
@@ -221,9 +222,82 @@ ChatError transport_error(const HttpResponse& response) {
     return error;
 }
 
+/// Indica si el texto crudo de un evento solo tiene comentarios (líneas que
+/// empiezan con ':') o líneas vacías.
+bool is_comment_only(const std::string& raw) {
+    std::size_t begin = 0;
+    while (begin <= raw.size()) {
+        std::size_t end = raw.find('\n', begin);
+        if (end == std::string::npos) {
+            end = raw.size();
+        }
+        const std::string_view line{raw.data() + begin, end - begin};
+        if (!line.empty() && line != "\r" && line.front() != ':') {
+            return false;
+        }
+        if (end == raw.size()) {
+            break;
+        }
+        begin = end + 1;
+    }
+    return true;
+}
+
+/// Fecha y hora local con formato AAAA-MM-DD HH:MM:SS.
+std::string local_timestamp() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm local{};
+    if (localtime_r(&now, &local) == nullptr) {
+        return "?";
+    }
+    std::ostringstream text;
+    text << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
+    return text.str();
+}
+
+/// Volcado de depuración (CHAT_DEBUG_SSE): agrega un bloque por intento con
+/// fecha, modelo, número de intento, estado HTTP y el cuerpo crudo de la
+/// respuesta (label + detail, si label no está vacía, explica un corte). Nunca escribe
+/// cabeceras, la key ni el cuerpo de la petición. Cualquier fallo se ignora:
+/// depurar nunca debe romper una petición.
+void append_debug_dump(const Config& config, int attempt, int status, std::string_view body,
+                       std::string_view label, std::string_view detail) noexcept {
+    if (!config.debug_sse_path.has_value()) {
+        return;
+    }
+    try {
+        std::ofstream file{*config.debug_sse_path, std::ios::app | std::ios::binary};
+        if (!file.is_open()) {
+            return;
+        }
+        file << "fecha: " << local_timestamp() << '\n'
+             << "modelo: " << config.model << '\n'
+             << "intento: " << attempt + 1 << '\n'
+             << "estado HTTP: " << status << '\n';
+        if (!label.empty()) {
+            file << label << detail << '\n';
+        }
+        file << "cuerpo:\n"
+             << body << '\n'
+             << "========================================\n";
+    } catch (...) {
+        // Se ignora a propósito (ver arriba).
+    }
+}
+
+/// Volcado de un intento a partir de la respuesta del transporte.
+void append_debug_dump(const Config& config, int attempt, const HttpResponse& response) noexcept {
+    if (response.status == 0) {
+        // Sin respuesta HTTP no hay cuerpo: curl descarta lo parcial.
+        append_debug_dump(config, attempt, 0, {}, "error de transporte: ", response.error);
+        return;
+    }
+    append_debug_dump(config, attempt, response.status, response.body, {}, {});
+}
+
 /// Resultado de un intento de streaming ya consumido.
 struct StreamAttemptOutcome {
-    Result<void> result;          ///< Éxito o error final de la petición.
+    Result<CompletionInfo> result{CompletionInfo{}}; ///< Éxito o error final de la petición.
     bool delivered_any = false;   ///< Si ya se entregó al menos un delta.
     bool retryable = true;        ///< false si el fallo de red es permanente.
 };
@@ -232,17 +306,90 @@ struct StreamAttemptOutcome {
 /// parser SSE y entrega los deltas por on_delta. Los errores HTTP no se
 /// consumen como flujo: el cuerpo se acumula en la respuesta y se mapea al
 /// final, igual que en complete().
-StreamAttemptOutcome run_stream_attempt(const HttpRequest& request, Transport& transport,
+StreamAttemptOutcome run_stream_attempt(const Config& config, int attempt,
+                                        const HttpRequest& request, Transport& transport,
                                         const StreamDeltaCallback& on_delta) {
     StreamAttemptOutcome outcome;
 
     sse::Parser parser;
+    std::string finish_reason; ///< Último choices[0].finish_reason no nulo.
     bool done = false;    ///< Se recibió data: [DONE].
     bool aborted = false; ///< Cuerpo inválido a mitad del flujo.
     std::optional<ChatError> abort_error;
 
+    // Entrega el delta al callback de quien llama. Si lanza, la excepción
+    // no debe llegar a libcurl (frames de C). Devuelve false para abortar.
+    const auto deliver = [&](const std::string& text) {
+        outcome.delivered_any = true;
+        try {
+            return on_delta(text); // false: cancelación, curl aborta con status == 0.
+        } catch (const std::exception& e) {
+            abort_error = ChatError{ErrorKind::Cancelled, 0,
+                                    "El callback de streaming lanzó una excepción: " +
+                                        std::string{e.what()},
+                                    std::nullopt};
+        } catch (...) {
+            abort_error = ChatError{ErrorKind::Cancelled, 0,
+                                    "El callback de streaming lanzó una excepción desconocida.",
+                                    std::nullopt};
+        }
+        aborted = true;
+        return false;
+    };
+
+    // Procesa los eventos completos que tenga el parser. Devuelve false si
+    // hay que abortar la transferencia. final indica que es el fragmento que
+    // quedó al terminar el flujo sin línea en blanco.
+    const auto process_events = [&](bool final) {
+        while (const std::optional<std::string> raw_event = parser.next_event()) {
+            const Result<sse::Event> event = sse::decode_event(*raw_event);
+            if (event.is_error()) {
+                abort_error = event.error();
+                aborted = true;
+                return false;
+            }
+            if (event.value().type == sse::EventType::Done) {
+                done = true;
+                return true;
+            }
+            if (event.value().type != sse::EventType::Delta) {
+                // Al final, un fragmento sin data que no es comentario es basura.
+                if (final && !is_comment_only(*raw_event)) {
+                    abort_error = ChatError{ErrorKind::BadResponse, 0,
+                                            "El flujo terminó a mitad de un evento.",
+                                            std::nullopt};
+                    aborted = true;
+                    return false;
+                }
+                continue;
+            }
+            const Result<std::optional<std::string>> delta =
+                sse::decode_openai_chunk(event.value().data, &finish_reason);
+            if (delta.is_error()) {
+                abort_error = delta.error();
+                aborted = true;
+                return false;
+            }
+            if (delta.value().has_value() && !delta.value()->empty() &&
+                !deliver(*delta.value())) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // Para el volcado de depuración: lo que llegó, aunque la transferencia se
+    // corte después (curl descarta el cuerpo parcial al abortar).
+    const bool keep_raw = config.debug_sse_path.has_value();
+    std::string raw_seen;
+    int seen_status = 0;
+
     const HttpResponse response = transport.send_stream(
         request, [&](std::string_view raw, int chunk_status) {
+            if (keep_raw) {
+                raw_seen.append(raw);
+                seen_status = chunk_status;
+            }
             if (chunk_status < 200 || chunk_status > 299) {
                 return true; // Error HTTP: se interpreta al final, no como flujo.
             }
@@ -251,58 +398,27 @@ StreamAttemptOutcome run_stream_attempt(const HttpRequest& request, Transport& t
             }
             parser.feed(raw);
             // Un trozo puede contener varios eventos: se procesan todos.
-            while (const std::optional<std::string> raw_event = parser.next_event()) {
-                const Result<sse::Event> event = sse::decode_event(*raw_event);
-                if (event.is_error()) {
-                    abort_error = event.error();
-                    aborted = true;
-                    return false;
-                }
-                if (event.value().type == sse::EventType::Done) {
-                    done = true;
-                    return true;
-                }
-                if (event.value().type != sse::EventType::Delta) {
-                    continue;
-                }
-                const Result<std::optional<std::string>> delta =
-                    sse::decode_openai_chunk(event.value().data);
-                if (delta.is_error()) {
-                    abort_error = delta.error();
-                    aborted = true;
-                    return false;
-                }
-                if (delta.value().has_value() && !delta.value()->empty()) {
-                    outcome.delivered_any = true;
-                    // El callback es código de quien llama: si lanza, la
-                    // excepción no debe llegar a libcurl (frames de C).
-                    try {
-                        if (!on_delta(*delta.value())) {
-                            return false; // Cancelación: curl aborta con status == 0.
-                        }
-                    } catch (const std::exception& e) {
-                        abort_error = ChatError{
-                            ErrorKind::Cancelled, 0,
-                            "El callback de streaming lanzó una excepción: " +
-                                std::string{e.what()},
-                            std::nullopt};
-                        aborted = true;
-                        return false;
-                    } catch (...) {
-                        abort_error = ChatError{
-                            ErrorKind::Cancelled, 0,
-                            "El callback de streaming lanzó una excepción desconocida.",
-                            std::nullopt};
-                        aborted = true;
-                        return false;
-                    }
-                }
-            }
-            return true;
+            return process_events(false);
         });
+    if (response.status == 0 && seen_status != 0) {
+        // La transferencia se cortó después de recibir datos (por ejemplo, un
+        // evento de error dentro del flujo): se vuelca lo que llegó.
+        append_debug_dump(config, attempt, seen_status, raw_seen,
+                          "transferencia interrumpida: ", response.error);
+    } else {
+        append_debug_dump(config, attempt, response);
+    }
+
+    // Flujo 2xx completo que terminó sin línea en blanco: se cierra el último
+    // evento y se procesa como cualquier otro ([DONE], chunk o basura).
+    if (!aborted && !done && response.status >= 200 && response.status <= 299 &&
+        parser.has_partial_data()) {
+        parser.feed("\n\n");
+        (void)process_events(true);
+    }
 
     if (aborted) {
-        outcome.result = Result<void>{*abort_error};
+        outcome.result = Result<CompletionInfo>{*abort_error};
         return outcome;
     }
     if (response.status == 0) {
@@ -316,12 +432,8 @@ StreamAttemptOutcome run_stream_attempt(const HttpRequest& request, Transport& t
                                         response.retry_after);
         return outcome;
     }
-    if (!done && parser.has_partial_data()) {
-        // El flujo se cortó a mitad de un evento: los datos están incompletos.
-        outcome.result = ChatError{ErrorKind::BadResponse, 0,
-                                   "El flujo terminó a mitad de un evento.", std::nullopt};
-    }
-    // Sin [DONE] pero con el flujo completo y limpio: fin implícito, éxito.
+    // Con [DONE], o sin él pero con el flujo completo y limpio: éxito.
+    outcome.result = CompletionInfo{finish_reason};
     return outcome;
 }
 
@@ -339,7 +451,8 @@ ChatClient::~ChatClient() = default;
 
 Sleeper& ChatClient::sleeper() { return *sleeper_; }
 
-Result<std::string> ChatClient::complete(const std::vector<Message>& messages) {
+Result<std::string> ChatClient::complete(const std::vector<Message>& messages,
+                                         const CancelToken* cancel) {
     // Revalida la configuración: el cliente puede construirse con un Config
     // armado a mano (decisión del usuario: validar en ambos lados).
     if (const std::optional<ChatError> config_error = validate_config(config_)) {
@@ -356,15 +469,22 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages) {
     request.body = body.value();
     request.api_key = config_.api_key;
     request.timeout = std::chrono::milliseconds(config_.timeout_seconds);
+    request.cancel = cancel;
 
     for (int attempt = 0;; ++attempt) {
+        if (is_cancelled(cancel)) {
+            return cancelled_error();
+        }
         const HttpResponse response = transport_->send(request);
+        append_debug_dump(config_, attempt, response);
 
-        // Sin respuesta HTTP: fallo de red o timeout de curl.
+        // Sin respuesta HTTP: fallo de red, timeout de curl o cancelación.
         if (response.status == 0) {
             ChatError error = transport_error(response);
             if (attempt < kMaxRetries && is_retryable(error.kind) && response.retryable) {
-                sleeper().sleep_for(kBaseDelay * (1 << attempt));
+                if (!sleeper().sleep_for(kBaseDelay * (1 << attempt), cancel)) {
+                    return cancelled_error();
+                }
                 continue;
             }
             return error;
@@ -382,22 +502,25 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages) {
             if (error.retry_after.has_value()) {
                 wait = *error.retry_after; // Ya viene acotada a kMaxDelay.
             }
-            sleeper().sleep_for(wait);
+            if (!sleeper().sleep_for(wait, cancel)) {
+                return cancelled_error();
+            }
             continue;
         }
         return error;
     }
 }
 
-Result<void> ChatClient::complete_stream(const std::vector<Message>& messages,
-                                         const StreamDeltaCallback& on_delta) {
+Result<CompletionInfo> ChatClient::complete_stream(const std::vector<Message>& messages,
+                                         const StreamDeltaCallback& on_delta,
+                                         const CancelToken* cancel) {
     if (const std::optional<ChatError> config_error = validate_config(config_)) {
         return *config_error;
     }
 
     const Result<std::string> body = build_request_body(config_.model, messages, true);
     if (body.is_error()) {
-        return Result<void>{body.error()};
+        return Result<CompletionInfo>{body.error()};
     }
 
     HttpRequest request;
@@ -405,9 +528,13 @@ Result<void> ChatClient::complete_stream(const std::vector<Message>& messages,
     request.body = body.value();
     request.api_key = config_.api_key;
     request.timeout = std::chrono::milliseconds(config_.timeout_seconds);
+    request.cancel = cancel;
 
     for (int attempt = 0;; ++attempt) {
-        StreamAttemptOutcome outcome = run_stream_attempt(request, *transport_, on_delta);
+        if (is_cancelled(cancel)) {
+            return cancelled_error();
+        }
+        StreamAttemptOutcome outcome = run_stream_attempt(config_, attempt, request, *transport_, on_delta);
 
         const bool can_retry = attempt < kMaxRetries &&
                                outcome.result.is_error() &&
@@ -423,7 +550,9 @@ Result<void> ChatClient::complete_stream(const std::vector<Message>& messages,
         if (error.retry_after.has_value()) {
             wait = *error.retry_after;
         }
-        sleeper().sleep_for(wait);
+        if (!sleeper().sleep_for(wait, cancel)) {
+            return cancelled_error();
+        }
     }
 }
 

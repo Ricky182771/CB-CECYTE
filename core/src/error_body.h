@@ -1,9 +1,15 @@
 #ifndef CHATBOT_SRC_ERROR_BODY_H
 #define CHATBOT_SRC_ERROR_BODY_H
 
+#include "chatbot/error.h"
+
 #include <string>
 
 namespace chatbot {
+
+/// Clasifica un estado HTTP no exitoso (sección 8). También se usa para el
+/// error.code numérico de los errores que llegan dentro del flujo SSE.
+[[nodiscard]] ErrorKind kind_for_http_status(int status);
 
 /// Corta textos demasiado largos (sección 8).
 /// Header interno (src/); no forma parte de la API pública.

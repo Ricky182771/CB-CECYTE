@@ -21,6 +21,7 @@ enum class EntryKind {
     User,
     Assistant,
     Error,
+    Notice, ///< Texto informativo, no es un error (p. ej. "Respuesta cancelada.").
 };
 
 /// Una entrada de la pantalla. Es independiente del historial para la API:
@@ -30,6 +31,8 @@ struct Entry {
     std::string text;
     bool in_progress = false; ///< Respuesta del asistente que sigue llegando.
     bool incomplete = false;  ///< Respuesta cortada por un error.
+    bool cancelled = false;   ///< Respuesta cortada porque el usuario canceló.
+    std::string note;         ///< Nota de cómo terminó (finish_reason), o vacía.
 };
 
 /// Estado de la conversación. Se usa solo desde el hilo de la interfaz y no
@@ -52,12 +55,16 @@ public:
     /// Cierra la respuesta y la agrega al historial. Si no llegó texto, se
     /// trata como error ("El modelo no devolvió texto.") y devuelve el texto
     /// del usuario, igual que finish_error(); si salió bien, nullopt.
-    [[nodiscard]] std::optional<std::string> finish_success();
+    /// finish_reason ("stop", "length", ...) solo agrega una nota a la
+    /// entrada: el texto entra al historial porque es texto real.
+    [[nodiscard]] std::optional<std::string> finish_success(std::string_view finish_reason = {});
 
     /// Quita del historial el último mensaje de usuario (no de la pantalla),
     /// marca como incompleta la respuesta parcial si la hubo y agrega una
     /// entrada de error. Devuelve el texto del usuario para que la interfaz
     /// lo regrese a la caja de entrada.
+    /// Con ErrorKind::Cancelled no hay entrada de error: la respuesta parcial
+    /// se marca cancelada o, si no hubo texto, se agrega un aviso (Notice).
     [[nodiscard]] std::string finish_error(const ChatError& error);
 
     [[nodiscard]] bool busy() const { return busy_; }

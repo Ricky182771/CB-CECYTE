@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -129,6 +130,23 @@ void apply_config_file(const std::string& path, Config& config) {
         }
         config.timeout_seconds = std::chrono::seconds{value.get<long long>()};
     }
+    if (document.contains("history_limit")) {
+        const json& value = document.at("history_limit");
+        if (!value.is_number_integer()) {
+            throw std::runtime_error("\"history_limit\" debe ser un número entero de bytes");
+        }
+        if (!value.is_number_unsigned()) {
+            // Un entero con signo que llega del parser solo puede ser negativo.
+            if (value.get<long long>() < 0) {
+                throw std::runtime_error("\"history_limit\" no puede ser negativo");
+            }
+        }
+        const std::uint64_t bytes = value.get<std::uint64_t>();
+        if (bytes > std::numeric_limits<std::size_t>::max()) {
+            throw std::runtime_error("\"history_limit\" es demasiado grande");
+        }
+        config.history_limit_bytes = static_cast<std::size_t>(bytes);
+    }
 }
 
 } // namespace
@@ -231,6 +249,20 @@ Result<Config> load_config(const ConfigOptions& options) {
                              std::nullopt};
         }
         config.timeout_seconds = std::chrono::seconds{*seconds};
+    }
+    if (const std::string_view value = env("CHAT_DEBUG_SSE"); !value.empty()) {
+        config.debug_sse_path = std::string{value};
+    }
+    if (const std::string_view value = env("CHAT_HISTORY_LIMIT"); !value.empty()) {
+        const std::optional<long long> bytes = parse_nonnegative_integer(value);
+        if (!bytes.has_value()) {
+            return ChatError{ErrorKind::Config, 0,
+                             "CHAT_HISTORY_LIMIT debe ser un número entero no negativo de "
+                             "bytes (0 = sin límite); se recibió \"" +
+                                 std::string{value} + "\".",
+                             std::nullopt};
+        }
+        config.history_limit_bytes = static_cast<std::size_t>(*bytes);
     }
 
     // 3) Validación final: key y modelo son obligatorios (sección 7).

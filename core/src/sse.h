@@ -55,7 +55,10 @@ struct Event {
 /// de texto (choices[0].delta.content). Nullopt si este chunk no aporta
 /// texto (por ejemplo, el último, que cierra con delta vacío y finish_reason).
 /// BadResponse si el JSON está roto o la estructura es inesperada.
-[[nodiscard]] Result<std::optional<std::string>> decode_openai_chunk(const std::string& data);
+/// Si finish_reason no es nulo y el chunk trae choices[0].finish_reason como
+/// cadena, se escribe ahí; si es null o falta, no se toca.
+[[nodiscard]] Result<std::optional<std::string>> decode_openai_chunk(
+    const std::string& data, std::string* finish_reason = nullptr);
 
 } // namespace sse
 } // namespace chatbot

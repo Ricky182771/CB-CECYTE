@@ -17,16 +17,16 @@ if(NOT ftxui_FOUND)
     FetchContent_MakeAvailable(ftxui)
 endif()
 
-# Lógica de la conversación: solo depende del núcleo, sin FTXUI, para poder
-# probarla sin terminal.
-add_library(chatbot_cli_lib STATIC src/conversation.cpp)
+# Lógica de la conversación y del hilo de trabajo: solo depende del núcleo,
+# sin FTXUI, para poder probarla sin terminal.
+find_package(Threads REQUIRED)
+add_library(chatbot_cli_lib STATIC src/conversation.cpp src/request_runner.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(chatbot_cli_lib PUBLIC chatbot::core)
+target_link_libraries(chatbot_cli_lib PUBLIC chatbot::core Threads::Threads)
 chatbot_set_warnings(chatbot_cli_lib)
 
 # Ejecutable de la interfaz: el único target que enlaza FTXUI.
-find_package(Threads REQUIRED)
 add_executable(chatbot src/main.cpp)
-target_link_libraries(chatbot PRIVATE chatbot_cli_lib ftxui::component Threads::Threads)
+target_link_libraries(chatbot PRIVATE chatbot_cli_lib ftxui::component)
 chatbot_set_warnings(chatbot)
