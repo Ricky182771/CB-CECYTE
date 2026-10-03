@@ -268,3 +268,23 @@ TEST_CASE("decode_openai_chunk: error sin código ni tipo reconocible es BadResp
     REQUIRE(delta.is_error());
     CHECK(delta.error().message == "Service temporarily overloaded");
 }
+
+TEST_CASE("decode_openai_chunk: sin código ni tipo se clasifica por error.message",
+          "[sse][error-flujo]") {
+    CHECK(stream_error_kind(R"j({"error":{"message":"Service temporarily overloaded"}})j") ==
+          chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"Model TEMPORARILY UNAVAILABLE, retry"}})j") ==
+          chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"Rate limit exceeded"}})j") ==
+          chatbot::ErrorKind::RateLimited);
+    CHECK(stream_error_kind(R"j({"error":{"message":"Too Many Requests"}})j") ==
+          chatbot::ErrorKind::RateLimited);
+    // Un tipo desconocido no impide mirar el mensaje.
+    CHECK(stream_error_kind(R"j({"error":{"message":"overloaded","type":"weird"}})j") ==
+          chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"algo distinto"}})j") ==
+          chatbot::ErrorKind::BadResponse);
+    // El código numérico sigue teniendo prioridad.
+    CHECK(stream_error_kind(R"j({"error":{"message":"overloaded","code":400}})j") ==
+          chatbot::ErrorKind::InvalidRequest);
+}

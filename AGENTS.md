@@ -30,8 +30,8 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 | 2 | Streaming SSE + parser + pruebas del parser | Hecho |
 | — | Correcciones del núcleo (excepciones, `content: null`, timeout de streaming, errores permanentes, límite de timeout) | Hecho |
 | 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | Hecho |
-| 4 | Cancelación, scroll del historial, recorte de historial largo, prueba automatizada del hilo de trabajo (ver nota) | **Actual** |
-| 5 | Persistencia de conversaciones y render de markdown | Pendiente |
+| 4 | Cancelación, scroll del historial, recorte de historial largo, prueba automatizada del hilo de trabajo (ver nota) | Hecho |
+| 5 | Persistencia de conversaciones y render de markdown | **Actual** |
 
 **Nota para el hito 4: prueba con hilos** (sin loop de FTXUI). Implementada con `RequestRunner` (`cli/src/request_runner.*`) y `tests/test_request_runner.cpp`; el transporte que se bloquea quedó aparte, en `tests/blocking_transport.hpp`:
 
@@ -66,8 +66,10 @@ chatbot/
 ├── cli/
 │   ├── CMakeLists.txt       # dependencia FTXUI, chatbot_cli_lib y ejecutable chatbot
 │   └── src/
-│       ├── conversation.h/.cpp    # lógica de la conversación (sin FTXUI ni hilos)
-│       ├── request_runner.h/.cpp  # hilo de trabajo de la petición (sin FTXUI)
+│       ├── conversation.h/.cpp        # lógica de la conversación (sin FTXUI ni hilos)
+│       ├── conversation_store.h/.cpp  # archivos de conversación (sin FTXUI)
+│       ├── conversation_list.h/.cpp   # lógica de la lista de conversaciones (sin FTXUI)
+│       ├── request_runner.h/.cpp      # hilo de trabajo de la petición (sin FTXUI)
 │       └── main.cpp             # interfaz FTXUI (ejecutable chatbot)
 └── tests/
 ```
@@ -105,10 +107,12 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 | Timeout (s): total en `complete`, por inactividad en `complete_stream` | `CHAT_TIMEOUT` | `timeout_seconds` | 120 |
 | Límite del historial que se envía, en bytes UTF-8 de los `content` (aproximadamente caracteres); `0` = sin límite | `CHAT_HISTORY_LIMIT` | `history_limit` | 32000 |
 | Archivo de volcado de depuración | `CHAT_DEBUG_SSE` | **nunca** | ninguno (sin volcado) |
+| Carpeta de conversaciones guardadas (la lee `cli/`, no `Config`) | `CHAT_DATA_DIR` | **nunca** | `$XDG_DATA_HOME/chatbot/conversations` si `XDG_DATA_HOME` es ruta absoluta; si no, `~/.local/share/chatbot/conversations` |
 
 - Archivo: `$XDG_CONFIG_HOME/chatbot/config.json`, o `~/.config/chatbot/config.json` si no existe esa variable. Que el archivo no exista no es un error.
 - **Sin modelo por defecto a propósito:** los modelos de NIM se retiran con el tiempo y un nombre fijo en el código acabaría roto.
 - La key **solo** viene del entorno.
+- **Conversaciones guardadas:** un archivo `<id>.json` por conversación (esquema versión 1; `id` = `AAAAMMDD-HHMMSS-xxxxxx`), con la carpeta en 0700 y los archivos en 0600. No se guarda el mensaje de sistema (al cargar se antepone el `kSystemPrompt` actual); cada respuesta guarda su `model` y su `finish_reason`. Se guarda solo tras cada par usuario/asistente terminado, con escritura atómica (`.tmp` + `fsync` + `rename` + `fsync` del directorio). Un archivo ilegible o de una versión desconocida se lista pero nunca se sobrescribe ni se borra.
 - `CHAT_DEBUG_SSE=/ruta/archivo` (`Config::debug_sse_path`): `ChatClient` agrega al archivo, por cada intento de `complete` y de `complete_stream`, fecha y hora, modelo, número de intento, estado HTTP y el cuerpo crudo de la respuesta, más una línea separadora. Nunca escribe cabeceras, la key ni el cuerpo de la petición. Si no se puede abrir o escribir, se ignora en silencio. El archivo contiene la conversación: solo para diagnosticar.
 
 ## 8. HTTP y API
@@ -124,7 +128,7 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
   - 5xx: `Server`.
   - Otros estados no exitosos: `BadResponse`.
   - `Retry-After` (segundos enteros, con tope de 60 s) se respeta en todos los errores HTTP reintentables: 429 y 5xx.
-  - **Errores dentro del flujo** (evento SSE `{"error": {...}}` con estado 200, como manda NIM la sobrecarga): si `error.code` es un número o una cadena numérica, se clasifica con el mismo mapeo de estados HTTP; si no, por `error.type` sin distinguir mayúsculas (`overload`, `unavailable` o `server` → `Server`; `rate` o `exhausted` → `RateLimited`); si nada aplica, `BadResponse`. El mensaje es `error.message`, truncado. `complete_stream` los reintenta con la regla de siempre: solo si son reintentables y no se ha entregado ningún delta.
+  - **Errores dentro del flujo** (evento SSE `{"error": {...}}` con estado 200, como manda NIM la sobrecarga): si `error.code` es un número o una cadena numérica, se clasifica con el mismo mapeo de estados HTTP; si no, por `error.type` sin distinguir mayúsculas (`overload`, `unavailable` o `server` → `Server`; `rate` o `exhausted` → `RateLimited`); si no, por `error.message` sin distinguir mayúsculas (`overload` o `temporarily unavailable` → `Server`; `rate limit` o `too many requests` → `RateLimited`); si nada aplica, `BadResponse`. El mensaje es `error.message`, truncado. `complete_stream` los reintenta con la regla de siempre: solo si son reintentables y no se ha entregado ningún delta.
   - Fallo de curl: `Network` o `Timeout` según el código.
   - Cuerpo que no se puede interpretar: `BadResponse`.
 - En errores, intentar extraer el mensaje del cuerpo (`error.message` o `detail`); si no hay, usar el texto del estado HTTP. Truncar cuerpos largos.

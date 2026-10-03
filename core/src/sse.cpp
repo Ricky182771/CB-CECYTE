@@ -98,11 +98,21 @@ bool contains_any(const std::string& text, std::initializer_list<std::string_vie
     });
 }
 
+/// Copia en minúsculas (solo ASCII).
+std::string to_lower(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return text;
+}
+
 /// Clasifica un error que llegó dentro del flujo SSE (con estado HTTP 200),
 /// para poder reintentar la sobrecarga del servidor:
 /// - error.code numérico: igual que un estado HTTP;
 /// - si no, error.type sin distinguir mayúsculas: overload/unavailable/server
 ///   → Server; rate/exhausted → RateLimited;
+/// - si no, error.message sin distinguir mayúsculas: overload o temporarily
+///   unavailable → Server; rate limit o too many requests → RateLimited;
 /// - si no aplica nada: BadResponse.
 ErrorKind classify_stream_error(const json& error) {
     if (!error.is_object()) {
@@ -113,14 +123,23 @@ ErrorKind classify_stream_error(const json& error) {
     }
     const auto type_it = error.find("type");
     if (type_it != error.end() && type_it->is_string()) {
-        std::string type = type_it->get<std::string>();
-        std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
+        const std::string type = to_lower(type_it->get<std::string>());
         if (contains_any(type, {"overload", "unavailable", "server"})) {
             return ErrorKind::Server;
         }
         if (contains_any(type, {"rate", "exhausted"})) {
+            return ErrorKind::RateLimited;
+        }
+    }
+    // Último recurso: NIM manda "Service temporarily overloaded" dentro del
+    // flujo y no se sabe si siempre trae code.
+    const auto message_it = error.find("message");
+    if (message_it != error.end() && message_it->is_string()) {
+        const std::string message = to_lower(message_it->get<std::string>());
+        if (contains_any(message, {"overload", "temporarily unavailable"})) {
+            return ErrorKind::Server;
+        }
+        if (contains_any(message, {"rate limit", "too many requests"})) {
             return ErrorKind::RateLimited;
         }
     }

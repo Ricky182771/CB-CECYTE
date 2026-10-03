@@ -20,10 +20,17 @@ endif()
 # Lógica de la conversación y del hilo de trabajo: solo depende del núcleo,
 # sin FTXUI, para poder probarla sin terminal.
 find_package(Threads REQUIRED)
-add_library(chatbot_cli_lib STATIC src/conversation.cpp src/request_runner.cpp)
+add_library(chatbot_cli_lib STATIC
+    src/conversation.cpp
+    src/conversation_list.cpp
+    src/conversation_store.cpp
+    src/request_runner.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(chatbot_cli_lib PUBLIC chatbot::core Threads::Threads)
+find_package(nlohmann_json 3.2 REQUIRED)
+target_link_libraries(chatbot_cli_lib
+    PUBLIC chatbot::core Threads::Threads
+    PRIVATE nlohmann_json::nlohmann_json)
 chatbot_set_warnings(chatbot_cli_lib)
 
 # Ejecutable de la interfaz: el único target que enlaza FTXUI.

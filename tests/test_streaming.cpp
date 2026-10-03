@@ -483,3 +483,34 @@ TEST_CASE("finish_reason: varios null y uno final con valor", "[streaming][finis
                            "data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n") ==
           "length");
 }
+
+TEST_CASE("Error de flujo solo con 'Service temporarily overloaded' se reintenta",
+          "[streaming][error-flujo]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        stream_error_response(R"j({"error":{"message":"Service temporarily overloaded"}})j"));
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, sse_flow(), std::nullopt, false, ""});
+
+    std::string joined;
+    const auto response = harness.client->complete_stream(sample_messages(), [&](std::string_view d) {
+        joined += d;
+        return true;
+    });
+    REQUIRE(response.is_ok());
+    CHECK(joined == "Hola");
+    CHECK(harness.transport->requests.size() == 2);
+}
+
+TEST_CASE("Error de flujo con un mensaje cualquiera sigue siendo BadResponse",
+          "[streaming][error-flujo]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        stream_error_response(R"j({"error":{"message":"algo distinto"}})j"));
+
+    const auto response = harness.client->complete_stream(
+        sample_messages(), [](std::string_view) { return true; });
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == chatbot::ErrorKind::BadResponse);
+    CHECK(harness.transport->requests.size() == 1);
+}

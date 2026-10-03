@@ -1,6 +1,7 @@
 #include "conversation.h"
 
 #include <cctype>
+#include <ctime>
 #include <cstddef>
 #include <utility>
 
@@ -72,7 +73,8 @@ void Conversation::append_delta(std::string_view text) {
     entries_.push_back(Entry{EntryKind::Assistant, std::string{text}, true, false, false, {}});
 }
 
-std::optional<std::string> Conversation::finish_success(std::string_view finish_reason) {
+std::optional<std::string> Conversation::finish_success(std::string_view finish_reason,
+                                                        std::string_view model) {
     if (!busy_) {
         return std::nullopt;
     }
@@ -84,8 +86,62 @@ std::optional<std::string> Conversation::finish_success(std::string_view finish_
     answer->in_progress = false;
     answer->note = finish_note(finish_reason);
     history_.push_back(Message{Role::Assistant, answer->text});
+    // Par terminado: es lo único que se guarda.
+    turns_.push_back(StoredMessage{Role::User, pending_user_text_, {}, {}});
+    turns_.push_back(StoredMessage{Role::Assistant, answer->text, std::string{model},
+                                   std::string{finish_reason}});
+    if (title_.empty()) {
+        title_ = make_title(turns_.front().content);
+    }
+    pending_user_text_.clear();
     busy_ = false;
     return std::nullopt;
+}
+
+void Conversation::add_error(std::string text) {
+    entries_.push_back(Entry{EntryKind::Error, std::move(text), false, false, false, {}});
+}
+
+void Conversation::add_notice(std::string text) {
+    entries_.push_back(Entry{EntryKind::Notice, std::move(text), false, false, false, {}});
+}
+
+void Conversation::set_identity(std::string id, std::string created_at) {
+    id_ = std::move(id);
+    created_at_ = std::move(created_at);
+}
+
+std::string Conversation::last_model() const {
+    for (auto turn = turns_.rbegin(); turn != turns_.rend(); ++turn) {
+        if (turn->role == Role::Assistant && !turn->model.empty()) {
+            return turn->model;
+        }
+    }
+    return {};
+}
+
+StoredConversation Conversation::to_stored(std::string updated_at) const {
+    return StoredConversation{id_, title_, created_at_, std::move(updated_at), turns_};
+}
+
+Conversation Conversation::from_stored(const StoredConversation& stored) {
+    Conversation conversation; // Ya trae el kSystemPrompt actual.
+    conversation.id_ = stored.id;
+    conversation.created_at_ = stored.created_at;
+    conversation.title_ = stored.title;
+    conversation.turns_ = stored.messages;
+    for (const StoredMessage& message : stored.messages) {
+        conversation.history_.push_back(Message{message.role, message.content});
+        if (message.role == Role::Assistant) {
+            conversation.entries_.push_back(Entry{EntryKind::Assistant, message.content, false,
+                                                  false, false,
+                                                  finish_note(message.finish_reason)});
+        } else {
+            conversation.entries_.push_back(
+                Entry{EntryKind::User, message.content, false, false, false, {}});
+        }
+    }
+    return conversation;
 }
 
 std::string Conversation::finish_error(const ChatError& error) {
@@ -119,6 +175,19 @@ std::string Conversation::finish_error(const ChatError& error) {
     }
     busy_ = false;
     return std::exchange(pending_user_text_, std::string{});
+}
+
+void save_conversation(Conversation& conversation, const ConversationStore& store) {
+    if (!conversation.has_turns()) {
+        return;
+    }
+    const std::string now = format_iso8601(std::time(nullptr));
+    if (conversation.id().empty()) {
+        conversation.set_identity(store.new_id(), now);
+    }
+    if (const std::optional<std::string> error = store.save(conversation.to_stored(now))) {
+        conversation.add_error("No se pudo guardar la conversación: " + *error);
+    }
 }
 
 } // namespace chatbot::cli
