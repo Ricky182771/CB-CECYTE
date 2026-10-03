@@ -15,6 +15,7 @@ find_package(nlohmann_json 3.2 REQUIRED)
 
 add_executable(chatbot_tests
     test_config.cpp
+    test_conversation.cpp
     test_error_mapping.cpp
     test_response.cpp
     test_retries.cpp
@@ -26,7 +27,7 @@ target_compile_features(chatbot_tests PRIVATE cxx_std_20)
 target_include_directories(chatbot_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/core/src)
 target_link_libraries(chatbot_tests PRIVATE
-    chatbot::core Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
+    chatbot::core chatbot_cli_lib Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 
 chatbot_set_warnings(chatbot_tests)
 
