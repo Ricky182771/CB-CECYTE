@@ -28,8 +28,8 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 |------|-----------|--------|
 | 1 | Andamiaje + núcleo con petición simple (sin streaming) + errores tipados + configuración | Hecho |
 | 2 | Streaming SSE + parser + pruebas del parser | Hecho |
-| — | Correcciones del núcleo (excepciones, `content: null`, timeout de streaming, errores permanentes, límite de timeout) | **Actual** |
-| 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | Pendiente |
+| — | Correcciones del núcleo (excepciones, `content: null`, timeout de streaming, errores permanentes, límite de timeout) | Hecho |
+| 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | **Actual** |
 | 4 | Cancelación, scroll del historial, recorte de historial largo | Pendiente |
 | 5 | Persistencia de conversaciones y render de markdown | Pendiente |
 
@@ -40,7 +40,7 @@ Todo lo de hitos posteriores está **fuera de alcance** del hito actual. No lo a
 - **Lenguaje:** C++20. No usar funciones de C++23 (por ejemplo, `std::expected`).
 - **Build:** CMake 3.21 o superior, con presets. Generador Ninja.
 - **Compiladores:** GCC y Clang deben compilar sin warnings.
-- **Dependencias permitidas:** libcurl, nlohmann/json 3.x, Catch2 v3 (solo pruebas).
+- **Dependencias permitidas:** libcurl, nlohmann/json 3.x, Catch2 v3 (solo pruebas), FTXUI ≥ 7.0.2 (solo `cli/`; fijada a v7.0.3 en FetchContent).
 - Resolver dependencias con `find_package`; si no están instaladas, usar `FetchContent` con versión fija (nunca `master`/`main`).
 - **Ninguna otra dependencia sin preguntar.**
 
@@ -57,12 +57,17 @@ chatbot/
 │   ├── include/chatbot/     # headers públicos
 │   └── src/
 ├── tools/                   # smoke.cpp: programa desechable para probar el núcleo
-├── cli/                     # (hito 3) vacío por ahora
+├── cli/
+│   ├── CMakeLists.txt       # dependencia FTXUI, chatbot_cli_lib y ejecutable chatbot
+│   └── src/
+│       ├── conversation.h/.cpp  # lógica de la conversación (sin FTXUI ni hilos)
+│       └── main.cpp             # interfaz FTXUI (ejecutable chatbot)
 └── tests/
 ```
 
 - Biblioteca estática `chatbot_core`, namespace `chatbot`.
 - `core/` no puede depender de FTXUI ni leer/escribir en la terminal (salvo `tools/`).
+- `chatbot_cli_lib` (biblioteca estática de `cli/`) solo depende de `chatbot::core`, sin FTXUI, para poder probarla. Solo el ejecutable `chatbot` enlaza FTXUI.
 
 ## 6. Diseño del núcleo
 
@@ -139,14 +144,17 @@ Presets (con su preset de build y de test del mismo nombre):
 
 - `dev`: Debug con warnings.
 - `asan`: Debug con AddressSanitizer + UndefinedBehaviorSanitizer.
-- `tsan`: ThreadSanitizer (desde el hito 2, cuando haya hilos).
+- `tsan`: Debug con ThreadSanitizer (desde el hito 3: la interfaz usa un hilo de trabajo).
 
 Comandos de verificación:
 
 ```bash
 cmake --preset dev  && cmake --build --preset dev  && ctest --preset dev  --output-on-failure
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan --output-on-failure
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --output-on-failure
 ```
+
+Las pruebas de Catch2 no crean hilos: para cubrir los hilos de verdad, corre también `./build/tsan/cli/chatbot` con una conversación real y revisa que no aparezca `WARNING: ThreadSanitizer`.
 
 ## 12. Pruebas (Catch2)
 
