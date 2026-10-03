@@ -1,6 +1,8 @@
 #ifndef CHATBOT_SLEEPER_H
 #define CHATBOT_SLEEPER_H
 
+#include "chatbot/cancel_token.h"
+
 #include <chrono>
 
 namespace chatbot {
@@ -9,13 +11,18 @@ namespace chatbot {
 class Sleeper {
 public:
     virtual ~Sleeper() = default;
-    virtual void sleep_for(std::chrono::milliseconds duration) = 0;
+
+    /// Espera la duración indicada. Con token, la cancelación interrumpe la
+    /// espera. Devuelve false si se interrumpió por cancelación.
+    [[nodiscard]] virtual bool sleep_for(std::chrono::milliseconds duration,
+                                         const CancelToken* cancel) = 0;
 };
 
-/// Implementación real: duerme el hilo llamante.
+/// Implementación real: duerme el hilo llamante, o espera en el token si lo hay.
 class RealSleeper final : public Sleeper {
 public:
-    void sleep_for(std::chrono::milliseconds duration) override;
+    [[nodiscard]] bool sleep_for(std::chrono::milliseconds duration,
+                                 const CancelToken* cancel) override;
 };
 
 } // namespace chatbot

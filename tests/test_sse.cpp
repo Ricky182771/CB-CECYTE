@@ -213,3 +213,58 @@ TEST_CASE("flujo completo: trozos arbitrarios producen los deltas en orden", "[s
         CHECK(joined == "Hola");
     }
 }
+
+namespace {
+chatbot::ErrorKind stream_error_kind(const std::string& data) {
+    const chatbot::Result<std::optional<std::string>> delta = decode_openai_chunk(data);
+    REQUIRE(delta.is_error());
+    return delta.error().kind;
+}
+} // namespace
+
+TEST_CASE("decode_openai_chunk: error con código numérico se clasifica como estado HTTP",
+          "[sse][error-flujo]") {
+    CHECK(stream_error_kind(R"j({"error":{"message":"ResourceExhausted: Worker local total request limit reached (917/16)","type":"internal_server_error","code":500}})j") ==
+          chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","code":503}})j") == chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","code":429}})j") ==
+          chatbot::ErrorKind::RateLimited);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","code":400}})j") ==
+          chatbot::ErrorKind::InvalidRequest);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","code":401}})j") == chatbot::ErrorKind::Auth);
+}
+
+TEST_CASE("decode_openai_chunk: código como cadena numérica", "[sse][error-flujo]") {
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","code":"429"}})j") ==
+          chatbot::ErrorKind::RateLimited);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","code":"502"}})j") ==
+          chatbot::ErrorKind::Server);
+}
+
+TEST_CASE("decode_openai_chunk: sin código se clasifica por error.type", "[sse][error-flujo]") {
+    CHECK(stream_error_kind(R"j({"error":{"message":"Service temporarily overloaded","type":"overloaded_error"}})j") ==
+          chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","type":"Service_Unavailable"}})j") ==
+          chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","type":"internal_server_error"}})j") ==
+          chatbot::ErrorKind::Server);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","type":"RATE_LIMIT"}})j") ==
+          chatbot::ErrorKind::RateLimited);
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","type":"ResourceExhausted"}})j") ==
+          chatbot::ErrorKind::RateLimited);
+    // Código no numérico: se ignora y manda el tipo.
+    CHECK(stream_error_kind(R"j({"error":{"message":"m","code":"abc","type":"overloaded"}})j") ==
+          chatbot::ErrorKind::Server);
+}
+
+TEST_CASE("decode_openai_chunk: error sin código ni tipo reconocible es BadResponse",
+          "[sse][error-flujo]") {
+    CHECK(stream_error_kind(R"j({"error":{"message":"algo raro","type":"invalid_thing"}})j") ==
+          chatbot::ErrorKind::BadResponse);
+    CHECK(stream_error_kind(R"j({"error":{"message":"algo raro"}})j") ==
+          chatbot::ErrorKind::BadResponse);
+    const chatbot::Result<std::optional<std::string>> delta =
+        decode_openai_chunk(R"j({"error":{"message":"Service temporarily overloaded","code":503}})j");
+    REQUIRE(delta.is_error());
+    CHECK(delta.error().message == "Service temporarily overloaded");
+}

@@ -2,8 +2,10 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json 3.2 REQUIRED)
 
 add_library(chatbot_core STATIC
+    src/cancel_token.cpp
     src/error.cpp
     src/error_body.cpp
+    src/history.cpp
     src/config.cpp
     src/sleeper.cpp
     src/sse.cpp

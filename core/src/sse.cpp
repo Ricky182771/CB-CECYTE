@@ -4,7 +4,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
+#include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -57,6 +61,72 @@ std::string join_data_lines(const std::string& raw) {
     return data;
 }
 
+/// error.code como entero: número JSON o cadena de solo dígitos.
+std::optional<int> numeric_code(const json& error) {
+    const auto code_it = error.find("code");
+    if (code_it == error.end()) {
+        return std::nullopt;
+    }
+    if (code_it->is_number_integer()) {
+        const long long value = code_it->get<long long>();
+        if (value >= 0 && value <= 999) {
+            return static_cast<int>(value);
+        }
+        return std::nullopt;
+    }
+    if (code_it->is_string()) {
+        const std::string& text = code_it->get_ref<const std::string&>();
+        if (text.empty() || text.size() > 3) {
+            return std::nullopt;
+        }
+        int value = 0;
+        for (const char c : text) {
+            if (c < '0' || c > '9') {
+                return std::nullopt;
+            }
+            value = value * 10 + (c - '0');
+        }
+        return value;
+    }
+    return std::nullopt;
+}
+
+/// Indica si texto (ya en minúsculas) contiene alguna de las palabras.
+bool contains_any(const std::string& text, std::initializer_list<std::string_view> words) {
+    return std::any_of(words.begin(), words.end(), [&text](std::string_view word) {
+        return text.find(word) != std::string::npos;
+    });
+}
+
+/// Clasifica un error que llegó dentro del flujo SSE (con estado HTTP 200),
+/// para poder reintentar la sobrecarga del servidor:
+/// - error.code numérico: igual que un estado HTTP;
+/// - si no, error.type sin distinguir mayúsculas: overload/unavailable/server
+///   → Server; rate/exhausted → RateLimited;
+/// - si no aplica nada: BadResponse.
+ErrorKind classify_stream_error(const json& error) {
+    if (!error.is_object()) {
+        return ErrorKind::BadResponse;
+    }
+    if (const std::optional<int> code = numeric_code(error)) {
+        return kind_for_http_status(*code);
+    }
+    const auto type_it = error.find("type");
+    if (type_it != error.end() && type_it->is_string()) {
+        std::string type = type_it->get<std::string>();
+        std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (contains_any(type, {"overload", "unavailable", "server"})) {
+            return ErrorKind::Server;
+        }
+        if (contains_any(type, {"rate", "exhausted"})) {
+            return ErrorKind::RateLimited;
+        }
+    }
+    return ErrorKind::BadResponse;
+}
+
 } // namespace
 
 void Parser::feed(std::string_view raw) {
@@ -103,7 +173,8 @@ Result<Event> decode_event(const std::string& raw) {
     return Event{EventType::Delta, std::move(data)};
 }
 
-Result<std::optional<std::string>> decode_openai_chunk(const std::string& data) {
+Result<std::optional<std::string>> decode_openai_chunk(const std::string& data,
+                                                       std::string* finish_reason) {
     json document;
     try {
         document = json::parse(data);
@@ -121,7 +192,7 @@ Result<std::optional<std::string>> decode_openai_chunk(const std::string& data) 
     // fallo dentro del flujo aunque el estado HTTP haya sido 200.
     if (const auto error_it = document.find("error");
         error_it != document.end() && !error_it->is_null()) {
-        return ChatError{ErrorKind::BadResponse, 0,
+        return ChatError{classify_stream_error(*error_it), 0,
                          extract_error_message(
                              data, "El servidor reportó un error dentro del flujo."),
                          std::nullopt};
@@ -140,6 +211,12 @@ Result<std::optional<std::string>> decode_openai_chunk(const std::string& data) 
     if (!first.is_object() || !first.contains("delta")) {
         return ChatError{ErrorKind::BadResponse, 0,
                          "El chunk del flujo no contiene \"delta\".", std::nullopt};
+    }
+    if (finish_reason != nullptr) {
+        const auto reason_it = first.find("finish_reason");
+        if (reason_it != first.end() && reason_it->is_string()) {
+            *finish_reason = reason_it->get<std::string>();
+        }
     }
     const json& delta = first.at("delta");
     if (!delta.is_object()) {

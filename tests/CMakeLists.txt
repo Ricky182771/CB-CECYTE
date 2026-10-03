@@ -14,12 +14,16 @@ endif()
 find_package(nlohmann_json 3.2 REQUIRED)
 
 add_executable(chatbot_tests
+    test_cancel.cpp
     test_config.cpp
     test_conversation.cpp
+    test_debug_sse.cpp
     test_error_mapping.cpp
+    test_history.cpp
     test_response.cpp
     test_retries.cpp
     test_request_body.cpp
+    test_request_runner.cpp
     test_sse.cpp
     test_streaming.cpp)
 

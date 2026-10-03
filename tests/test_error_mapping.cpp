@@ -5,6 +5,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <string>
+#include <string_view>
+
 namespace {
 
 using chatbot::ChatError;
@@ -155,4 +158,38 @@ TEST_CASE("Retry-After se extrae del transport y queda en el error", "[mapeo]") 
     REQUIRE(response.error().retry_after.has_value());
     CHECK(response.error().retry_after->count() == 30);
     CHECK(harness.sleeper->sleeps.size() == 3);
+}
+
+TEST_CASE("400, 413 y 422 se mapean a InvalidRequest sin reintento", "[mapeo][invalid]") {
+    for (const int status : {400, 413, 422}) {
+        INFO("estado HTTP " << status);
+        auto harness = make_client();
+        harness.transport->responses.push_back(HttpResponse{
+            status, R"({"error":{"message":"maximum context length exceeded"}})",
+            std::nullopt, false, ""});
+
+        const chatbot::Result<std::string> response = harness.client->complete(sample_messages());
+        REQUIRE(response.is_error());
+        CHECK(response.error().kind == ErrorKind::InvalidRequest);
+        CHECK(response.error().http_status == status);
+        CHECK(response.error().message == "maximum context length exceeded");
+        CHECK(harness.transport->requests.size() == 1);
+        CHECK(harness.sleeper->sleeps.empty());
+    }
+}
+
+TEST_CASE("InvalidRequest tiene etiqueta en español", "[mapeo][invalid]") {
+    CHECK(std::string{chatbot::error_kind_label(ErrorKind::InvalidRequest)} ==
+          "petición inválida");
+}
+
+TEST_CASE("InvalidRequest en streaming no se reintenta", "[mapeo][invalid]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(HttpResponse{400, "{}", std::nullopt, false, ""});
+
+    const chatbot::Result<chatbot::CompletionInfo> response = harness.client->complete_stream(
+        sample_messages(), [](std::string_view) { return true; });
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == ErrorKind::InvalidRequest);
+    CHECK(harness.transport->requests.size() == 1);
 }

@@ -9,6 +9,8 @@
 
 namespace chatbot {
 
+class CancelToken;
+
 /// Petición HTTP lista para enviarse.
 struct HttpRequest {
     std::string url;     ///< URL completa del endpoint.
@@ -19,6 +21,13 @@ struct HttpRequest {
     /// segundos de margen de curl; no hay límite total). 0 significa sin
     /// límite en ambos casos.
     std::chrono::milliseconds timeout{120000};
+    /// Cancelación opcional; quien llama lo mantiene vivo durante la petición.
+    /// Si se cancela, la transferencia se aborta y la respuesta vuelve con
+    /// status == 0 y cancelled == true. libcurl revisa el token desde su
+    /// callback de progreso, que llama aproximadamente una vez por segundo
+    /// aunque no lleguen datos (también durante la conexión): la latencia de
+    /// cancelación es de alrededor de 1 s.
+    const CancelToken* cancel = nullptr;
 };
 
 /// Respuesta HTTP cruda, antes de interpretarla.
@@ -28,7 +37,7 @@ struct HttpResponse {
     std::optional<std::string> retry_after; ///< Valor crudo de Retry-After, si llegó.
     bool timed_out = false;                 ///< true si curl agotó el tiempo de espera.
     std::string error;                      ///< Descripción del fallo de red (solo si status == 0).
-    bool cancelled = false;                 ///< true si el callback abortó la transferencia.
+    bool cancelled = false;                 ///< true si se canceló (callback o token).
     bool retryable = true;                  ///< false si el fallo de red no se arregla reintentando.
 };
 

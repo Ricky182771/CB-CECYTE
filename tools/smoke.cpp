@@ -3,7 +3,7 @@
 // Uso (el usuario lo corre; las pruebas automáticas nunca llaman a la API):
 //
 //   export CHAT_API_KEY="nvapi-..."
-//   export CHAT_MODEL="meta/llama-3.1-8b-instruct"
+//   export CHAT_MODEL="nvidia/nemotron-3-super-120b-a12b"   # solo es un ejemplo
 //   ./build/dev/tools/smoke "¿Cómo estás?"           # respuesta completa
 //   ./build/dev/tools/smoke --stream "¿Cómo estás?"  # respuesta por fragmentos
 //
@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Streaming: imprime cada fragmento en cuanto llega, sin salto de línea.
-    const chatbot::Result<void> response = client.complete_stream(
+    const chatbot::Result<chatbot::CompletionInfo> response = client.complete_stream(
         messages, [](std::string_view delta) {
             std::cout << delta << std::flush;
             return true;

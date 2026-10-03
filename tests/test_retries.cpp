@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -167,10 +168,63 @@ TEST_CASE("Fallo de red no reintentable: 1 sola petición en complete_stream",
         200, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n", std::nullopt,
         false, ""});
 
-    const chatbot::Result<void> response = harness.client->complete_stream(
+    const chatbot::Result<chatbot::CompletionInfo> response = harness.client->complete_stream(
         sample_messages(), [](std::string_view) { return true; });
     REQUIRE(response.is_error());
     CHECK(response.error().kind == chatbot::ErrorKind::Network);
     CHECK(harness.transport->requests.size() == 1);
     CHECK(harness.sleeper->sleeps.empty());
+}
+
+TEST_CASE("503 con Retry-After: se respeta la espera", "[reintentos][retry-after]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{503, "{}", std::string{"7"}, false, ""});
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, success_body(), std::nullopt, false, ""});
+
+    const chatbot::Result<std::string> response = harness.client->complete(sample_messages());
+    REQUIRE(response.is_ok());
+    REQUIRE(harness.sleeper->sleeps.size() == 1);
+    CHECK(harness.sleeper->sleeps[0] == std::chrono::milliseconds{7000});
+}
+
+TEST_CASE("503 sin Retry-After: backoff normal", "[reintentos][retry-after]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{503, "{}", std::nullopt, false, ""});
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, success_body(), std::nullopt, false, ""});
+
+    const chatbot::Result<std::string> response = harness.client->complete(sample_messages());
+    REQUIRE(response.is_ok());
+    REQUIRE(harness.sleeper->sleeps.size() == 1);
+    CHECK(harness.sleeper->sleeps[0] == std::chrono::milliseconds{1000});
+}
+
+TEST_CASE("503 con Retry-After absurdo se acota a 60 s", "[reintentos][retry-after]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{503, "{}", std::string{"9999"}, false, ""});
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, success_body(), std::nullopt, false, ""});
+
+    REQUIRE(harness.client->complete(sample_messages()).is_ok());
+    REQUIRE(harness.sleeper->sleeps.size() == 1);
+    CHECK(harness.sleeper->sleeps[0] == std::chrono::milliseconds{60000});
+}
+
+TEST_CASE("503 con Retry-After en streaming: se respeta la espera", "[reintentos][retry-after]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{503, "{}", std::string{"7"}, false, ""});
+    harness.transport->responses.push_back(chatbot::HttpResponse{
+        200, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n", std::nullopt,
+        false, ""});
+
+    const chatbot::Result<chatbot::CompletionInfo> response = harness.client->complete_stream(
+        sample_messages(), [](std::string_view) { return true; });
+    REQUIRE(response.is_ok());
+    REQUIRE(harness.sleeper->sleeps.size() == 1);
+    CHECK(harness.sleeper->sleeps[0] == std::chrono::milliseconds{7000});
 }

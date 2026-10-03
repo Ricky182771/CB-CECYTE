@@ -1,6 +1,7 @@
 #ifndef CHATBOT_TEST_FAKE_TRANSPORT_HPP
 #define CHATBOT_TEST_FAKE_TRANSPORT_HPP
 
+#include "chatbot/cancel_token.h"
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
 #include "chatbot/sleeper.h"
@@ -8,6 +9,8 @@
 #include "chatbot/types.h"
 
 #include <algorithm>
+#include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -81,9 +84,17 @@ private:
 class FakeSleeper final : public chatbot::Sleeper {
 public:
     std::vector<std::chrono::milliseconds> sleeps;
+    /// Gancho opcional que se ejecuta dentro de sleep_for, para que una
+    /// prueba pueda cancelar justo durante la espera.
+    std::function<void()> on_sleep;
 
-    void sleep_for(std::chrono::milliseconds duration) override {
+    [[nodiscard]] bool sleep_for(std::chrono::milliseconds duration,
+                                 const chatbot::CancelToken* cancel) override {
         sleeps.push_back(duration);
+        if (on_sleep) {
+            on_sleep();
+        }
+        return cancel == nullptr || !cancel->is_cancelled();
     }
 };
 

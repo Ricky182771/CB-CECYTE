@@ -1,6 +1,8 @@
 #ifndef CHATBOT_CHAT_CLIENT_H
 #define CHATBOT_CHAT_CLIENT_H
 
+#include "chatbot/cancel_token.h"
+#include "chatbot/completion_info.h"
 #include "chatbot/config.h"
 #include "chatbot/result.h"
 #include "chatbot/sleeper.h"
@@ -35,15 +37,21 @@ public:
 
     /// Envía la conversación completa y devuelve el contenido de la respuesta
     /// del asistente (choices[0].message.content). Nunca lanza excepciones.
-    [[nodiscard]] Result<std::string> complete(const std::vector<Message>& messages);
+    /// Con cancel: se revisa antes de cada intento, viaja al transporte e
+    /// interrumpe la espera de reintento; si se cancela, devuelve
+    /// ErrorKind::Cancelled sin reintentar. El token debe vivir toda la llamada.
+    [[nodiscard]] Result<std::string> complete(const std::vector<Message>& messages,
+                                               const CancelToken* cancel = nullptr);
 
     /// Igual que complete() pero pidiendo stream:true al servidor: entrega
-    /// los incrementos de texto por on_delta conforme llegan y devuelve solo
-    /// el resultado (éxito o error); el texto completo ya pasó por el
-    /// callback. Reintenta igual que complete() mientras no se haya entregado
-    /// ningún delta. Nunca lanza excepciones.
-    [[nodiscard]] Result<void> complete_stream(const std::vector<Message>& messages,
-                                               const StreamDeltaCallback& on_delta);
+    /// los incrementos de texto por on_delta conforme llegan y devuelve el
+    /// resultado: en éxito, el finish_reason (CompletionInfo); el texto
+    /// completo ya pasó por el callback. Reintenta igual que complete() mientras no se haya entregado
+    /// ningún delta. Cancela si on_delta devuelve false o con cancel, igual
+    /// que complete(). Nunca lanza excepciones.
+    [[nodiscard]] Result<CompletionInfo> complete_stream(const std::vector<Message>& messages,
+                                                         const StreamDeltaCallback& on_delta,
+                                                         const CancelToken* cancel = nullptr);
 
 private:
     Sleeper& sleeper();

@@ -1,5 +1,7 @@
 #include "chatbot/curl_transport.h"
 
+#include "chatbot/cancel_token.h"
+
 #include <curl/curl.h>
 
 #include <cctype>
@@ -40,6 +42,26 @@ struct StreamState {
     CURL* handle = nullptr;      ///< Para consultar el estado HTTP en curso.
     bool cancelled = false;
 };
+
+/// Estado del callback de progreso: revisa el token de cancelación.
+struct ProgressState {
+    const CancelToken* cancel = nullptr;
+    bool aborted = false; ///< El callback abortó por cancelación.
+};
+
+/// Callback de progreso de libcurl (CURLOPT_XFERINFOFUNCTION). Se llama con
+/// frecuencia mientras hay datos y alrededor de una vez por segundo cuando no
+/// llegan. Devolver distinto de 0 aborta con CURLE_ABORTED_BY_CALLBACK.
+/// Frontera con C: no puede lanzar (is_cancelled es noexcept).
+int progress_callback(void* userdata, curl_off_t /*dltotal*/, curl_off_t /*dlnow*/,
+                      curl_off_t /*ultotal*/, curl_off_t /*ulnow*/) noexcept {
+    auto* state = static_cast<ProgressState*>(userdata);
+    if (state->cancel->is_cancelled()) {
+        state->aborted = true;
+        return 1;
+    }
+    return 0;
+}
 
 /// Quita espacios y saltos de línea de los extremos.
 std::string trim(std::string text) {
@@ -221,6 +243,15 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
     set(CURLOPT_HEADERFUNCTION, header_callback);
     set(CURLOPT_HEADERDATA, &response.retry_after);
 
+    // Cancelación: el callback de progreso revisa el token (send y send_stream).
+    ProgressState progress_state;
+    if (request.cancel != nullptr) {
+        progress_state.cancel = request.cancel;
+        set(CURLOPT_NOPROGRESS, 0L);
+        set(CURLOPT_XFERINFOFUNCTION, progress_callback);
+        set(CURLOPT_XFERINFODATA, &progress_state);
+    }
+
     if (setup != CURLE_OK) {
         response = HttpResponse{};
         response.error =
@@ -231,11 +262,13 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
     const CURLcode result = curl_easy_perform(handle);
     if (result != CURLE_OK) {
         // Descarta capturas parciales: sin respuesta completa no hay cuerpo válido.
-        const bool was_cancelled = stream_state.cancelled;
+        const bool was_cancelled =
+            stream_state.cancelled ||
+            (result == CURLE_ABORTED_BY_CALLBACK && progress_state.aborted);
         response = HttpResponse{};
         response.timed_out = (result == CURLE_OPERATION_TIMEDOUT);
         response.cancelled = was_cancelled;
-        response.retryable = is_retryable_curl_error(result);
+        response.retryable = !was_cancelled && is_retryable_curl_error(result);
         response.error = error_buffer[0] != '\0' ? std::string{error_buffer}
                                                  : std::string{curl_easy_strerror(result)};
         return response;

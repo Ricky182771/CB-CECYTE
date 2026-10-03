@@ -247,7 +247,7 @@ TEST_CASE("base_url debe usar https://", "[config][https]") {
             harness.client->complete(chatbot_test::sample_messages());
         REQUIRE(response.is_error());
         CHECK(response.error().kind == chatbot::ErrorKind::Config);
-        const chatbot::Result<void> streamed = harness.client->complete_stream(
+        const chatbot::Result<chatbot::CompletionInfo> streamed = harness.client->complete_stream(
             chatbot_test::sample_messages(), [](std::string_view) { return true; });
         REQUIRE(streamed.is_error());
         CHECK(streamed.error().kind == chatbot::ErrorKind::Config);
@@ -350,4 +350,67 @@ TEST_CASE("timeout: 3601 en un Config a mano es error Config sin llamar al trans
     REQUIRE(response.is_error());
     CHECK(response.error().kind == chatbot::ErrorKind::Config);
     CHECK(harness.transport->requests.empty());
+}
+
+TEST_CASE("history_limit: por defecto 32000", "[config][historial]") {
+    chatbot_test::FakeEnv env;
+    env.values["CHAT_API_KEY"] = "clave-ficticia";
+    env.values["CHAT_MODEL"] = "modelo-x";
+
+    const chatbot::Result<chatbot::Config> config =
+        chatbot::load_config(ConfigOptions{env, path_of(std::nullopt)});
+    REQUIRE(config.is_ok());
+    CHECK(config.value().history_limit_bytes == 32000);
+}
+
+TEST_CASE("history_limit: desde el archivo y el entorno pisa al archivo", "[config][historial]") {
+    TempFile archivo{"chatbot_tests_history.json",
+                     R"({"model": "modelo-archivo", "history_limit": 1500})"};
+    chatbot_test::FakeEnv env;
+    env.values["CHAT_API_KEY"] = "clave-ficticia";
+
+    const chatbot::Result<chatbot::Config> from_file =
+        chatbot::load_config(ConfigOptions{env, path_of(archivo.path())});
+    REQUIRE(from_file.is_ok());
+    CHECK(from_file.value().history_limit_bytes == 1500);
+
+    env.values["CHAT_HISTORY_LIMIT"] = "0";
+    const chatbot::Result<chatbot::Config> from_env =
+        chatbot::load_config(ConfigOptions{env, path_of(archivo.path())});
+    REQUIRE(from_env.is_ok());
+    CHECK(from_env.value().history_limit_bytes == 0);
+}
+
+TEST_CASE("history_limit: CHAT_HISTORY_LIMIT inválido es error Config", "[config][historial]") {
+    for (const char* value : {"mucho", "-5", "12.5", "99999999999999999999999"}) {
+        INFO("CHAT_HISTORY_LIMIT = " << value);
+        chatbot_test::FakeEnv env;
+        env.values["CHAT_API_KEY"] = "clave-ficticia";
+        env.values["CHAT_MODEL"] = "modelo-x";
+        env.values["CHAT_HISTORY_LIMIT"] = value;
+
+        const chatbot::Result<chatbot::Config> config =
+            chatbot::load_config(ConfigOptions{env, path_of(std::nullopt)});
+        REQUIRE(config.is_error());
+        CHECK(config.error().kind == chatbot::ErrorKind::Config);
+        CHECK_THAT(config.error().message,
+                   Catch::Matchers::ContainsSubstring("CHAT_HISTORY_LIMIT"));
+    }
+}
+
+TEST_CASE("history_limit: valor inválido en el archivo es error Config", "[config][historial]") {
+    for (const char* content : {R"({"model": "m", "history_limit": "mucho"})",
+                                R"({"model": "m", "history_limit": -1})",
+                                R"({"model": "m", "history_limit": 1.5})"}) {
+        INFO("archivo: " << content);
+        TempFile archivo{"chatbot_tests_history_invalido.json", content};
+        chatbot_test::FakeEnv env;
+        env.values["CHAT_API_KEY"] = "clave-ficticia";
+
+        const chatbot::Result<chatbot::Config> config =
+            chatbot::load_config(ConfigOptions{env, path_of(archivo.path())});
+        REQUIRE(config.is_error());
+        CHECK(config.error().kind == chatbot::ErrorKind::Config);
+        CHECK_THAT(config.error().message, Catch::Matchers::ContainsSubstring("history_limit"));
+    }
 }

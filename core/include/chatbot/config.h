@@ -4,6 +4,7 @@
 #include "chatbot/result.h"
 
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <string>
@@ -17,6 +18,15 @@ struct Config {
     std::string base_url; ///< Por defecto: https://integrate.api.nvidia.com/v1
     std::string model;    ///< Sin valor por defecto a propósito (sección 7).
     std::chrono::seconds timeout_seconds{120};
+    /// Límite del historial que se envía, en bytes UTF-8 de los content
+    /// (aproximadamente caracteres). 0 significa sin límite.
+    std::size_t history_limit_bytes{32000};
+    /// Archivo para el volcado de depuración (solo CHAT_DEBUG_SSE, nunca del
+    /// archivo de configuración). Si está, ChatClient agrega por cada intento
+    /// el estado HTTP y el cuerpo crudo de la respuesta; nunca cabeceras, key
+    /// ni cuerpo de la petición. Contiene la conversación: solo para
+    /// diagnosticar.
+    std::optional<std::string> debug_sse_path;
 };
 
 /// Fuente de variables de entorno, inyectable para las pruebas.

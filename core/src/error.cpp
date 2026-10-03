@@ -20,6 +20,8 @@ const char* error_kind_label(ErrorKind kind) {
         return "tiempo de espera agotado";
     case ErrorKind::BadResponse:
         return "respuesta inválida";
+    case ErrorKind::InvalidRequest:
+        return "petición inválida";
     case ErrorKind::Cancelled:
         return "cancelado";
     }
