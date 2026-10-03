@@ -1,5 +1,7 @@
 #include "sse.h"
 
+#include "error_body.h"
+
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
@@ -115,10 +117,24 @@ Result<std::optional<std::string>> decode_openai_chunk(const std::string& data) 
                          "El chunk del flujo no es un objeto JSON.", std::nullopt};
     }
 
+    // El error se revisa antes que choices: el servidor puede reportar un
+    // fallo dentro del flujo aunque el estado HTTP haya sido 200.
+    if (const auto error_it = document.find("error");
+        error_it != document.end() && !error_it->is_null()) {
+        return ChatError{ErrorKind::BadResponse, 0,
+                         extract_error_message(
+                             data, "El servidor reportó un error dentro del flujo."),
+                         std::nullopt};
+    }
+
     const auto choices_it = document.find("choices");
-    if (choices_it == document.end() || !choices_it->is_array() || choices_it->empty()) {
+    if (choices_it == document.end() || !choices_it->is_array()) {
         return ChatError{ErrorKind::BadResponse, 0,
                          "El chunk del flujo no contiene \"choices\".", std::nullopt};
+    }
+    if (choices_it->empty()) {
+        // Chunk solo con estadísticas (usage) al final del flujo: sin texto.
+        return std::optional<std::string>{std::nullopt};
     }
     const json& first = choices_it->front();
     if (!first.is_object() || !first.contains("delta")) {
@@ -135,6 +151,10 @@ Result<std::optional<std::string>> decode_openai_chunk(const std::string& data) 
         return std::optional<std::string>{std::nullopt};
     }
     const json& content = delta.at("content");
+    if (content.is_null()) {
+        // Primer chunk con solo role, reasoning_content o tool_calls: sin texto.
+        return std::optional<std::string>{std::nullopt};
+    }
     if (!content.is_string()) {
         return ChatError{ErrorKind::BadResponse, 0,
                          "\"choices[0].delta.content\" no es una cadena.", std::nullopt};

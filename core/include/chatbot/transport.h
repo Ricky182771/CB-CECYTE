@@ -14,7 +14,10 @@ struct HttpRequest {
     std::string url;     ///< URL completa del endpoint.
     std::string body;    ///< Cuerpo JSON de la petición.
     std::string api_key; ///< Se usa solo para armar la cabecera Authorization; nunca se registra.
-    /// Timeout total. 0 significa sin límite (semántica de curl).
+    /// En send(): timeout total de la petición. En send_stream(): timeout por
+    /// inactividad (se aborta si no llegan datos durante ese tiempo, más unos
+    /// segundos de margen de curl; no hay límite total). 0 significa sin
+    /// límite en ambos casos.
     std::chrono::milliseconds timeout{120000};
 };
 
@@ -26,6 +29,7 @@ struct HttpResponse {
     bool timed_out = false;                 ///< true si curl agotó el tiempo de espera.
     std::string error;                      ///< Descripción del fallo de red (solo si status == 0).
     bool cancelled = false;                 ///< true si el callback abortó la transferencia.
+    bool retryable = true;                  ///< false si el fallo de red no se arregla reintentando.
 };
 
 /// Callback de streaming: recibe cada trozo crudo del cuerpo y el estado
@@ -45,7 +49,8 @@ public:
     /// conforme llega, junto con el estado HTTP de la respuesta, y además
     /// acumula todo en response.body, igual que send(). Si on_chunk devuelve
     /// false, aborta y devuelve una respuesta con status == 0 y
-    /// cancelled == true.
+    /// cancelled == true. request.timeout se interpreta como timeout por
+    /// inactividad, no como límite total, para no cortar respuestas largas.
     [[nodiscard]] virtual HttpResponse send_stream(const HttpRequest& request,
                                                    const StreamCallback& on_chunk) = 0;
 };

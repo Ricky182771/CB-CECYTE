@@ -70,6 +70,21 @@ bool equals_case_insensitive(std::string_view left, std::string_view right) {
     return true;
 }
 
+/// Fallos de curl que no se arreglan reintentando: URL o protocolo inválidos
+/// y problemas de certificados. DNS y conexión sí se reintentan.
+bool is_retryable_curl_error(CURLcode code) {
+    switch (code) {
+    case CURLE_URL_MALFORMAT:
+    case CURLE_UNSUPPORTED_PROTOCOL:
+    case CURLE_PEER_FAILED_VERIFICATION:
+    case CURLE_SSL_CERTPROBLEM:
+    case CURLE_SSL_CACERT_BADFILE:
+        return false;
+    default:
+        return true;
+    }
+}
+
 size_t write_body_callback(char* data, size_t size, size_t count, void* userdata) {
     auto* body = static_cast<std::string*>(userdata);
     body->append(data, size * count);
@@ -79,17 +94,23 @@ size_t write_body_callback(char* data, size_t size, size_t count, void* userdata
 size_t write_stream_callback(char* data, size_t size, size_t count, void* userdata) {
     auto* state = static_cast<StreamState*>(userdata);
     const size_t total = size * count;
-    state->body->append(data, total);
-    if (state->on_chunk != nullptr) {
-        // Las cabeceras llegan antes que el cuerpo: el estado ya es el final.
-        long status_code = 0;
-        curl_easy_getinfo(state->handle, CURLINFO_RESPONSE_CODE, &status_code);
-        if (!(*state->on_chunk)(std::string_view{data, total},
-                                static_cast<int>(status_code))) {
-            state->cancelled = true;
-            // Devolver 0 aborta la transferencia (curl la termina con error de escritura).
-            return 0;
+    // Frontera con C: ninguna excepción puede salir de esta función.
+    try {
+        state->body->append(data, total);
+        if (state->on_chunk != nullptr) {
+            // Las cabeceras llegan antes que el cuerpo: el estado ya es el final.
+            long status_code = 0;
+            curl_easy_getinfo(state->handle, CURLINFO_RESPONSE_CODE, &status_code);
+            if (!(*state->on_chunk)(std::string_view{data, total},
+                                    static_cast<int>(status_code))) {
+                state->cancelled = true;
+                // Devolver 0 aborta la transferencia (curl la termina con error de escritura).
+                return 0;
+            }
         }
+    } catch (...) {
+        state->cancelled = true;
+        return 0;
     }
     return total;
 }
@@ -160,8 +181,26 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
     set(CURLOPT_POSTFIELDS, request.body.c_str());
     set(CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
     set(CURLOPT_HTTPHEADER, headers.get());
-    // Timeout total (0 = sin límite) y 10 s para establecer conexión (sección 8).
-    set(CURLOPT_TIMEOUT_MS, static_cast<long>(request.timeout.count()));
+    if (stream != nullptr) {
+        // Streaming: sin límite total, para no cortar respuestas largas que
+        // siguen llegando. El timeout se aplica por inactividad: si la
+        // velocidad cae por debajo de 1 byte/s durante ese tiempo, curl
+        // aborta con CURLE_OPERATION_TIMEDOUT. Curl promedia la velocidad en
+        // una ventana de unos 5 s, así que el corte llega unos segundos
+        // después del timeout pedido. 0 = sin límite.
+        set(CURLOPT_TIMEOUT_MS, 0L);
+        const long long timeout_ms = request.timeout.count();
+        if (timeout_ms > 0) {
+            // Segundos redondeados hacia arriba; mínimo 1.
+            const long idle_seconds = static_cast<long>((timeout_ms + 999) / 1000);
+            set(CURLOPT_LOW_SPEED_LIMIT, 1L);
+            set(CURLOPT_LOW_SPEED_TIME, idle_seconds);
+        }
+    } else {
+        // Timeout total (0 = sin límite).
+        set(CURLOPT_TIMEOUT_MS, static_cast<long>(request.timeout.count()));
+    }
+    // 10 s para establecer conexión (sección 8).
     set(CURLOPT_CONNECTTIMEOUT_MS, 10000L);
     set(CURLOPT_ERRORBUFFER, error_buffer);
     set(CURLOPT_NOSIGNAL, 1L);
@@ -196,6 +235,7 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
         response = HttpResponse{};
         response.timed_out = (result == CURLE_OPERATION_TIMEDOUT);
         response.cancelled = was_cancelled;
+        response.retryable = is_retryable_curl_error(result);
         response.error = error_buffer[0] != '\0' ? std::string{error_buffer}
                                                  : std::string{curl_easy_strerror(result)};
         return response;

@@ -26,8 +26,9 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 
 | Hito | Contenido | Estado |
 |------|-----------|--------|
-| 1 | Andamiaje + núcleo con petición simple (sin streaming) + errores tipados + configuración | **Actual** |
-| 2 | Streaming SSE + parser + pruebas del parser | Pendiente |
+| 1 | Andamiaje + núcleo con petición simple (sin streaming) + errores tipados + configuración | Hecho |
+| 2 | Streaming SSE + parser + pruebas del parser | Hecho |
+| — | Correcciones del núcleo (excepciones, `content: null`, timeout de streaming, errores permanentes, límite de timeout) | **Actual** |
 | 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | Pendiente |
 | 4 | Cancelación, scroll del historial, recorte de historial largo | Pendiente |
 | 5 | Persistencia de conversaciones y render de markdown | Pendiente |
@@ -87,7 +88,7 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 | API key | `CHAT_API_KEY` | **nunca** | ninguno (error `Config` si falta) |
 | URL base | `CHAT_BASE_URL` | `base_url` | `https://integrate.api.nvidia.com/v1` |
 | Modelo | `CHAT_MODEL` | `model` | **ninguno** (error `Config` con mensaje claro si falta) |
-| Timeout total (s) | `CHAT_TIMEOUT` | `timeout_seconds` | 120 |
+| Timeout (s): total en `complete`, por inactividad en `complete_stream` | `CHAT_TIMEOUT` | `timeout_seconds` | 120 |
 
 - Archivo: `$XDG_CONFIG_HOME/chatbot/config.json`, o `~/.config/chatbot/config.json` si no existe esa variable. Que el archivo no exista no es un error.
 - **Sin modelo por defecto a propósito:** los modelos de NIM se retiran con el tiempo y un nombre fijo en el código acabaría roto.

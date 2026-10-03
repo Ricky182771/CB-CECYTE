@@ -6,7 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 using chatbot_test::make_client;
@@ -121,4 +123,21 @@ TEST_CASE("El timeout configurado llega al transporte en milisegundos", "[petici
     (void)harness.client->complete(sample_messages());
 
     CHECK(harness.transport->requests.front().timeout == std::chrono::milliseconds{45000});
+}
+
+TEST_CASE("UTF-8 inválido en un mensaje: no lanza y se sustituye por U+FFFD", "[peticion][utf8]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(
+        chatbot::HttpResponse{200, chatbot_test::success_body(), std::nullopt, false, ""});
+    const std::vector<chatbot::Message> messages{
+        chatbot::Message{chatbot::Role::User, std::string("caf\xE9")}};
+
+    std::optional<chatbot::Result<std::string>> response;
+    REQUIRE_NOTHROW(response.emplace(harness.client->complete(messages)));
+    REQUIRE(response->is_ok());
+    REQUIRE(harness.transport->requests.size() == 1);
+
+    // El cuerpo enviado es JSON válido y el byte inválido quedó como U+FFFD.
+    const nlohmann::json body = nlohmann::json::parse(harness.transport->requests.front().body);
+    CHECK(body.at("messages")[0].at("content") == "caf\xEF\xBF\xBD");
 }

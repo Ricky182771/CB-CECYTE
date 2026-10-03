@@ -3,6 +3,7 @@ find_package(nlohmann_json 3.2 REQUIRED)
 
 add_library(chatbot_core STATIC
     src/error.cpp
+    src/error_body.cpp
     src/config.cpp
     src/sleeper.cpp
     src/sse.cpp

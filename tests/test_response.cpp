@@ -73,6 +73,18 @@ TEST_CASE("content que no es cadena: BadResponse", "[respuesta]") {
     CHECK(response.error().kind == chatbot::ErrorKind::BadResponse);
 }
 
+TEST_CASE("content null: BadResponse con mensaje claro", "[respuesta][null]") {
+    auto harness = make_client();
+    harness.transport->responses.push_back(chatbot::HttpResponse{
+        200, R"({"choices": [{"message": {"role": "assistant", "content": null}}]})",
+        std::nullopt, false, ""});
+
+    const chatbot::Result<std::string> response = harness.client->complete(sample_messages());
+    REQUIRE(response.is_error());
+    CHECK(response.error().kind == chatbot::ErrorKind::BadResponse);
+    CHECK(response.error().message == "El modelo no devolvió texto en la respuesta.");
+}
+
 TEST_CASE("BadResponse no se reintenta", "[respuesta]") {
     auto harness = make_client();
     harness.transport->responses.push_back(chatbot::HttpResponse{200, "{oops", std::nullopt, false, ""});
