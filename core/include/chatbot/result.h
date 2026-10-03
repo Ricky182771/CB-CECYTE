@@ -4,6 +4,7 @@
 #include "chatbot/error.h"
 
 #include <cassert>
+#include <optional>
 #include <utility>
 #include <variant>
 
@@ -35,6 +36,26 @@ public:
 
 private:
     std::variant<T, ChatError> value_;
+};
+
+/// Especialización para operaciones sin valor de retorno (p. ej. streaming).
+template <>
+class Result<void> {
+public:
+    Result() = default;
+    Result(ChatError error) : error_(std::move(error)) {}
+
+    [[nodiscard]] bool is_ok() const { return !error_.has_value(); }
+    [[nodiscard]] bool is_error() const { return error_.has_value(); }
+
+    /// Error de la variante fallida. Requiere is_error().
+    [[nodiscard]] const ChatError& error() const {
+        assert(is_error());
+        return *error_;
+    }
+
+private:
+    std::optional<ChatError> error_;
 };
 
 } // namespace chatbot

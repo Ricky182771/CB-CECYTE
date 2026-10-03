@@ -22,9 +22,16 @@ public:
 
     [[nodiscard]] HttpResponse send(const HttpRequest& request) override;
 
+    [[nodiscard]] HttpResponse send_stream(const HttpRequest& request,
+                                           const StreamCallback& on_chunk) override;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+
+    /// Configura y ejecuta la petición; stream no nulo activa el callback
+    /// de streaming (compartido por send y send_stream).
+    HttpResponse perform(const HttpRequest& request, const StreamCallback* stream);
 };
 
 } // namespace chatbot

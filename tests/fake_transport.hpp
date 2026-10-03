@@ -7,6 +7,7 @@
 #include "chatbot/transport.h"
 #include "chatbot/types.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -22,9 +23,48 @@ class FakeTransport final : public chatbot::Transport {
 public:
     std::vector<chatbot::HttpResponse> responses;
     std::vector<chatbot::HttpRequest> requests;
+    /// Si es > 0, el cuerpo se entrega partido en trozos de ese tamaño.
+    std::size_t chunk_size = 0;
 
     [[nodiscard]] chatbot::HttpResponse send(const chatbot::HttpRequest& request) override {
         requests.push_back(request);
+        return next_response();
+    }
+
+    [[nodiscard]] chatbot::HttpResponse send_stream(
+        const chatbot::HttpRequest& request,
+        const chatbot::StreamCallback& on_chunk) override {
+        requests.push_back(request);
+        const chatbot::HttpResponse response = next_response();
+        // Como en la red real: primero las cabeceras (estado) y luego el cuerpo.
+        if (response.status != 0 && !response.body.empty()) {
+            const std::string body = response.body; // Copia: el callback puede abortar.
+            if (chunk_size == 0) {
+                if (!on_chunk(body, response.status)) {
+                    return cancelled_response();
+                }
+            } else {
+                for (std::size_t begin = 0; begin < body.size(); begin += chunk_size) {
+                    const std::size_t end = std::min(begin + chunk_size, body.size());
+                    if (!on_chunk(std::string_view{body}.substr(begin, end - begin),
+                                  response.status)) {
+                        return cancelled_response();
+                    }
+                }
+            }
+        }
+        return response;
+    }
+
+private:
+    static chatbot::HttpResponse cancelled_response() {
+        chatbot::HttpResponse response;
+        response.error = "cancelado por el callback";
+        response.cancelled = true;
+        return response;
+    }
+    /// Siguiente respuesta pregrabada; repite la última si se acaban.
+    [[nodiscard]] chatbot::HttpResponse next_response() {
         if (responses.empty()) {
             return chatbot::HttpResponse{};
         }
@@ -34,7 +74,6 @@ public:
         return responses.at(index);
     }
 
-private:
     std::size_t next_index_ = 0;
 };
 

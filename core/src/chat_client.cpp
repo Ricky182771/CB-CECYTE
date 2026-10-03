@@ -1,6 +1,7 @@
 #include "chatbot/chat_client.h"
 
 #include "chatbot/error.h"
+#include "sse.h"
 
 #include <nlohmann/json.hpp>
 
@@ -56,9 +57,11 @@ Result<std::string_view> role_to_string(Role role) {
                      "Rol de mensaje inválido en el historial.", std::nullopt};
 }
 
-/// Construye el cuerpo JSON de la petición (sección 8).
+/// Construye el cuerpo JSON de la petición (sección 8). stream indica si se
+/// pide respuesta por fragmentos (hito 2) o completa (hito 1).
 Result<std::string> build_request_body(std::string_view model,
-                                       const std::vector<Message>& messages) {
+                                       const std::vector<Message>& messages,
+                                       bool stream) {
     if (messages.empty()) {
         return ChatError{ErrorKind::Config, 0,
                          "La conversación no puede estar vacía.", std::nullopt};
@@ -66,7 +69,7 @@ Result<std::string> build_request_body(std::string_view model,
 
     json body;
     body["model"] = model;
-    body["stream"] = false;
+    body["stream"] = stream;
     json json_messages = json::array();
     for (const Message& message : messages) {
         const Result<std::string_view> role = role_to_string(message.role);
@@ -229,6 +232,104 @@ bool is_retryable(ErrorKind kind) {
     return false;
 }
 
+/// Fallo de transporte sin respuesta HTTP: red, timeout o cancelación.
+ChatError transport_error(const HttpResponse& response) {
+    ChatError error;
+    if (response.cancelled) {
+        error.kind = ErrorKind::Cancelled;
+        error.message = "Petición cancelada por el usuario.";
+        return error;
+    }
+    error.kind = response.timed_out ? ErrorKind::Timeout : ErrorKind::Network;
+    error.message = !response.error.empty()
+                        ? response.error
+                        : std::string{error_kind_label(error.kind)};
+    return error;
+}
+
+/// Resultado de un intento de streaming ya consumido.
+struct StreamAttemptOutcome {
+    Result<void> result;          ///< Éxito o error final de la petición.
+    bool delivered_any = false;   ///< Si ya se entregó al menos un delta.
+};
+
+/// Ejecuta un intento de streaming: consume el cuerpo conforme llega con el
+/// parser SSE y entrega los deltas por on_delta. Los errores HTTP no se
+/// consumen como flujo: el cuerpo se acumula en la respuesta y se mapea al
+/// final, igual que en complete().
+StreamAttemptOutcome run_stream_attempt(const HttpRequest& request, Transport& transport,
+                                        const StreamDeltaCallback& on_delta) {
+    StreamAttemptOutcome outcome;
+
+    sse::Parser parser;
+    bool done = false;    ///< Se recibió data: [DONE].
+    bool aborted = false; ///< Cuerpo inválido a mitad del flujo.
+    std::optional<ChatError> abort_error;
+
+    const HttpResponse response = transport.send_stream(
+        request, [&](std::string_view raw, int chunk_status) {
+            if (chunk_status < 200 || chunk_status > 299) {
+                return true; // Error HTTP: se interpreta al final, no como flujo.
+            }
+            if (aborted || done) {
+                return true;
+            }
+            parser.feed(raw);
+            // Un trozo puede contener varios eventos: se procesan todos.
+            while (const std::optional<std::string> raw_event = parser.next_event()) {
+                const Result<sse::Event> event = sse::decode_event(*raw_event);
+                if (event.is_error()) {
+                    abort_error = event.error();
+                    aborted = true;
+                    return false;
+                }
+                if (event.value().type == sse::EventType::Done) {
+                    done = true;
+                    return true;
+                }
+                if (event.value().type != sse::EventType::Delta) {
+                    continue;
+                }
+                const Result<std::optional<std::string>> delta =
+                    sse::decode_openai_chunk(event.value().data);
+                if (delta.is_error()) {
+                    abort_error = delta.error();
+                    aborted = true;
+                    return false;
+                }
+                if (delta.value().has_value() && !delta.value()->empty()) {
+                    outcome.delivered_any = true;
+                    if (!on_delta(*delta.value())) {
+                        return false; // Cancelación: curl aborta con status == 0.
+                    }
+                }
+            }
+            return true;
+        });
+
+    if (aborted) {
+        outcome.result = Result<void>{*abort_error};
+        return outcome;
+    }
+    if (response.status == 0) {
+        // Red, timeout o cancelación desde el callback.
+        outcome.result = transport_error(response);
+        return outcome;
+    }
+    if (response.status < 200 || response.status > 299) {
+        outcome.result = map_http_error(response.status, response.body,
+                                        response.retry_after);
+        return outcome;
+    }
+    if (!done && parser.has_partial_data()) {
+        // El flujo se cortó a mitad de un evento: los datos están incompletos.
+        outcome.result = ChatError{ErrorKind::BadResponse, 0,
+                                   "El flujo terminó a mitad de un evento.", std::nullopt};
+    }
+    // Sin [DONE] pero con el flujo completo y limpio: fin implícito, éxito.
+    return outcome;
+}
+
 } // namespace
 
 ChatClient::ChatClient(Config config, std::unique_ptr<Transport> transport)
@@ -250,7 +351,7 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages) {
         return *config_error;
     }
 
-    const Result<std::string> body = build_request_body(config_.model, messages);
+    const Result<std::string> body = build_request_body(config_.model, messages, false);
     if (body.is_error()) {
         return Result<std::string>{body.error()};
     }
@@ -266,11 +367,7 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages) {
 
         // Sin respuesta HTTP: fallo de red o timeout de curl.
         if (response.status == 0) {
-            ChatError error;
-            error.kind = response.timed_out ? ErrorKind::Timeout : ErrorKind::Network;
-            error.message = !response.error.empty()
-                                ? response.error
-                                : std::string{error_kind_label(error.kind)};
+            ChatError error = transport_error(response);
             if (attempt < kMaxRetries && is_retryable(error.kind)) {
                 sleeper().sleep_for(kBaseDelay * (1 << attempt));
                 continue;
@@ -294,6 +391,44 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages) {
             continue;
         }
         return error;
+    }
+}
+
+Result<void> ChatClient::complete_stream(const std::vector<Message>& messages,
+                                         const StreamDeltaCallback& on_delta) {
+    if (const std::optional<ChatError> config_error = validate_config(config_)) {
+        return *config_error;
+    }
+
+    const Result<std::string> body = build_request_body(config_.model, messages, true);
+    if (body.is_error()) {
+        return Result<void>{body.error()};
+    }
+
+    HttpRequest request;
+    request.url = build_url(config_.base_url);
+    request.body = body.value();
+    request.api_key = config_.api_key;
+    request.timeout = std::chrono::milliseconds(config_.timeout_seconds);
+
+    for (int attempt = 0;; ++attempt) {
+        StreamAttemptOutcome outcome = run_stream_attempt(request, *transport_, on_delta);
+
+        const bool can_retry = attempt < kMaxRetries &&
+                               outcome.result.is_error() &&
+                               is_retryable(outcome.result.error().kind) &&
+                               !outcome.delivered_any;
+
+        if (!can_retry) {
+            return outcome.result;
+        }
+
+        const ChatError& error = outcome.result.error();
+        std::chrono::milliseconds wait{kBaseDelay * (1 << attempt)};
+        if (error.retry_after.has_value()) {
+            wait = *error.retry_after;
+        }
+        sleeper().sleep_for(wait);
     }
 }
 

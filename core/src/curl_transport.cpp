@@ -32,6 +32,15 @@ struct SlistDeleter {
     void operator()(curl_slist* list) const { curl_slist_free_all(list); }
 };
 
+/// Estado del modo streaming: acumula el cuerpo en la respuesta y avisa al
+/// observador conforme llegan los datos, con el estado HTTP vigente.
+struct StreamState {
+    std::string* body = nullptr; ///< Siempre apunta a HttpResponse::body.
+    const StreamCallback* on_chunk = nullptr;
+    CURL* handle = nullptr;      ///< Para consultar el estado HTTP en curso.
+    bool cancelled = false;
+};
+
 /// Quita espacios y saltos de línea de los extremos.
 std::string trim(std::string text) {
     const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
@@ -67,6 +76,24 @@ size_t write_body_callback(char* data, size_t size, size_t count, void* userdata
     return size * count;
 }
 
+size_t write_stream_callback(char* data, size_t size, size_t count, void* userdata) {
+    auto* state = static_cast<StreamState*>(userdata);
+    const size_t total = size * count;
+    state->body->append(data, total);
+    if (state->on_chunk != nullptr) {
+        // Las cabeceras llegan antes que el cuerpo: el estado ya es el final.
+        long status_code = 0;
+        curl_easy_getinfo(state->handle, CURLINFO_RESPONSE_CODE, &status_code);
+        if (!(*state->on_chunk)(std::string_view{data, total},
+                                static_cast<int>(status_code))) {
+            state->cancelled = true;
+            // Devolver 0 aborta la transferencia (curl la termina con error de escritura).
+            return 0;
+        }
+    }
+    return total;
+}
+
 size_t header_callback(char* data, size_t size, size_t count, void* userdata) {
     auto* retry_after = static_cast<std::optional<std::string>*>(userdata);
     const size_t total = size * count;
@@ -96,6 +123,15 @@ CurlTransport::CurlTransport() : impl_(std::make_unique<Impl>()) {}
 CurlTransport::~CurlTransport() = default;
 
 HttpResponse CurlTransport::send(const HttpRequest& request) {
+    return perform(request, nullptr);
+}
+
+HttpResponse CurlTransport::send_stream(const HttpRequest& request,
+                                        const StreamCallback& on_chunk) {
+    return perform(request, &on_chunk);
+}
+
+HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCallback* stream) {
     HttpResponse response;
     if (impl_->handle == nullptr) {
         response.error = "libcurl no pudo inicializarse";
@@ -127,12 +163,24 @@ HttpResponse CurlTransport::send(const HttpRequest& request) {
     // Timeout total (0 = sin límite) y 10 s para establecer conexión (sección 8).
     set(CURLOPT_TIMEOUT_MS, static_cast<long>(request.timeout.count()));
     set(CURLOPT_CONNECTTIMEOUT_MS, 10000L);
-    set(CURLOPT_WRITEFUNCTION, write_body_callback);
-    set(CURLOPT_WRITEDATA, &response.body);
-    set(CURLOPT_HEADERFUNCTION, header_callback);
-    set(CURLOPT_HEADERDATA, &response.retry_after);
     set(CURLOPT_ERRORBUFFER, error_buffer);
     set(CURLOPT_NOSIGNAL, 1L);
+
+    // Streaming o acumulación: el mismo handle sirve para ambos modos.
+    StreamState stream_state;
+    if (stream != nullptr) {
+        stream_state.body = &response.body;
+        stream_state.on_chunk = stream;
+        stream_state.handle = handle;
+        set(CURLOPT_WRITEFUNCTION, write_stream_callback);
+        set(CURLOPT_WRITEDATA, &stream_state);
+    } else {
+        set(CURLOPT_WRITEFUNCTION, write_body_callback);
+        set(CURLOPT_WRITEDATA, &response.body);
+    }
+
+    set(CURLOPT_HEADERFUNCTION, header_callback);
+    set(CURLOPT_HEADERDATA, &response.retry_after);
 
     if (setup != CURLE_OK) {
         response = HttpResponse{};
@@ -144,8 +192,10 @@ HttpResponse CurlTransport::send(const HttpRequest& request) {
     const CURLcode result = curl_easy_perform(handle);
     if (result != CURLE_OK) {
         // Descarta capturas parciales: sin respuesta completa no hay cuerpo válido.
+        const bool was_cancelled = stream_state.cancelled;
         response = HttpResponse{};
         response.timed_out = (result == CURLE_OPERATION_TIMEDOUT);
+        response.cancelled = was_cancelled;
         response.error = error_buffer[0] != '\0' ? std::string{error_buffer}
                                                  : std::string{curl_easy_strerror(result)};
         return response;

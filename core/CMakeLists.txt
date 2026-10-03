@@ -5,6 +5,7 @@ add_library(chatbot_core STATIC
     src/error.cpp
     src/config.cpp
     src/sleeper.cpp
+    src/sse.cpp
     src/curl_transport.cpp
     src/chat_client.cpp)
 

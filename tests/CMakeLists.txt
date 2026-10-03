@@ -18,7 +18,9 @@ add_executable(chatbot_tests
     test_error_mapping.cpp
     test_response.cpp
     test_retries.cpp
-    test_request_body.cpp)
+    test_request_body.cpp
+    test_sse.cpp
+    test_streaming.cpp)
 
 target_compile_features(chatbot_tests PRIVATE cxx_std_20)
 target_include_directories(chatbot_tests PRIVATE

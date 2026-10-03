@@ -7,10 +7,15 @@
 #include "chatbot/transport.h"
 #include "chatbot/types.h"
 
+#include <functional>
 #include <memory>
 #include <vector>
 
 namespace chatbot {
+
+/// Callback de streaming: recibe cada incremento de texto del asistente.
+/// Devolver false cancela la petición (se devuelve ErrorKind::Cancelled).
+using StreamDeltaCallback = std::function<bool(std::string_view delta)>;
 
 /// Cliente del hito 1: petición simple sin streaming, con reintentos.
 /// Las excepciones internas nunca cruzan la API pública (sección 6).
@@ -31,6 +36,14 @@ public:
     /// Envía la conversación completa y devuelve el contenido de la respuesta
     /// del asistente (choices[0].message.content). Nunca lanza excepciones.
     [[nodiscard]] Result<std::string> complete(const std::vector<Message>& messages);
+
+    /// Igual que complete() pero pidiendo stream:true al servidor: entrega
+    /// los incrementos de texto por on_delta conforme llegan y devuelve solo
+    /// el resultado (éxito o error); el texto completo ya pasó por el
+    /// callback. Reintenta igual que complete() mientras no se haya entregado
+    /// ningún delta. Nunca lanza excepciones.
+    [[nodiscard]] Result<void> complete_stream(const std::vector<Message>& messages,
+                                               const StreamDeltaCallback& on_delta);
 
 private:
     Sleeper& sleeper();
