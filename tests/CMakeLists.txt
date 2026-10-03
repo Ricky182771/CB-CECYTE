@@ -11,7 +11,7 @@ if(NOT Catch2_FOUND)
     FetchContent_MakeAvailable(Catch2)
 endif()
 
-find_package(nlohmann_json 3.2 REQUIRED)
+find_package(nlohmann_json 3.9 REQUIRED)
 
 add_executable(chatbot_tests
     test_cancel.cpp
@@ -22,6 +22,7 @@ add_executable(chatbot_tests
     test_debug_sse.cpp
     test_error_mapping.cpp
     test_history.cpp
+    test_markdown.cpp
     test_response.cpp
     test_retries.cpp
     test_request_body.cpp
@@ -38,3 +39,13 @@ target_link_libraries(chatbot_tests PRIVATE
 chatbot_set_warnings(chatbot_tests)
 
 add_test(NAME chatbot_tests COMMAND chatbot_tests)
+
+# Pruebas de la vista de markdown: dibujan con ftxui::Screen (sin terminal).
+# Van aparte para que chatbot_tests no enlace FTXUI.
+add_executable(chatbot_ui_tests
+    test_history_view.cpp
+    test_markdown_view.cpp)
+target_compile_features(chatbot_ui_tests PRIVATE cxx_std_20)
+target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui Catch2::Catch2WithMain)
+chatbot_set_warnings(chatbot_ui_tests)
+add_test(NAME chatbot_ui_tests COMMAND chatbot_ui_tests)

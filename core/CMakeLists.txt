@@ -1,5 +1,5 @@
 find_package(CURL REQUIRED)
-find_package(nlohmann_json 3.2 REQUIRED)
+find_package(nlohmann_json 3.9 REQUIRED)
 
 add_library(chatbot_core STATIC
     src/cancel_token.cpp
