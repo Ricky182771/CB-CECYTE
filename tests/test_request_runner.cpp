@@ -362,3 +362,23 @@ TEST_CASE("RequestRunner: reintento por contexto con historial menor que el lím
     CHECK(sent_messages(fake->requests[1]) < 6);
     CHECK(harness.outcome.dropped > 0);
 }
+
+TEST_CASE("RequestRunner: cancelar antes de que corra on_done convierte el éxito en Cancelled",
+          "[runner][hilos]") {
+    auto transport = std::make_unique<chatbot_test::FakeTransport>();
+    transport->responses.push_back(
+        HttpResponse{200, sse_flow({"completa"}), std::nullopt, false, ""});
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
+
+    REQUIRE(harness.start());
+    // Ya llegó el texto (y quizá el on_done está en la cola), pero la interfaz
+    // sigue ocupada: Esc todavía debe cancelar.
+    REQUIRE(harness.queue.run_until([&] { return !harness.outcome.deltas.empty(); }));
+    REQUIRE(harness.runner->busy());
+    harness.runner->cancel();
+    REQUIRE(harness.wait_done());
+
+    REQUIRE(harness.outcome.result->is_error());
+    CHECK(harness.outcome.result->error().kind == ErrorKind::Cancelled);
+    CHECK(harness.outcome.done_calls == 1);
+}

@@ -477,6 +477,11 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages,
         }
         const HttpResponse response = transport_->send(request);
         append_debug_dump(config_, attempt, response);
+        // Una cancelación que llega durante el intento gana aunque haya
+        // terminado bien: quien llama ya la pidió.
+        if (is_cancelled(cancel)) {
+            return cancelled_error();
+        }
 
         // Sin respuesta HTTP: fallo de red, timeout de curl o cancelación.
         if (response.status == 0) {
@@ -535,6 +540,9 @@ Result<CompletionInfo> ChatClient::complete_stream(const std::vector<Message>& m
             return cancelled_error();
         }
         StreamAttemptOutcome outcome = run_stream_attempt(config_, attempt, request, *transport_, on_delta);
+        if (is_cancelled(cancel)) {
+            return cancelled_error(); // Igual que en complete(): la cancelación gana.
+        }
 
         const bool can_retry = attempt < kMaxRetries &&
                                outcome.result.is_error() &&

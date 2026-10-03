@@ -46,7 +46,9 @@ public:
     /// omitidos por el recorte del intento que se usó al final.
     bool start(std::vector<Message> history, OnDelta on_delta, OnDone on_done);
 
-    /// Cancela la petición en curso, si la hay.
+    /// Cancela la petición en curso, si la hay. Mientras busy() sea true, la
+    /// cancelación siempre gana: aunque la respuesta ya haya terminado en el
+    /// hilo de trabajo, on_done recibe ErrorKind::Cancelled.
     void cancel();
 
     /// true desde start() hasta que se ejecuta su on_done.
@@ -55,7 +57,8 @@ public:
 private:
     /// Estado compartido con las tareas que quedan en la cola de post.
     struct State {
-        bool busy = false; ///< Solo se toca en el hilo de la interfaz.
+        bool busy = false;             ///< Solo se toca en el hilo de la interfaz.
+        bool cancel_requested = false; ///< cancel() en la petición actual (hilo de la interfaz).
     };
 
     ChatClient& client_;
