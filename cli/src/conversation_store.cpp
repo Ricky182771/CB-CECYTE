@@ -136,22 +136,29 @@ std::optional<std::string> parse_conversation(const std::string& content,
     return std::nullopt;
 }
 
-json to_json(const StoredConversation& conversation) {
-    json messages = json::array();
+/// Se escribe con ordered_json para que las llaves sigan el orden del
+/// esquema (más fácil de leer a mano); requiere nlohmann/json ≥ 3.9.
+nlohmann::ordered_json to_json(const StoredConversation& conversation) {
+    using nlohmann::ordered_json;
+    ordered_json messages = ordered_json::array();
     for (const StoredMessage& message : conversation.messages) {
-        json item{{"role", role_name(message.role)}, {"content", message.content}};
+        ordered_json item = ordered_json::object();
+        item["role"] = role_name(message.role);
+        item["content"] = message.content;
         if (message.role == Role::Assistant) {
             item["model"] = message.model;
             item["finish_reason"] = message.finish_reason;
         }
         messages.push_back(std::move(item));
     }
-    return json{{"version", kConversationFormatVersion},
-                {"id", conversation.id},
-                {"title", conversation.title},
-                {"created_at", conversation.created_at},
-                {"updated_at", conversation.updated_at},
-                {"messages", std::move(messages)}};
+    ordered_json document = ordered_json::object();
+    document["version"] = kConversationFormatVersion;
+    document["id"] = conversation.id;
+    document["title"] = conversation.title;
+    document["created_at"] = conversation.created_at;
+    document["updated_at"] = conversation.updated_at;
+    document["messages"] = std::move(messages);
+    return document;
 }
 
 /// Días desde 1970-01-01 para una fecha civil (algoritmo de H. Hinnant).
@@ -454,9 +461,10 @@ std::optional<std::string> ConversationStore::save(const StoredConversation& con
             return problem;
         }
 
-        const std::string data = to_json(conversation).dump(2, ' ', false,
-                                                            json::error_handler_t::replace) +
-                                 "\n";
+        const std::string data =
+            to_json(conversation)
+                .dump(2, ' ', false, nlohmann::ordered_json::error_handler_t::replace) +
+            "\n";
         const std::string temporary = target + ".tmp";
         const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
         if (fd < 0) {

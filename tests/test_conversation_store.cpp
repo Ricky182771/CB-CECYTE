@@ -305,3 +305,30 @@ TEST_CASE("ConversationStore: si la carpeta es un archivo, guardar da error sin 
     CHECK_FALSE(error->empty());
     CHECK(read_file(not_a_dir) == "x");
 }
+
+TEST_CASE("ConversationStore: el JSON sigue el orden del esquema", "[almacen]") {
+    const ScopedTempDir temp;
+    const ConversationStore store{temp.string()};
+    REQUIRE_FALSE(store.save(sample("20261002-235800-a1b2c3", "2026-10-02T23:59:12-06:00"))
+                      .has_value());
+    const std::string json = read_file(temp.path() / "20261002-235800-a1b2c3.json");
+    const std::vector<std::string> keys = {"\"version\"", "\"id\"", "\"title\"", "\"created_at\"",
+                                           "\"updated_at\"", "\"messages\""};
+    std::size_t previous = 0;
+    for (const std::string& key : keys) {
+        INFO("llave " << key);
+        const std::size_t at = json.find(key);
+        REQUIRE(at != std::string::npos);
+        CHECK(at >= previous);
+        previous = at;
+    }
+    // Dentro de cada mensaje del asistente: role, content, model, finish_reason.
+    const std::size_t role = json.find("\"role\": \"assistant\"");
+    REQUIRE(role != std::string::npos);
+    const std::size_t content = json.find("\"content\"", role);
+    const std::size_t model = json.find("\"model\"", role);
+    const std::size_t finish = json.find("\"finish_reason\"", role);
+    CHECK(role < content);
+    CHECK(content < model);
+    CHECK(model < finish);
+}

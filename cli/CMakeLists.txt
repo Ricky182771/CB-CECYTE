@@ -17,6 +17,27 @@ if(NOT ftxui_FOUND)
     FetchContent_MakeAvailable(ftxui)
 endif()
 
+# md4c (parser de markdown en C, MIT). Siempre por FetchContent con versión
+# fija: su configuración de CMake no instala un archivo de versión, así que
+# find_package no puede garantizar la 0.6 (las distribuciones traen la 0.5.x,
+# sin notas al pie). Solo la biblioteca de parseo, estática. md4c pide CMake
+# >= 3.14 (CMP0077), así que sus option() respetan estas variables normales,
+# que solo valen dentro de cli/.
+set(BUILD_SHARED_LIBS OFF)
+set(BUILD_HTML_LIBRARY OFF)
+set(BUILD_MD2HTML_EXECUTABLE OFF)
+include(FetchContent)
+FetchContent_Declare(
+    md4c
+    GIT_REPOSITORY https://github.com/mity/md4c.git
+    GIT_TAG v0.6.0
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(md4c)
+# Sus headers se incluyen como SYSTEM: no es código nuestro y no lleva
+# nuestros flags (funciona con CMake 3.21, sin FetchContent ... SYSTEM).
+get_target_property(MD4C_INCLUDE_DIRS md4c INTERFACE_INCLUDE_DIRECTORIES)
+set_target_properties(md4c PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${MD4C_INCLUDE_DIRS}")
+
 # Lógica de la conversación y del hilo de trabajo: solo depende del núcleo,
 # sin FTXUI, para poder probarla sin terminal.
 find_package(Threads REQUIRED)
@@ -24,16 +45,27 @@ add_library(chatbot_cli_lib STATIC
     src/conversation.cpp
     src/conversation_list.cpp
     src/conversation_store.cpp
+    src/markdown.cpp
     src/request_runner.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-find_package(nlohmann_json 3.2 REQUIRED)
+find_package(nlohmann_json 3.9 REQUIRED)
 target_link_libraries(chatbot_cli_lib
     PUBLIC chatbot::core Threads::Threads
-    PRIVATE nlohmann_json::nlohmann_json)
+    PRIVATE nlohmann_json::nlohmann_json md4c)
 chatbot_set_warnings(chatbot_cli_lib)
 
-# Ejecutable de la interfaz: el único target que enlaza FTXUI.
+# Dibujo con FTXUI que no necesita la terminal (solo dom y screen), aparte de
+# chatbot_cli_lib para que esta siga sin FTXUI. Las pruebas de la vista lo
+# usan con ftxui::Screen.
+add_library(chatbot_cli_ui STATIC
+    src/history_view.cpp
+    src/markdown_view.cpp)
+target_compile_features(chatbot_cli_ui PUBLIC cxx_std_20)
+target_link_libraries(chatbot_cli_ui PUBLIC chatbot_cli_lib ftxui::dom ftxui::screen)
+chatbot_set_warnings(chatbot_cli_ui)
+
+# Ejecutable de la interfaz: el único que usa ftxui::component.
 add_executable(chatbot src/main.cpp)
-target_link_libraries(chatbot PRIVATE chatbot_cli_lib ftxui::component)
+target_link_libraries(chatbot PRIVATE chatbot_cli_lib chatbot_cli_ui ftxui::component)
 chatbot_set_warnings(chatbot)

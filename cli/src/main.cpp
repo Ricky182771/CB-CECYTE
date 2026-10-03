@@ -8,6 +8,8 @@
 #include "conversation.h"
 #include "conversation_list.h"
 #include "conversation_store.h"
+#include "history_view.h"
+#include "markdown.h"
 #include "request_runner.h"
 
 #include "chatbot/chat_client.h"
@@ -26,6 +28,7 @@
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
+#include <ftxui/screen/terminal.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -38,9 +41,6 @@
 #include <vector>
 
 namespace {
-
-using chatbot::cli::Entry;
-using chatbot::cli::EntryKind;
 
 /// Líneas que mueve cada paso de la rueda del ratón.
 constexpr int kWheelStep = 3;
@@ -81,7 +81,7 @@ ftxui::Element render_list(const chatbot::cli::ConversationList& list) {
         const chatbot::cli::ConversationSummary& item = list.items()[i];
         ftxui::Element row = ftxui::hbox({
             ftxui::text(list.is_current(i) ? "● " : "  "),
-            ftxui::text(item.title) | (item.readable ? ftxui::bold : ftxui::dim) |
+            ftxui::text(chatbot::cli::md::sanitize(item.title)) | (item.readable ? ftxui::bold : ftxui::dim) |
                 ftxui::flex_shrink,
             ftxui::text("  "),
             ftxui::text(chatbot::cli::ConversationList::details(item)) | ftxui::dim,
@@ -96,31 +96,6 @@ ftxui::Element render_list(const chatbot::cli::ConversationList& list) {
         rows.push_back(std::move(row));
     }
     return ftxui::vbox(std::move(rows));
-}
-
-/// Dibuja una entrada de la conversación con su etiqueta.
-ftxui::Element render_entry(const Entry& entry) {
-    switch (entry.kind) {
-    case EntryKind::User:
-        return ftxui::vbox({ftxui::text("Tú:") | ftxui::bold, ftxui::paragraph(entry.text)});
-    case EntryKind::Assistant: {
-        ftxui::Elements lines{ftxui::text("Asistente:") | ftxui::bold,
-                              ftxui::paragraph(entry.text)};
-        if (entry.cancelled) {
-            lines.push_back(ftxui::text("(cancelada)") | ftxui::dim);
-        } else if (entry.incomplete) {
-            lines.push_back(ftxui::text("(respuesta incompleta)") | ftxui::dim);
-        } else if (!entry.note.empty()) {
-            lines.push_back(ftxui::text(entry.note) | ftxui::dim);
-        }
-        return ftxui::vbox(std::move(lines));
-    }
-    case EntryKind::Error:
-        return ftxui::paragraph(entry.text) | ftxui::color(ftxui::Color::Red);
-    case EntryKind::Notice:
-        return ftxui::paragraph(entry.text) | ftxui::dim;
-    }
-    return ftxui::emptyElement();
 }
 
 /// Igual que ftxui::reflect, pero guarda la caja completa que recibe el
@@ -222,6 +197,7 @@ int main() {
     chatbot::cli::Conversation conversation;
     std::string input_text;
     Scroll scroll;
+    chatbot::cli::HistoryView history;
     std::size_t last_dropped = 0;
     chatbot::cli::ConversationList list;
     bool list_open = false;
@@ -327,14 +303,9 @@ int main() {
         if (list_open) {
             body = render_list(list) | ftxui::yframe | ftxui::reflect(list_box) | ftxui::flex;
         } else {
-            ftxui::Elements entries;
-            for (const Entry& entry : conversation.entries()) {
-                if (!entries.empty()) {
-                    entries.push_back(ftxui::text(""));
-                }
-                entries.push_back(render_entry(entry));
-            }
-            body = scroll.apply(ftxui::vbox(std::move(entries)));
+            // El historial ocupa todo el ancho de la terminal.
+            const int width = ftxui::Terminal::Size().dimx;
+            body = scroll.apply(history.render(conversation.entries(), width));
         }
 
         ftxui::Elements status;
@@ -379,7 +350,7 @@ int main() {
         const std::string title =
             "Chatbot CECyTE — " + model + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
-                                          : conversation.title());
+                                          : chatbot::cli::md::sanitize(conversation.title()));
         return ftxui::vbox({
             // Si no cabe, se encoge el título y el aviso de teclas queda entero.
             ftxui::hbox({ftxui::text(title) | ftxui::bold | ftxui::flex_shrink, ftxui::filler(),

@@ -17,7 +17,7 @@ Ubuntu/Debian:
 sudo apt install g++ cmake ninja-build libcurl4-openssl-dev nlohmann-json3-dev catch2
 ```
 
-La interfaz usa [FTXUI](https://github.com/ArthurSonzogni/FTXUI) 7.x. Si no está instalada, CMake descarga la v7.0.3 al configurar, así que la primera vez necesitas conexión a internet.
+La interfaz usa [FTXUI](https://github.com/ArthurSonzogni/FTXUI) 7.x. Si no está instalada, CMake descarga la v7.0.3 al configurar. Para el markdown usa [md4c](https://github.com/mity/md4c) v0.6.0, que CMake siempre descarga (los paquetes de las distribuciones son versiones anteriores, sin notas al pie). Por eso la primera vez necesitas conexión a internet.
 
 Las pruebas necesitan Catch2 v3:
 
@@ -105,3 +105,30 @@ En la lista de conversaciones: ↑/↓, PgUp/PgDn y Home/End para moverte; Enter
 Si subes en el historial, la vista se queda donde está aunque llegue texto nuevo, y la línea de estado muestra `↓ Hay más abajo (End)`, o `(PgDn)` si hay texto en la caja (porque ahí End mueve el cursor). Al enviar un mensaje, la vista regresa abajo.
 
 El chatbot captura el ratón para la rueda. Para seleccionar texto con el ratón, mantén Shift mientras arrastras, como en la mayoría de terminales con apps que usan el ratón.
+
+### Markdown en las respuestas
+
+Las respuestas del asistente se muestran con formato de markdown, también mientras van llegando. Tus mensajes, los errores y los avisos se muestran como texto plano.
+
+Se muestra:
+
+- Párrafos, encabezados (`#` a `######`), citas (también anidadas) y líneas horizontales (`---`).
+- **Negritas**, *cursivas*, ~~tachado~~, `==resaltado==` y `código en línea`.
+- Listas con viñetas y numeradas, anidadas, y listas de tareas (`- [ ]` y `- [x]`).
+- Bloques de código con el lenguaje como título. Las líneas largas se parten, sin colores de sintaxis.
+- Tablas con alineación por columna. Si no caben, el texto se ajusta dentro de las celdas; si ni así caben, cada fila se muestra como una tarjeta `Encabezado: valor`.
+- Enlaces: el texto subrayado y la dirección al lado. En las terminales que lo soportan, el enlace se abre con clic.
+- Imágenes como `[imagen: descripción]` con su dirección, porque la terminal no muestra imágenes.
+- Alertas de GitHub (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`).
+- Notas al pie (`[^1]`), que aparecen al final de la respuesta.
+- Fórmulas de LaTeX (`$...$` y `$$...$$`) como texto, sin convertir.
+
+El HTML dentro de la respuesta se muestra tal cual, como texto. Los caracteres de control que podrían alterar la terminal (por ejemplo, las secuencias que empiezan con ESC) se reemplazan por `�`, también en tus mensajes y en los errores.
+
+Para ver cómo se muestra un archivo markdown sin usar la API:
+
+```bash
+./build/dev/tools/md_preview --width 60 tests/data/markdown_muestra.md
+```
+
+`--width` es el ancho en columnas (80 si no lo pones). Si la salida es una terminal, se ve con colores y estilos; si la rediriges a un archivo, sale como texto plano.

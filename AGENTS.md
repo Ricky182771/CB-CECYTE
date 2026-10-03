@@ -31,7 +31,7 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 | — | Correcciones del núcleo (excepciones, `content: null`, timeout de streaming, errores permanentes, límite de timeout) | Hecho |
 | 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | Hecho |
 | 4 | Cancelación, scroll del historial, recorte de historial largo, prueba automatizada del hilo de trabajo (ver nota) | Hecho |
-| 5 | Persistencia de conversaciones y render de markdown | **Actual** |
+| 5 | Persistencia de conversaciones y render de markdown | Hecho |
 
 **Nota para el hito 4: prueba con hilos** (sin loop de FTXUI). Implementada con `RequestRunner` (`cli/src/request_runner.*`) y `tests/test_request_runner.cpp`; el transporte que se bloquea quedó aparte, en `tests/blocking_transport.hpp`:
 
@@ -46,7 +46,7 @@ Todo lo de hitos posteriores está **fuera de alcance** del hito actual. No lo a
 - **Lenguaje:** C++20. No usar funciones de C++23 (por ejemplo, `std::expected`).
 - **Build:** CMake 3.21 o superior, con presets. Generador Ninja.
 - **Compiladores:** GCC y Clang deben compilar sin warnings.
-- **Dependencias permitidas:** libcurl, nlohmann/json 3.x, Catch2 v3 (solo pruebas), FTXUI ≥ 7.0.2 (solo `cli/`; fijada a v7.0.3 en FetchContent).
+- **Dependencias permitidas:** libcurl, nlohmann/json ≥ 3.9 (3.x; la 3.9 trae `ordered_json`, que se usa para escribir las conversaciones en el orden del esquema), Catch2 v3 (solo pruebas), FTXUI ≥ 7.0.2 (solo `cli/`; fijada a v7.0.3 en FetchContent), md4c v0.6.0 (solo `cli/`, render de markdown; siempre por FetchContent con `GIT_TAG v0.6.0`: su CMake no instala archivo de versión y las distribuciones traen la 0.5.x, sin notas al pie; solo la biblioteca de parseo, estática, con sus headers como `SYSTEM`).
 - Resolver dependencias con `find_package`; si no están instaladas, usar `FetchContent` con versión fija (nunca `master`/`main`).
 - **Ninguna otra dependencia sin preguntar.**
 
@@ -62,21 +62,28 @@ chatbot/
 │   ├── CMakeLists.txt
 │   ├── include/chatbot/     # headers públicos
 │   └── src/
-├── tools/                   # smoke.cpp: programa desechable para probar el núcleo
+├── tools/                   # smoke.cpp: programa desechable para probar el núcleo;
+│                            # md_preview.cpp: vista previa del render de markdown
 ├── cli/
-│   ├── CMakeLists.txt       # dependencia FTXUI, chatbot_cli_lib y ejecutable chatbot
+│   ├── CMakeLists.txt       # FTXUI y md4c, chatbot_cli_lib, chatbot_cli_ui y ejecutable chatbot
 │   └── src/
 │       ├── conversation.h/.cpp        # lógica de la conversación (sin FTXUI ni hilos)
 │       ├── conversation_store.h/.cpp  # archivos de conversación (sin FTXUI)
 │       ├── conversation_list.h/.cpp   # lógica de la lista de conversaciones (sin FTXUI)
 │       ├── request_runner.h/.cpp      # hilo de trabajo de la petición (sin FTXUI)
+│       ├── markdown.h/.cpp            # markdown → árbol propio con md4c, y filtrado del texto (sin FTXUI)
+│       ├── markdown_view.h/.cpp       # árbol de markdown → ftxui::Element (chatbot_cli_ui)
+│       ├── history_view.h/.cpp        # entradas de la conversación, con caché (chatbot_cli_ui)
 │       └── main.cpp             # interfaz FTXUI (ejecutable chatbot)
-└── tests/
+└── tests/                   # chatbot_tests (sin FTXUI) y chatbot_ui_tests (vista)
+    └── data/                # markdown_muestra.md: muestra con todos los elementos
 ```
 
 - Biblioteca estática `chatbot_core`, namespace `chatbot`.
 - `core/` no puede depender de FTXUI ni leer/escribir en la terminal (salvo `tools/`).
-- `chatbot_cli_lib` (biblioteca estática de `cli/`) solo depende de `chatbot::core`, sin FTXUI, para poder probarla. Solo el ejecutable `chatbot` enlaza FTXUI.
+- `chatbot_cli_lib` (biblioteca estática de `cli/`) solo depende de `chatbot::core` (y, en privado, de nlohmann/json y md4c), sin FTXUI, para poder probarla.
+- `chatbot_cli_ui` (biblioteca estática de `cli/`) dibuja sin terminal: enlaza `chatbot_cli_lib`, `ftxui::dom` y `ftxui::screen`. La usan el ejecutable `chatbot`, `tools/md_preview` y `chatbot_ui_tests`. Solo el ejecutable `chatbot` enlaza `ftxui::component`.
+- Todo texto que viene del modelo, del usuario o de un archivo pasa por `md::sanitize` antes de dibujarse (controles C0 salvo `\n`, ESC, DEL y C1 → U+FFFD; tab → 4 espacios). FTXUI descarta esos caracteres en `text()`, pero sin dejar rastro, y escribe sin filtrar la URL de `hyperlink`: por eso las URL además se codifican con `hyperlink_target`.
 
 ## 6. Diseño del núcleo
 
@@ -166,6 +173,8 @@ Presets (con su preset de build y de test del mismo nombre):
 - `asan`: Debug con AddressSanitizer + UndefinedBehaviorSanitizer.
 - `tsan`: Debug con ThreadSanitizer (desde el hito 3: la interfaz usa un hilo de trabajo).
 
+`asan` y `tsan` ponen los sanitizadores también en `CMAKE_C_FLAGS`, para que md4c (C) quede instrumentado. Los flags de warnings solo se aplican a nuestros targets (`chatbot_set_warnings`), no a md4c ni a FTXUI.
+
 Comandos de verificación:
 
 ```bash
@@ -175,6 +184,8 @@ cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --outp
 ```
 
 Las pruebas de `RequestRunner` y de `CancelToken` crean hilos (deben pasar con `tsan`). Aun así, corre también `./build/tsan/cli/chatbot` con una conversación real, cancelando un par de veces, y revisa que no aparezca `WARNING: ThreadSanitizer`: el loop de FTXUI no está en las pruebas.
+
+`ctest` corre dos ejecutables: `chatbot_tests` (núcleo y `chatbot_cli_lib`, sin FTXUI) y `chatbot_ui_tests` (vista de markdown e historial, dibujando con `ftxui::Screen`, sin terminal). Las pruebas de desempeño solo exigen tiempos en la build sin sanitizadores; con sanitizadores solo los muestran (`WARN`). Para revisar el render a ojo: `./build/dev/tools/md_preview --width 40 tests/data/markdown_muestra.md`.
 
 ## 12. Pruebas (Catch2)
 
