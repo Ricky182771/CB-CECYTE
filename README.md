@@ -87,7 +87,7 @@ Cada conversación se guarda sola después de cada respuesta completa, en un arc
 - si no, `$XDG_DATA_HOME/chatbot/conversations` (solo si `XDG_DATA_HOME` es una ruta absoluta);
 - si no, `~/.local/share/chatbot/conversations`.
 
-Los archivos contienen **el texto completo de tus conversaciones**. Por eso la carpeta se crea con permisos 0700 y los archivos con 0600 (solo tu usuario puede leerlos). Para borrar una conversación, usa Supr en la lista (Ctrl+O); para borrarlas todas, borra la carpeta. Si un archivo está dañado o es de una versión más nueva del programa, aparece en la lista como ilegible y el programa nunca lo modifica.
+Los archivos contienen **el texto completo de tus conversaciones**. Por eso la carpeta se crea con permisos 0700 y los archivos con 0600 (solo tu usuario puede leerlos). Para borrar una conversación, usa Supr en la barra de conversaciones (Ctrl+O); para borrarlas todas, borra la carpeta. Si un archivo está dañado o es de una versión más nueva del programa, aparece en la barra como ilegible y el programa nunca lo modifica.
 
 #### Depuración
 
@@ -110,13 +110,22 @@ Teclas:
 | Enter | Envía el mensaje (no hace nada mientras hay una respuesta en curso) |
 | Esc | Cancela la respuesta en curso; el texto regresa a la caja |
 | PgUp / PgDn | Sube o baja una pantalla del historial |
-| Rueda del ratón | Sube o baja unas 3 líneas |
+| Rueda del ratón | Sube o baja unas 3 líneas (del historial, o de la barra si el puntero está sobre ella) |
 | Home / End | Con la caja vacía, va al inicio o al final del historial; con texto, mueve el cursor de la caja |
 | Ctrl+N | Empieza una conversación nueva |
-| Ctrl+O | Abre la lista de conversaciones guardadas |
+| Ctrl+B | Muestra u oculta la barra de conversaciones |
+| Ctrl+O | Pasa a la barra de conversaciones (y la muestra si estaba oculta) |
 | Ctrl+C | Sale |
 
-En la lista de conversaciones: ↑/↓, PgUp/PgDn y Home/End para moverte; Enter abre; Supr borra (pide confirmación: solo `s` borra); Esc vuelve a la conversación sin cambiar nada. Mientras hay una respuesta en curso, Ctrl+N y Ctrl+O no hacen nada: espera la respuesta o cancélala con Esc.
+#### Barra de conversaciones
+
+A la izquierda está la lista de conversaciones guardadas, agrupadas por fecha: **Hoy**, **Ayer**, **Últimos 7 días** y después un grupo por día (`2 oct`, o `15 dic 2025` si es de otro año). La primera fila, `+ Nueva`, empieza una conversación nueva. `●` marca la conversación abierta, y las ilegibles aparecen tenues, con `(ilegible)`, en el grupo **Sin fecha** al final.
+
+- Se ve al arrancar si la terminal mide 100 columnas o más. Si la terminal se angosta a menos de 100, se oculta sola, y reaparece al volver a ensancharla (salvo que la hayas ocultado tú con Ctrl+B).
+- Para cambiar su ancho, arrastra con el ratón su borde derecho (de 18 a 60 columnas, o hasta la mitad de la terminal). El ancho no se guarda al salir.
+- Con Ctrl+O la barra toma el foco: ↑/↓, PgUp/PgDn y Home/End para moverte (los encabezados de grupo se saltan); Enter abre; Supr borra (pide confirmación en la línea de estado: solo `s` borra); Esc vuelve a la caja de entrada. La fila seleccionada solo se resalta mientras la barra tiene el foco.
+- Con el ratón: un clic en una conversación la abre, y en `+ Nueva` empieza una nueva.
+- Mientras hay una respuesta en curso, abrir, borrar o crear una conversación (desde la barra o con Ctrl+N) no hace nada: espera la respuesta o cancélala con Esc. Moverte por la lista sí se puede.
 
 Si subes en el historial, la vista se queda donde está aunque llegue texto nuevo, y la línea de estado muestra `↓ Hay más abajo (End)`, o `(PgDn)` si hay texto en la caja (porque ahí End mueve el cursor). Al enviar un mensaje, la vista regresa abajo.
 

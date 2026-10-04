@@ -72,11 +72,13 @@ chatbot/
 │       ├── conversation.h/.cpp        # lógica de la conversación (sin FTXUI ni hilos)
 │       ├── conversation_store.h/.cpp  # archivos de conversación (sin FTXUI)
 │       ├── conversation_list.h/.cpp   # lógica de la lista de conversaciones (sin FTXUI)
+│       ├── sidebar.h/.cpp             # barra de conversaciones: grupos por fecha, navegación (sin FTXUI)
 │       ├── request_runner.h/.cpp      # hilo de trabajo de la petición (sin FTXUI)
 │       ├── markdown.h/.cpp            # markdown → árbol propio con md4c, y filtrado del texto (sin FTXUI)
 │       ├── markdown_view.h/.cpp       # árbol de markdown → ftxui::Element (chatbot_cli_ui)
 │       ├── history_view.h/.cpp        # entradas de la conversación, con caché (chatbot_cli_ui)
 │       ├── input_style.h/.cpp         # estilo de la caja de entrada, sin invertido (chatbot_cli_ui)
+│       ├── sidebar_view.h/.cpp        # dibujo de la barra de conversaciones (chatbot_cli_ui)
 │       └── main.cpp             # interfaz FTXUI (ejecutable chatbot)
 └── tests/                   # chatbot_tests (sin FTXUI) y chatbot_ui_tests (vista)
     └── data/                # markdown_muestra.md: muestra con todos los elementos
@@ -86,6 +88,7 @@ chatbot/
 - `core/` no puede depender de FTXUI ni leer/escribir en la terminal (salvo `tools/`).
 - `chatbot_cli_lib` (biblioteca estática de `cli/`) solo depende de `chatbot::core` (y, en privado, de nlohmann/json y md4c), sin FTXUI, para poder probarla.
 - `chatbot_cli_ui` (biblioteca estática de `cli/`) dibuja sin terminal: enlaza `chatbot_cli_lib`, `ftxui::dom` y `ftxui::screen`. La usan el ejecutable `chatbot`, `tools/md_preview` y `chatbot_ui_tests`. Solo el ejecutable `chatbot` enlaza `ftxui::component`.
+- Conversaciones guardadas: una barra lateral a la izquierda (lógica en `Sidebar`, que reusa `ConversationList`; dibujo en `sidebar_view`). Ctrl+B la muestra u oculta, Ctrl+O le da el foco y Ctrl+N empieza una conversación nueva. Se muestra al arrancar con 100 columnas o más y su borde derecho es el divisor de `ResizableSplit`. Reemplaza a la lista de pantalla completa.
 - Todo texto que viene del modelo, del usuario o de un archivo pasa por `md::sanitize` antes de dibujarse (controles C0 salvo `\n`, ESC, DEL y C1 → U+FFFD; tab → 4 espacios). FTXUI descarta esos caracteres en `text()`, pero sin dejar rastro, y escribe sin filtrar la URL de `hyperlink`: por eso las URL además se codifican con `hyperlink_target`.
 
 ## 6. Diseño del núcleo

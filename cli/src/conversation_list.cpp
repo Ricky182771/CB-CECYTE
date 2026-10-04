@@ -33,6 +33,15 @@ void ConversationList::refresh(std::vector<ConversationSummary> items) {
     selected_ = items_.empty() ? 0 : std::min(selected_, items_.size() - 1);
 }
 
+void ConversationList::select(std::size_t index) {
+    confirming_delete_ = false;
+    if (index < items_.size()) {
+        selected_ = index;
+    }
+}
+
+void ConversationList::set_current(std::string current_id) { current_id_ = std::move(current_id); }
+
 bool ConversationList::is_current(std::size_t index) const {
     return index < items_.size() && !current_id_.empty() && items_[index].id == current_id_;
 }
