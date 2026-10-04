@@ -9,6 +9,7 @@
 #include "conversation_list.h"
 #include "conversation_store.h"
 #include "history_view.h"
+#include "input_style.h"
 #include "markdown.h"
 #include "request_runner.h"
 
@@ -291,6 +292,11 @@ int main() {
 
     ftxui::InputOption input_option;
     input_option.multiline = false;
+    // Sin el fondo invertido del transform por defecto (ver input_style.h).
+    input_option.transform = [](ftxui::InputState state) {
+        return chatbot::cli::input_transform(std::move(state.element), state.hovered,
+                                             state.focused, state.is_placeholder);
+    };
     input_option.on_enter = [&] {
         send();
         screen.PostEvent(ftxui::Event::Custom);
@@ -358,7 +364,8 @@ int main() {
             std::move(body),
             ftxui::separator(),
             ftxui::hbox(std::move(status_line)),
-            ftxui::hbox({ftxui::text("> "), input->Render() | ftxui::flex}),
+            // El prompt en negritas marca la caja sin un bloque de color.
+            ftxui::hbox({ftxui::text("> ") | ftxui::bold, input->Render() | ftxui::flex}),
         });
     });
 

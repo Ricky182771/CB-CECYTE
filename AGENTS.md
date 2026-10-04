@@ -76,6 +76,7 @@ chatbot/
 │       ├── markdown.h/.cpp            # markdown → árbol propio con md4c, y filtrado del texto (sin FTXUI)
 │       ├── markdown_view.h/.cpp       # árbol de markdown → ftxui::Element (chatbot_cli_ui)
 │       ├── history_view.h/.cpp        # entradas de la conversación, con caché (chatbot_cli_ui)
+│       ├── input_style.h/.cpp         # estilo de la caja de entrada, sin invertido (chatbot_cli_ui)
 │       └── main.cpp             # interfaz FTXUI (ejecutable chatbot)
 └── tests/                   # chatbot_tests (sin FTXUI) y chatbot_ui_tests (vista)
     └── data/                # markdown_muestra.md: muestra con todos los elementos
