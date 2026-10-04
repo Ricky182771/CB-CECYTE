@@ -172,7 +172,7 @@ TEST_CASE("vista: encabezados", "[vista]") {
     CHECK(rows[0] == "Uno");
     CHECK(rows[1].empty()); // Línea en blanco entre bloques.
     CHECK(rows[2] == "Dos");
-    CHECK(rows[4] == "Tres");
+    CHECK(rows[4] == "▍ Tres");
     CHECK(screen.CellAt(0, 0).bold);
     CHECK(screen.CellAt(0, 0).underlined);
     CHECK(screen.CellAt(0, 2).bold);
@@ -180,13 +180,15 @@ TEST_CASE("vista: encabezados", "[vista]") {
     CHECK_FALSE(screen.CellAt(0, 2).dim);
     CHECK(screen.CellAt(0, 2).foreground_color == ftxui::Color(ftxui::Color::Default));
     // H3-H6: negritas en cian, sin dim (se leen sobre fondos translúcidos).
-    CHECK(rows[6] == "Seis");
+    // El texto del título empieza después de la marca "▍ ".
+    CHECK(rows[6] == "▍ Seis");
+    const int text_x = ftxui::string_width("▍ ");
     for (const int y : {4, 6}) {
         CAPTURE(y);
-        CHECK(screen.CellAt(0, y).bold);
-        CHECK_FALSE(screen.CellAt(0, y).dim);
-        CHECK_FALSE(screen.CellAt(0, y).underlined);
-        CHECK(screen.CellAt(0, y).foreground_color == ftxui::Color(ftxui::Color::Cyan));
+        CHECK(screen.CellAt(text_x, y).bold);
+        CHECK_FALSE(screen.CellAt(text_x, y).dim);
+        CHECK_FALSE(screen.CellAt(text_x, y).underlined);
+        CHECK(screen.CellAt(text_x, y).foreground_color == ftxui::Color(ftxui::Color::Cyan));
     }
 }
 
@@ -724,4 +726,71 @@ TEST_CASE("vista: el estilo no se estira en tablas, notas, citas, listas ni cód
         CAPTURE(source);
         check_no_style_past_text(draw(source, 40), true);
     }
+}
+
+TEST_CASE("vista: H3-H6 llevan la marca y H1-H2 no", "[vista]") {
+    const std::string mark = "▍ ";
+    for (int level = 1; level <= 6; ++level) {
+        CAPTURE(level);
+        const std::string source = std::string(static_cast<std::size_t>(level), '#') + " Título";
+        const auto rows = rows_of(draw(source, 40));
+        REQUIRE(rows.size() == 1);
+        if (level >= 3) {
+            CHECK(rows.front() == mark + "Título");
+        } else {
+            CHECK(rows.front() == "Título");
+        }
+    }
+    // Solo es dibujo: el árbol de markdown no lleva la marca.
+    const md::Document document = md::parse("### Título");
+    REQUIRE(document.blocks.size() == 1);
+    REQUIRE(document.blocks.front().runs.size() == 1);
+    CHECK(document.blocks.front().runs.front().text == "Título");
+}
+
+TEST_CASE("vista: la marca lleva el estilo del título y no se estira", "[vista]") {
+    const int mark_width = ftxui::string_width("▍ ");
+    for (const char* source : {"### Subtítulo", "#### Subtítulo", "###### Subtítulo"}) {
+        CAPTURE(source);
+        const ftxui::Screen screen = draw(source, 40);
+        for (int x = 0; x < mark_width; ++x) {
+            CAPTURE(x);
+            CHECK(screen.CellAt(x, 0).bold);
+            CHECK(screen.CellAt(x, 0).foreground_color == ftxui::Color(ftxui::Color::Cyan));
+            CHECK_FALSE(screen.CellAt(x, 0).dim);
+            CHECK_FALSE(screen.CellAt(x, 0).underlined);
+        }
+        CHECK(screen.CellAt(0, 0).character == "▍");
+        // Después del último carácter del título no hay ningún estilo.
+        check_no_style_past_text(screen, true);
+    }
+}
+
+TEST_CASE("vista: un H3 largo se ajusta con sangría colgante de 2", "[vista]") {
+    const std::string title = "Un subtítulo bastante largo que ocupa varias líneas";
+    const ftxui::Screen screen = draw("### " + title, 30);
+    const auto rows = rows_of(screen);
+    check_fits(rows, 30);
+    REQUIRE(rows.size() >= 2);
+    const int mark_width = ftxui::string_width("▍ ");
+    REQUIRE(mark_width == 2);
+    CHECK(rows.front().rfind("▍ ", 0) == 0);
+    for (std::size_t i = 1; i < rows.size(); ++i) {
+        CAPTURE(rows[i]);
+        // Alineada con el texto del título, no con la marca.
+        CHECK(rows[i].find_first_not_of(' ') == static_cast<std::size_t>(mark_width));
+        CHECK(rows[i].find("▍") == std::string::npos);
+    }
+    // Ninguna palabra se pierde y la sangría no lleva estilo.
+    std::string text = joined(rows);
+    text.erase(0, std::string{"▍"}.size());
+    CHECK(words_of(text) == words_of(title));
+    for (int y = 1; y < screen.dimy(); ++y) {
+        for (int x = 0; x < mark_width; ++x) {
+            CAPTURE(x, y);
+            CHECK_FALSE(screen.CellAt(x, y).bold);
+            CHECK(screen.CellAt(x, y).foreground_color == ftxui::Color(ftxui::Color::Default));
+        }
+    }
+    check_no_style_past_text(screen, true);
 }
