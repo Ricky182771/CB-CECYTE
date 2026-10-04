@@ -12,6 +12,8 @@
 #include "input_style.h"
 #include "markdown.h"
 #include "request_runner.h"
+#include "sidebar.h"
+#include "sidebar_view.h"
 
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
@@ -34,6 +36,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -52,7 +55,7 @@ std::optional<std::string> env_value(const char* name) {
     return value != nullptr ? std::optional<std::string>{value} : std::nullopt;
 }
 
-/// Traduce una tecla de FTXUI a la de la lista de conversaciones.
+/// Traduce una tecla de FTXUI a la de la barra de conversaciones.
 chatbot::cli::ListKey list_key(const ftxui::Event& event) {
     using chatbot::cli::ListKey;
     const std::pair<const ftxui::Event*, ListKey> keys[] = {
@@ -68,35 +71,6 @@ chatbot::cli::ListKey list_key(const ftxui::Event& event) {
         }
     }
     return ListKey::Other;
-}
-
-/// Dibuja la lista de conversaciones; la fila seleccionada lleva el foco para
-/// que el marco la mantenga a la vista.
-ftxui::Element render_list(const chatbot::cli::ConversationList& list) {
-    if (list.empty()) {
-        return ftxui::text(std::string{chatbot::cli::ConversationList::kEmptyMessage}) |
-               ftxui::dim;
-    }
-    ftxui::Elements rows;
-    for (std::size_t i = 0; i < list.items().size(); ++i) {
-        const chatbot::cli::ConversationSummary& item = list.items()[i];
-        ftxui::Element row = ftxui::hbox({
-            ftxui::text(list.is_current(i) ? "● " : "  "),
-            ftxui::text(chatbot::cli::md::sanitize(item.title)) | (item.readable ? ftxui::bold : ftxui::dim) |
-                ftxui::flex_shrink,
-            ftxui::text("  "),
-            ftxui::text(chatbot::cli::ConversationList::details(item)) | ftxui::dim,
-            ftxui::filler(),
-        });
-        if (!item.readable) {
-            row = row | ftxui::dim;
-        }
-        if (i == list.selected()) {
-            row = row | ftxui::inverted | ftxui::focus;
-        }
-        rows.push_back(std::move(row));
-    }
-    return ftxui::vbox(std::move(rows));
 }
 
 /// Igual que ftxui::reflect, pero guarda la caja completa que recibe el
@@ -200,10 +174,22 @@ int main() {
     Scroll scroll;
     chatbot::cli::HistoryView history;
     std::size_t last_dropped = 0;
-    chatbot::cli::ConversationList list;
-    bool list_open = false;
-    std::string flash;     ///< Aviso de la línea de estado hasta la siguiente tecla.
-    ftxui::Box list_box;   ///< Zona visible de la lista (para PgUp/PgDn).
+    chatbot::cli::Sidebar sidebar;
+    sidebar.open(store.list(), conversation.id());
+    std::string flash; ///< Aviso de la línea de estado hasta la siguiente tecla.
+    // Barra lateral: visible al arrancar si la terminal es ancha. Si el ancho
+    // la ocultó, el ancho la vuelve a mostrar; si la ocultó Ctrl+B, no.
+    bool last_wide = ftxui::Terminal::Size().dimx >= chatbot::cli::kSidebarMinTerminal;
+    bool sidebar_visible = last_wide;
+    bool hidden_by_width = !last_wide;
+    // Ancho para ResizableSplit (main_size): la barra sin su borde derecho,
+    // que es el divisor. sidebar_size guarda el ancho mientras está oculta.
+    int sidebar_size = chatbot::cli::kSidebarWidth - 1;
+    int split_size = sidebar_visible ? sidebar_size : 0;
+    int split_min = chatbot::cli::kSidebarMinWidth - 1;
+    int split_max = chatbot::cli::kSidebarMaxWidth - 1;
+    ftxui::Box sidebar_box; ///< Zona de la barra en el último cuadro (para el ratón).
+    bool dragging = false;  ///< Se arrastra el divisor: el ratón es de ResizableSplit.
     chatbot::ChatClient client(config.value(), std::make_unique<chatbot::CurlTransport>());
     auto screen = ftxui::App::Fullscreen();
     chatbot::cli::RequestRunner runner(
@@ -228,7 +214,7 @@ int main() {
         runner.start(
             std::move(*messages),
             [&conversation](std::string delta) { conversation.append_delta(delta); },
-            [&conversation, &input_text, &last_dropped, &store,
+            [&conversation, &input_text, &last_dropped, &store, &sidebar,
              &model](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
                 last_dropped = dropped;
                 const std::optional<std::string> restored =
@@ -238,6 +224,8 @@ int main() {
                 if (!restored.has_value()) {
                     // Par usuario/asistente completo: es lo único que se guarda.
                     chatbot::cli::save_conversation(conversation, store);
+                    // La barra se refresca: la conversación sube a "Hoy".
+                    sidebar.refresh(store.list(), conversation.id());
                 }
                 // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
                 if (restored.has_value() && input_text.empty()) {
@@ -246,48 +234,15 @@ int main() {
             });
     };
 
+    // La barra con lo que hay en el almacén y la conversación abierta.
+    const auto refresh_sidebar = [&] { sidebar.refresh(store.list(), conversation.id()); };
+
     // Empieza una conversación nueva (la actual ya quedó guardada si tenía pares).
     const auto new_conversation = [&] {
         conversation = chatbot::cli::Conversation{};
         last_dropped = 0;
         scroll.to_bottom();
-    };
-
-    // Ejecuta lo que pidió la lista de conversaciones.
-    const auto apply_list_action = [&](const chatbot::cli::ListAction& action) {
-        using Type = chatbot::cli::ListAction::Type;
-        switch (action.type) {
-        case Type::None:
-            break;
-        case Type::Close:
-            list_open = false;
-            break;
-        case Type::Open: {
-            const chatbot::cli::LoadResult loaded = store.load(action.id);
-            if (!loaded.conversation.has_value()) {
-                flash = loaded.error;
-                break;
-            }
-            conversation = chatbot::cli::Conversation::from_stored(*loaded.conversation);
-            const std::string used = conversation.last_model();
-            if (!used.empty() && used != model) {
-                conversation.add_notice("Esta conversación usó " + used + "; se continúa con " +
-                                        model + ".");
-            }
-            last_dropped = 0;
-            scroll.to_bottom();
-            list_open = false;
-            break;
-        }
-        case Type::Delete:
-            if (const std::optional<std::string> error = store.remove(action.id)) {
-                flash = "No se pudo borrar la conversación: " + *error;
-            } else if (action.id == conversation.id()) {
-                new_conversation(); // Se borró la que estaba abierta.
-            }
-            list.refresh(store.list());
-            break;
-        }
+        refresh_sidebar();
     };
 
     ftxui::InputOption input_option;
@@ -304,24 +259,98 @@ int main() {
     const ftxui::Component input =
         ftxui::Input(&input_text, "Escribe tu mensaje y presiona Enter", input_option);
 
-    const ftxui::Component layout = ftxui::Renderer(input, [&] {
-        ftxui::Element body;
-        if (list_open) {
-            body = render_list(list) | ftxui::yframe | ftxui::reflect(list_box) | ftxui::flex;
-        } else {
-            // El historial ocupa todo el ancho de la terminal.
-            const int width = ftxui::Terminal::Size().dimx;
-            body = scroll.apply(history.render(conversation.entries(), width));
+    // Ejecuta lo que pidió la barra de conversaciones.
+    const auto apply_sidebar_action = [&](const chatbot::cli::ListAction& action) {
+        using Type = chatbot::cli::ListAction::Type;
+        if (action.type == Type::None) {
+            return;
         }
+        if (action.type == Type::Close) {
+            input->TakeFocus();
+            return;
+        }
+        if (runner.busy()) {
+            // Abrir, borrar o crear cambiaría la conversación en curso.
+            flash = "Espera la respuesta o cancélala con Esc.";
+            return;
+        }
+        switch (action.type) {
+        case Type::None:
+        case Type::Close:
+            break;
+        case Type::New:
+            new_conversation();
+            input->TakeFocus();
+            break;
+        case Type::Open: {
+            const chatbot::cli::LoadResult loaded = store.load(action.id);
+            if (!loaded.conversation.has_value()) {
+                flash = loaded.error;
+                break;
+            }
+            conversation = chatbot::cli::Conversation::from_stored(*loaded.conversation);
+            const std::string used = conversation.last_model();
+            if (!used.empty() && used != model) {
+                conversation.add_notice("Esta conversación usó " + used + "; se continúa con " +
+                                        model + ".");
+            }
+            last_dropped = 0;
+            scroll.to_bottom();
+            refresh_sidebar();
+            input->TakeFocus();
+            break;
+        }
+        case Type::Delete:
+            if (const std::optional<std::string> error = store.remove(action.id)) {
+                flash = "No se pudo borrar la conversación: " + *error;
+            } else if (action.id == conversation.id()) {
+                new_conversation(); // Se borró la que estaba abierta.
+            }
+            refresh_sidebar();
+            break;
+        }
+    };
+
+    // Día de hoy en hora local, para los grupos por fecha.
+    const auto today = [] {
+        return chatbot::cli::local_day(std::time(nullptr)).value_or(chatbot::cli::CalendarDay{});
+    };
+    // Filas de la lista que caben en la barra (la terminal menos los bordes).
+    const auto sidebar_rows_visible = [] {
+        return static_cast<std::size_t>(
+            chatbot::cli::sidebar_view_height(ftxui::Terminal::Size().dimy));
+    };
+
+    // La barra lateral. Es enfocable (TakeFocus) para que la caja de entrada
+    // pierda el cursor mientras se navega la lista; el ratón sobre ella lo
+    // maneja root, que no le pasa esos eventos (si no, tomaría el foco con
+    // solo pasar el puntero).
+    const ftxui::Component sidebar_panel = ftxui::Renderer([&](bool focused) {
+        if (!sidebar_visible) {
+            sidebar_box = ftxui::Box{};
+            return ftxui::emptyElement();
+        }
+        const std::vector<chatbot::cli::SidebarRow> rows = sidebar.rows(today());
+        sidebar.fit(rows, sidebar_rows_visible());
+        return chatbot::cli::render_sidebar(sidebar, rows, split_size,
+                                            ftxui::Terminal::Size().dimy, focused) |
+               ftxui::reflect(sidebar_box);
+    });
+
+    const ftxui::Component chat = ftxui::Renderer(input, [&] {
+        // El historial ocupa el ancho que deja la barra (más su divisor y un
+        // espacio de separación).
+        const int width = ftxui::Terminal::Size().dimx - (sidebar_visible ? split_size + 2 : 0);
+        ftxui::Element body = scroll.apply(history.render(conversation.entries(), width));
 
         ftxui::Elements status;
-        if (list_open) {
-            if (const std::optional<std::string> question = list.confirmation()) {
+        if (sidebar_visible && sidebar_panel->Focused()) {
+            if (const std::optional<std::string> question = sidebar.confirmation()) {
                 status.push_back(ftxui::text(*question) | ftxui::bold);
-            } else {
+            } else if (flash.empty() && !runner.busy()) {
+                // La ayuda solo si no hay otro aviso: juntos no caben.
                 status.push_back(
-                    ftxui::text("Enter abre · Supr borra · Esc vuelve a la conversación") |
-                    ftxui::dim);
+                    ftxui::text("Enter abre · Supr borra · Esc vuelve a la caja") | ftxui::dim);
             }
         }
         if (!flash.empty()) {
@@ -330,7 +359,7 @@ int main() {
         if (runner.busy()) {
             status.push_back(ftxui::text("Pensando… (Esc para cancelar)"));
         }
-        if (!list_open && scroll.has_more_below()) {
+        if (scroll.has_more_below()) {
             // Con texto en la caja, End mueve el cursor: el aviso sugiere PgDn.
             status.push_back(ftxui::text(input_text.empty() ? "↓ Hay más abajo (End)"
                                                             : "↓ Hay más abajo (PgDn)") |
@@ -357,22 +386,129 @@ int main() {
             "Chatbot CECyTE — " + model + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
                                           : chatbot::cli::md::sanitize(conversation.title()));
-        return ftxui::vbox({
+        ftxui::Element content = ftxui::vbox({
             // Si no cabe, se encoge el título y el aviso de teclas queda entero.
             ftxui::hbox({ftxui::text(title) | ftxui::bold | ftxui::flex_shrink, ftxui::filler(),
-                         ftxui::text(" Ctrl+O conversaciones · Ctrl+N nueva") | ftxui::dim}),
+                         ftxui::text(" Ctrl+B barra · Ctrl+O conversaciones") | ftxui::dim}),
             std::move(body),
             ftxui::separator(),
             ftxui::hbox(std::move(status_line)),
             // El prompt en negritas marca la caja sin un bloque de color.
             ftxui::hbox({ftxui::text("> ") | ftxui::bold, input->Render() | ftxui::flex}),
         });
+        if (sidebar_visible) {
+            // Un espacio entre el borde de la barra y la conversación.
+            content = ftxui::hbox({ftxui::text(" "), std::move(content) | ftxui::flex});
+        }
+        return content;
+    });
+
+    // Barra a la izquierda, conversación a la derecha. El divisor es el borde
+    // derecho de la barra y se arrastra con el ratón.
+    ftxui::ResizableSplitOption split_option;
+    split_option.main = sidebar_panel;
+    split_option.back = chat;
+    split_option.direction = ftxui::Direction::Left;
+    split_option.main_size = &split_size;
+    split_option.separator_func = [&] {
+        return sidebar_visible ? chatbot::cli::sidebar_divider() : ftxui::emptyElement();
+    };
+    split_option.min = &split_min;
+    split_option.max = &split_max;
+    const ftxui::Component split = ftxui::ResizableSplit(split_option);
+
+    // Oculta la barra; si tenía el foco, pasa a la caja de entrada.
+    const auto hide_sidebar = [&] {
+        if (sidebar_panel->Focused()) {
+            input->TakeFocus();
+        }
+        sidebar_visible = false;
+        dragging = false;
+    };
+
+    const ftxui::Component layout = ftxui::Renderer(split, [&] {
+        const int width = ftxui::Terminal::Size().dimx;
+        // Al cruzar los 100 columnas: por debajo se oculta sola; por encima
+        // reaparece solo si la había ocultado el ancho (no Ctrl+B).
+        const bool wide = width >= chatbot::cli::kSidebarMinTerminal;
+        if (wide != last_wide) {
+            if (!wide && sidebar_visible) {
+                hide_sidebar();
+                hidden_by_width = true;
+            } else if (wide && hidden_by_width) {
+                sidebar_visible = true;
+                hidden_by_width = false;
+            }
+            last_wide = wide;
+        }
+        // Límites del arrastre: 18 a 60 columnas o la mitad de la terminal
+        // (con los dos bordes; main_size no cuenta el divisor).
+        split_min = chatbot::cli::kSidebarMinWidth - 1;
+        split_max = std::max(split_min,
+                             std::min(chatbot::cli::kSidebarMaxWidth, width / 2) - 1);
+        if (sidebar_visible) {
+            sidebar_size = std::clamp(split_size > 0 ? split_size : sidebar_size, split_min,
+                                      split_max);
+            split_size = sidebar_size;
+        } else {
+            split_size = 0;
+        }
+        return split->Render();
     });
 
     // Ctrl+C se maneja aquí: con el manejo por defecto, FTXUI restaura la
     // terminal y relanza SIGINT dentro de Loop(), y el proceso muere sin
     // destruir el runner (que cancela y hace join). Así, Loop() regresa.
     screen.ForceHandleCtrlC(false);
+
+    // Ratón: la barra (rueda y clic), el divisor (de ResizableSplit) y el
+    // historial (rueda).
+    const auto handle_mouse = [&](ftxui::Event event) { // mouse() no es const.
+        const ftxui::Mouse& mouse = event.mouse();
+        if (dragging) {
+            if (mouse.motion == ftxui::Mouse::Released) {
+                dragging = false;
+            }
+            return false; // ResizableSplit cambia el ancho.
+        }
+        if (!sidebar_visible) {
+            sidebar_box = ftxui::Box{};
+        }
+        const bool on_divider = sidebar_visible && mouse.x == sidebar_box.x_max + 1 &&
+                                mouse.y >= sidebar_box.y_min && mouse.y <= sidebar_box.y_max;
+        if (on_divider && mouse.button == ftxui::Mouse::Left &&
+            mouse.motion == ftxui::Mouse::Pressed) {
+            dragging = true;
+            return false;
+        }
+        if (sidebar_visible && sidebar_box.Contain(mouse.x, mouse.y)) {
+            const std::vector<chatbot::cli::SidebarRow> rows = sidebar.rows(today());
+            if (mouse.button == ftxui::Mouse::WheelUp) {
+                sidebar.scroll(-kWheelStep, rows, sidebar_rows_visible());
+            } else if (mouse.button == ftxui::Mouse::WheelDown) {
+                sidebar.scroll(kWheelStep, rows, sidebar_rows_visible());
+            } else if (mouse.button == ftxui::Mouse::Left &&
+                       mouse.motion == ftxui::Mouse::Pressed) {
+                // Línea 0: el borde de arriba; luego, las filas visibles.
+                const int line = mouse.y - sidebar_box.y_min - 1;
+                if (line >= 0 && static_cast<std::size_t>(line) < sidebar_rows_visible()) {
+                    apply_sidebar_action(
+                        sidebar.click(static_cast<std::size_t>(line), rows));
+                }
+            }
+            return true; // Ningún evento del ratón sobre la barra cambia el foco.
+        }
+        if (mouse.button == ftxui::Mouse::WheelUp) {
+            scroll.by(-kWheelStep);
+            return true;
+        }
+        if (mouse.button == ftxui::Mouse::WheelDown) {
+            scroll.by(kWheelStep);
+            return true;
+        }
+        return false;
+    };
+
     const ftxui::Component root = ftxui::CatchEvent(layout, [&](ftxui::Event event) {
         if (event == ftxui::Event::CtrlC) {
             screen.Exit();
@@ -381,32 +517,47 @@ int main() {
         if (event == ftxui::Event::Custom) {
             return false; // Solo pide redibujar.
         }
-        if (!event.is_mouse()) {
-            flash.clear(); // El aviso dura hasta la siguiente tecla.
+        if (event.is_mouse()) {
+            return handle_mouse(std::move(event));
         }
-        if (event == ftxui::Event::CtrlN || event == ftxui::Event::CtrlO) {
-            if (runner.busy()) {
+        flash.clear(); // El aviso dura hasta la siguiente tecla.
+        if (event == ftxui::Event::CtrlB) {
+            if (sidebar_visible) {
+                hide_sidebar();
+            } else {
+                sidebar_visible = true;
+            }
+            hidden_by_width = false;
+            return true;
+        }
+        if (event == ftxui::Event::CtrlO) {
+            sidebar_visible = true;
+            hidden_by_width = false;
+            refresh_sidebar();
+            sidebar_panel->TakeFocus();
+            return true;
+        }
+        if (event == ftxui::Event::CtrlN) {
+            apply_sidebar_action({chatbot::cli::ListAction::Type::New, {}});
+            return true;
+        }
+        if (sidebar_visible && sidebar_panel->Focused()) {
+            // La barra recibe todas las teclas; la caja de entrada, ninguna.
+            const chatbot::cli::ListKey key = list_key(event);
+            if (key == chatbot::cli::ListKey::Delete && runner.busy()) {
                 flash = "Espera la respuesta o cancélala con Esc.";
                 return true;
             }
-            if (event == ftxui::Event::CtrlN) {
-                list_open = false;
-                new_conversation();
-            } else {
-                list.open(store.list(), conversation.id());
-                list_open = true;
-            }
+            apply_sidebar_action(sidebar.handle(
+                key, event.is_character() ? event.character() : std::string{},
+                sidebar_rows_visible()));
             return true;
         }
-        if (list_open) {
-            // La lista recibe todas las teclas; la caja de entrada, ninguna.
-            if (event.is_mouse()) {
-                return true;
-            }
-            const int visible_rows = std::max(1, list_box.y_max - list_box.y_min + 1);
-            apply_list_action(list.handle(list_key(event),
-                                          event.is_character() ? event.character() : std::string{},
-                                          static_cast<std::size_t>(visible_rows)));
+        // ←/→ y Tab son de la caja: si llegaran al contenedor del split,
+        // moverían el foco a la barra.
+        if (event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight ||
+            event == ftxui::Event::Tab || event == ftxui::Event::TabReverse) {
+            input->OnEvent(event);
             return true;
         }
         if (event == ftxui::Event::Escape) {
@@ -431,19 +582,10 @@ int main() {
             scroll.to_bottom();
             return true;
         }
-        if (event.is_mouse()) {
-            if (event.mouse().button == ftxui::Mouse::WheelUp) {
-                scroll.by(-kWheelStep);
-                return true;
-            }
-            if (event.mouse().button == ftxui::Mouse::WheelDown) {
-                scroll.by(kWheelStep);
-                return true;
-            }
-        }
         return false;
     });
 
+    input->TakeFocus();
     screen.Loop(root);
 
     // Al regresar de Loop(), el runner se destruye antes que screen y client:

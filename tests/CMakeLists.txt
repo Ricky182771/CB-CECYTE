@@ -27,6 +27,7 @@ add_executable(chatbot_tests
     test_retries.cpp
     test_request_body.cpp
     test_request_runner.cpp
+    test_sidebar.cpp
     test_sse.cpp
     test_streaming.cpp)
 
@@ -45,6 +46,7 @@ add_test(NAME chatbot_tests COMMAND chatbot_tests)
 add_executable(chatbot_ui_tests
     test_history_view.cpp
     test_input_style.cpp
+    test_sidebar_view.cpp
     test_markdown_view.cpp)
 target_compile_features(chatbot_ui_tests PRIVATE cxx_std_20)
 target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui Catch2::Catch2WithMain)

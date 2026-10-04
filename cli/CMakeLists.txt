@@ -46,7 +46,8 @@ add_library(chatbot_cli_lib STATIC
     src/conversation_list.cpp
     src/conversation_store.cpp
     src/markdown.cpp
-    src/request_runner.cpp)
+    src/request_runner.cpp
+    src/sidebar.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 find_package(nlohmann_json 3.9 REQUIRED)
@@ -61,6 +62,7 @@ chatbot_set_warnings(chatbot_cli_lib)
 add_library(chatbot_cli_ui STATIC
     src/history_view.cpp
     src/input_style.cpp
+    src/sidebar_view.cpp
     src/markdown_view.cpp)
 target_compile_features(chatbot_cli_ui PUBLIC cxx_std_20)
 target_link_libraries(chatbot_cli_ui PUBLIC chatbot_cli_lib ftxui::dom ftxui::screen)

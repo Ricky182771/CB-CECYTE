@@ -16,7 +16,7 @@ enum class ListKey { Up, Down, PageUp, PageDown, Home, End, Enter, Escape, Delet
 
 /// Lo que la interfaz debe hacer después de una tecla.
 struct ListAction {
-    enum class Type { None, Open, Close, Delete };
+    enum class Type { None, Open, Close, Delete, New }; ///< New: conversación nueva (barra lateral).
     Type type = Type::None;
     std::string id; ///< Para Open y Delete.
 };
@@ -35,6 +35,13 @@ public:
     /// Tras un cambio (p. ej. un borrado): conserva el elemento seleccionado
     /// o, si ya no está, la misma posición.
     void refresh(std::vector<ConversationSummary> items);
+
+    /// Selecciona el elemento index (si existe) y cancela una confirmación
+    /// de borrado pendiente. Para la barra lateral (clic, rueda).
+    void select(std::size_t index);
+
+    /// Cambia la conversación abierta (la marcada con is_current).
+    void set_current(std::string current_id);
 
     /// Procesa una tecla. character es el texto de la tecla si es un
     /// carácter. page_size es cuántas filas se ven (para PgUp/PgDn).
