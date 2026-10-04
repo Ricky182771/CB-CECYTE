@@ -428,6 +428,11 @@ std::string alert_label(const std::string& type) {
 /// como tarjetas.
 constexpr int kMinColumn = 6;
 
+/// Piso de una columna: su ancho natural hasta kMinColumn, y nunca menos de
+/// 1 (una columna vacía no queda de ancho 0). Lo usan la decisión de dibujar
+/// como tarjetas y el reparto, para que no se contradigan.
+int column_floor(int natural) { return std::clamp(natural, 1, kMinColumn); }
+
 class Renderer {
 public:
     Element blocks(const std::vector<Block>& list, int width, bool spaced) {
@@ -606,10 +611,15 @@ public:
                 layout.natural[c] = std::max(layout.natural[c], natural_width(row_atoms[c]));
             }
         }
-        // "│ a │ b │": tres columnas por celda más la barra inicial.
+        // "│ a │ b │": tres columnas por celda más la barra inicial. Va como
+        // tabla si caben los pisos de todas las columnas; si no, tarjetas.
         const int count = static_cast<int>(layout.columns);
         const int available = width - 3 * count - 1;
-        if (available >= kMinColumn * count) {
+        int floors = 0;
+        for (const int natural : layout.natural) {
+            floors += column_floor(natural);
+        }
+        if (available >= floors) {
             layout.widths = distribute(layout.cells, layout.natural, available);
         }
         return layout;
@@ -698,7 +708,7 @@ private:
     ///    caben con todas sus celdas en H líneas o menos, y en cada columna
     ///    el menor ancho que lo logra. Ese ancho no baja de la palabra más
     ///    larga de la columna (para no partir palabras si se puede); si así
-    ///    no caben, ese piso se recorta parejo, hasta min(natural, kMinColumn).
+    ///    no caben, ese piso se recorta parejo, hasta column_floor(natural).
     ///    Empezar todas en el mínimo no sirve: cuando varias columnas son a
     ///    la vez la más alta de una fila, ensanchar una sola no baja la
     ///    fila, ninguna mejora y todo el ancho se va a una columna.
@@ -743,7 +753,7 @@ private:
         std::vector<int> minimum(columns);
         std::vector<int> word(columns);
         for (std::size_t c = 0; c < columns; ++c) {
-            minimum[c] = std::min(natural[c], kMinColumn);
+            minimum[c] = column_floor(natural[c]);
             int longest = 0;
             for (std::size_t r = 0; r < rows; ++r) {
                 for (const Atom& atom : cells[r][c]) {
