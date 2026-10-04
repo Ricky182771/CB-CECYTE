@@ -2,6 +2,7 @@
 
 #include "chatbot/cancel_token.h"
 #include "chatbot/error.h"
+#include "config_internal.h"
 #include "error_body.h"
 #include "sse.h"
 
@@ -21,6 +22,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 #include <vector>
 
 namespace chatbot {
@@ -85,13 +87,53 @@ Result<std::string> build_request_body(std::string_view model,
     return body.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
-/// URL final del endpoint: base sin "/" final + "/chat/completions".
-std::string build_url(std::string_view base_url) {
+/// URL final del endpoint: base sin "/" final + path ("/chat/completions"
+/// por defecto, "/models" para list_models).
+std::string build_url(std::string_view base_url, std::string_view path = "/chat/completions") {
     std::string base{base_url};
     while (!base.empty() && base.back() == '/') {
         base.pop_back();
     }
-    return base + "/chat/completions";
+    return base + std::string{path};
+}
+
+/// Interpreta GET /models: {"data":[{"id":"..."}, ...]}. Toma los id que son
+/// cadena (ignora el resto), quita el prefijo "models/" (Gemini), elimina
+/// duplicados y ordena. Sin "data" o si no es un arreglo: BadResponse.
+Result<std::vector<std::string>> parse_models_response(const std::string& body) {
+    try {
+        const json document = json::parse(body);
+        const auto data = document.is_object() ? document.find("data") : document.end();
+        if (!document.is_object() || data == document.end() || !data->is_array()) {
+            return ChatError{ErrorKind::BadResponse, 0,
+                             "La respuesta de /models no contiene la lista \"data\".",
+                             std::nullopt};
+        }
+        std::vector<std::string> models;
+        for (const json& item : *data) {
+            if (!item.is_object()) {
+                continue;
+            }
+            const auto id = item.find("id");
+            if (id == item.end() || !id->is_string()) {
+                continue;
+            }
+            std::string name = id->get<std::string>();
+            constexpr std::string_view kPrefix = "models/";
+            if (name.rfind(kPrefix, 0) == 0) {
+                name.erase(0, kPrefix.size());
+            }
+            if (!name.empty()) {
+                models.push_back(std::move(name));
+            }
+        }
+        std::sort(models.begin(), models.end());
+        models.erase(std::unique(models.begin(), models.end()), models.end());
+        return models;
+    } catch (const std::exception&) {
+        return ChatError{ErrorKind::BadResponse, 0,
+                         "La respuesta de /models no es JSON válido.", std::nullopt};
+    }
 }
 
 /// Interpreta el valor crudo de Retry-After como segundos enteros, con el
@@ -471,6 +513,34 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages,
     request.timeout = std::chrono::milliseconds(config_.timeout_seconds);
     request.cancel = cancel;
 
+    const Result<std::string> response = send_with_retries(request, cancel);
+    if (response.is_error()) {
+        return Result<std::string>{response.error()};
+    }
+    return parse_success_response(response.value());
+}
+
+Result<std::vector<std::string>> ChatClient::list_models(const CancelToken* cancel) {
+    // Sin modelo: la lista sirve justo para elegirlo.
+    if (const std::optional<ChatError> config_error = validate_connection(config_)) {
+        return *config_error;
+    }
+    HttpRequest request;
+    request.url = build_url(config_.base_url, "/models");
+    request.method = HttpMethod::Get;
+    request.api_key = config_.api_key;
+    request.timeout = std::chrono::milliseconds(config_.timeout_seconds);
+    request.cancel = cancel;
+
+    const Result<std::string> response = send_with_retries(request, cancel);
+    if (response.is_error()) {
+        return Result<std::vector<std::string>>{response.error()};
+    }
+    return parse_models_response(response.value());
+}
+
+Result<std::string> ChatClient::send_with_retries(const HttpRequest& request,
+                                                  const CancelToken* cancel) {
     for (int attempt = 0;; ++attempt) {
         if (is_cancelled(cancel)) {
             return cancelled_error();
@@ -495,9 +565,9 @@ Result<std::string> ChatClient::complete(const std::vector<Message>& messages,
             return error;
         }
 
-        // 2xx: interpretar el cuerpo como respuesta exitosa.
+        // 2xx: el cuerpo lo interpreta quien llamó.
         if (response.status >= 200 && response.status <= 299) {
-            return parse_success_response(response.body);
+            return response.body;
         }
 
         // Error HTTP: mapear y decidir si se reintenta.

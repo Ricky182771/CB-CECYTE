@@ -2,7 +2,9 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json 3.9 REQUIRED)
 
 add_library(chatbot_core STATIC
+    src/atomic_file.cpp
     src/cancel_token.cpp
+    src/credentials.cpp
     src/error.cpp
     src/error_body.cpp
     src/history.cpp
@@ -10,7 +12,8 @@ add_library(chatbot_core STATIC
     src/sleeper.cpp
     src/sse.cpp
     src/curl_transport.cpp
-    src/chat_client.cpp)
+    src/chat_client.cpp
+    src/url.cpp)
 
 add_library(chatbot::core ALIAS chatbot_core)
 

@@ -269,11 +269,12 @@ TEST_CASE("base_url con HTTPS:// en mayúsculas es válida", "[config][https]") 
     CHECK(harness.transport->requests.size() == 1);
 }
 
-TEST_CASE("CHAT_BASE_URL con http:// en load_config: error Config", "[config][https]") {
+TEST_CASE("CHAT_BASE_URL con http:// a otro host en load_config: error Config", "[config][https]") {
+    // http:// solo se acepta en la propia máquina (localhost, 127.0.0.1, [::1]).
     chatbot_test::FakeEnv env;
     env.values["CHAT_API_KEY"] = "clave-ficticia";
     env.values["CHAT_MODEL"] = "modelo-x";
-    env.values["CHAT_BASE_URL"] = "http://127.0.0.1:8080/v1";
+    env.values["CHAT_BASE_URL"] = "http://192.168.1.10:8080/v1";
 
     const chatbot::Result<chatbot::Config> config =
         chatbot::load_config(ConfigOptions{env, path_of(std::nullopt)});

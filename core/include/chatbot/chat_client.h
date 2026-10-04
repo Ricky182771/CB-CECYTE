@@ -11,6 +11,7 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace chatbot {
@@ -53,7 +54,19 @@ public:
                                                          const StreamDeltaCallback& on_delta,
                                                          const CancelToken* cancel = nullptr);
 
+    /// GET {base_url}/models: los id de modelo que da el servidor, sin el
+    /// prefijo "models/" (Gemini), sin duplicados y en orden alfabético. No
+    /// necesita modelo en la configuración (solo URL y key, o un servidor
+    /// local). Mismo mapeo de errores, reintentos y cancelación que
+    /// complete(); "data" ausente o que no es arreglo da BadResponse. Nunca
+    /// lanza excepciones.
+    [[nodiscard]] Result<std::vector<std::string>> list_models(const CancelToken* cancel = nullptr);
+
 private:
+    /// Envía request con la política de reintentos (sección 6) y devuelve el
+    /// cuerpo de la respuesta 2xx, o el error mapeado.
+    [[nodiscard]] Result<std::string> send_with_retries(const HttpRequest& request,
+                                                        const CancelToken* cancel);
     Sleeper& sleeper();
 
     Config config_;

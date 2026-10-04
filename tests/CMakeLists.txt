@@ -20,6 +20,7 @@ add_executable(chatbot_tests
     test_conversation_list.cpp
     test_conversation_store.cpp
     test_debug_sse.cpp
+    test_provider_core.cpp
     test_error_mapping.cpp
     test_history.cpp
     test_markdown.cpp

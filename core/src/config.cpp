@@ -2,6 +2,10 @@
 
 #include "config_internal.h"
 
+#include "atomic_file.h"
+#include "chatbot/credentials.h"
+#include "url.h"
+
 #include <nlohmann/json.hpp>
 
 #include <cctype>
@@ -10,13 +14,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include <sys/stat.h>
 
 namespace chatbot {
 namespace {
@@ -68,21 +76,6 @@ std::optional<long long> parse_nonnegative_integer(std::string_view text) {
     return value;
 }
 
-/// Indica si la URL empieza con https:// sin distinguir mayúsculas.
-bool starts_with_https(std::string_view url) {
-    constexpr std::string_view kScheme = "https://";
-    if (url.size() < kScheme.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < kScheme.size(); ++i) {
-        const auto c = static_cast<unsigned char>(url[i]);
-        if (std::tolower(c) != kScheme[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
 /// Aplica al config los valores presentes en el archivo JSON.
 /// Lanza std::runtime_error ante JSON malformado o campos de tipo incorrecto
 /// (las excepciones se capturan en load_config y no cruzan la API pública).
@@ -98,6 +91,13 @@ void apply_config_file(const std::string& path, Config& config) {
     }
 
     // Solo se reconocen las llaves de la sección 7; el resto se ignora.
+    if (document.contains("provider")) {
+        const json& value = document.at("provider");
+        if (!value.is_string()) {
+            throw std::runtime_error("\"provider\" debe ser una cadena");
+        }
+        config.provider = value.get<std::string>();
+    }
     if (document.contains("base_url")) {
         const json& value = document.at("base_url");
         if (!value.is_string()) {
@@ -177,26 +177,55 @@ std::optional<std::string> default_config_path() {
     return build_config_path(xdg_value, home_value);
 }
 
-std::optional<ChatError> validate_config(const Config& config) {
-    if (config.api_key.empty()) {
-        return ChatError{
-            ErrorKind::Config, 0,
-            "Falta la API key: defínela en la variable de entorno CHAT_API_KEY "
-            "(por seguridad, la key nunca se lee del archivo de configuración).", std::nullopt};
+std::optional<std::string> default_credentials_path() {
+    const std::optional<std::string> config_path = default_config_path();
+    if (!config_path.has_value()) {
+        return std::nullopt;
     }
-    if (config.model.empty()) {
-        return ChatError{
-            ErrorKind::Config, 0,
-            "Falta el modelo: defínelo en la variable de entorno CHAT_MODEL o "
-            "en la llave \"model\" del archivo de configuración.", std::nullopt};
+    return (std::filesystem::path{*config_path}.parent_path() / "credentials.json").string();
+}
+
+std::optional<ChatError> validate_base_url(std::string_view url) {
+    const std::optional<ParsedUrl> parsed = parse_url(url);
+    const auto invalid = [url](const std::string& why) {
+        return ChatError{ErrorKind::Config, 0,
+                         "La URL base no es válida (CHAT_BASE_URL o \"base_url\" del archivo de "
+                         "configuración): " + why + "; se recibió \"" + std::string{url} + "\".",
+                         std::nullopt};
+    };
+    if (!parsed.has_value()) {
+        return invalid("debe tener la forma https://servidor/ruta, sin usuario ni contraseña");
     }
-    if (!starts_with_https(config.base_url)) {
-        // Sin TLS la key viajaría en texto plano (sección 9).
+    if (parsed->scheme == "https") {
+        return std::nullopt;
+    }
+    if (parsed->scheme == "http" && is_local_host(parsed->host)) {
+        // Sin TLS solo en la propia máquina: la key no sale de ella.
+        return std::nullopt;
+    }
+    if (parsed->scheme == "http") {
+        // Sin TLS la key viajaría en texto plano por la red (sección 9).
+        return invalid("debe empezar con https://; http:// solo se acepta para localhost, "
+                       "127.0.0.1 o [::1]");
+    }
+    return invalid("el esquema debe ser https:// (o http:// en la propia máquina)");
+}
+
+bool is_local_base_url(std::string_view url) {
+    const std::optional<ParsedUrl> parsed = parse_url(url);
+    return parsed.has_value() && !validate_base_url(url).has_value() &&
+           is_local_host(parsed->host);
+}
+
+std::optional<ChatError> validate_connection(const Config& config) {
+    if (std::optional<ChatError> error = validate_base_url(config.base_url)) {
+        return error;
+    }
+    if (config.api_key.empty() && !is_local_base_url(config.base_url)) {
         return ChatError{
             ErrorKind::Config, 0,
-            "La URL base debe empezar con https:// (CHAT_BASE_URL o \"base_url\" del "
-            "archivo de configuración); se recibió \"" + config.base_url + "\".",
-            std::nullopt};
+            "Falta la API key: defínela en la variable de entorno CHAT_API_KEY o guárdala en "
+            "la configuración (credentials.json; nunca en config.json).", std::nullopt};
     }
     if (config.timeout_seconds > kMaxTimeout) {
         return ChatError{ErrorKind::Config, 0,
@@ -204,6 +233,19 @@ std::optional<ChatError> validate_config(const Config& config) {
                              "; se recibió " +
                              std::to_string(config.timeout_seconds.count()) + ".",
                          std::nullopt};
+    }
+    return std::nullopt;
+}
+
+std::optional<ChatError> validate_config(const Config& config) {
+    if (std::optional<ChatError> error = validate_connection(config)) {
+        return error;
+    }
+    if (config.model.empty()) {
+        return ChatError{
+            ErrorKind::Config, 0,
+            "Falta el modelo: defínelo en la variable de entorno CHAT_MODEL o "
+            "en la llave \"model\" del archivo de configuración.", std::nullopt};
     }
     return std::nullopt;
 }
@@ -265,11 +307,69 @@ Result<Config> load_config(const ConfigOptions& options) {
         config.history_limit_bytes = static_cast<std::size_t>(*bytes);
     }
 
-    // 3) Validación final: key y modelo son obligatorios (sección 7).
+    // 3) Sin CHAT_API_KEY: la key guardada para el proveedor de config.json.
+    if (config.api_key.empty() && !config.provider.empty()) {
+        std::optional<std::string> credentials_path;
+        if (options.credentials_path) {
+            credentials_path = options.credentials_path();
+        } else if (const std::optional<std::string> config_path = path()) {
+            credentials_path =
+                (std::filesystem::path{*config_path}.parent_path() / "credentials.json").string();
+        }
+        if (credentials_path.has_value()) {
+            Result<Credentials> credentials = load_credentials(*credentials_path);
+            if (credentials.is_error()) {
+                return credentials.error();
+            }
+            const auto key = credentials.value().keys.find(
+                credentials_key(config.provider, config.base_url));
+            if (key != credentials.value().keys.end()) {
+                config.api_key = key->second;
+            }
+        }
+    }
+
+    // 4) Validación final: URL, key (salvo local) y modelo (sección 7).
     if (const std::optional<ChatError> error = validate_config(config)) {
         return *error;
     }
     return config;
+}
+
+std::optional<ChatError> save_config_file(const std::string& path,
+                                          const ConfigFileValues& values) {
+    using ordered = nlohmann::ordered_json;
+    ordered document = ordered::object();
+    mode_t mode = 0644; // config.json no lleva secretos.
+    struct stat info {};
+    if (::stat(path.c_str(), &info) == 0) {
+        mode = info.st_mode & 0777; // Se conservan los permisos que tenía.
+        const std::optional<std::string> content = read_file(path);
+        try {
+            if (!content.has_value()) {
+                throw std::runtime_error("no se pudo leer");
+            }
+            document = ordered::parse(*content);
+            if (!document.is_object()) {
+                throw std::runtime_error("no es un objeto JSON");
+            }
+        } catch (const std::exception&) {
+            return ChatError{ErrorKind::Config, 0,
+                             "No se guardó la configuración: " + path +
+                                 " no es un objeto JSON válido (corrígelo o bórralo).",
+                             std::nullopt};
+        }
+    }
+    document["provider"] = values.provider;
+    document["base_url"] = values.base_url;
+    document["model"] = values.model;
+    const std::string text =
+        document.dump(4, ' ', false, ordered::error_handler_t::replace) + "\n";
+    if (const std::optional<std::string> error = write_file_atomic(path, text, mode, 0700)) {
+        return ChatError{ErrorKind::Config, 0, "No se guardó la configuración: " + *error,
+                         std::nullopt};
+    }
+    return std::nullopt;
 }
 
 } // namespace chatbot
