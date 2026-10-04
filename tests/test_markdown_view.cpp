@@ -477,13 +477,13 @@ TEST_CASE("vista: una tabla que cabe conserva sus anchos naturales", "[vista][ta
     const md::Document document =
         md::parse("| Nombre | Edad | Ciudad |\n|:--|--:|:-:|\n| Ana | 30 | León |\n| Bo | 5 | X |");
     REQUIRE(document.blocks.size() == 1);
-    // Mide 26 con bordes, pero el paso a tarjetas (sin cambios en este
-    // ajuste) pide 6 columnas por columna: 6 * 3 + 10 = 28.
-    for (const int width : {28, 40, 80, 200}) {
+    // Mide 26 con bordes (6 + 4 + 6 + 3 * 3 + 1): desde ahí va completa.
+    for (const int width : {26, 27, 28, 40, 80, 200}) {
         CAPTURE(width);
         CHECK(md::table_column_widths(document.blocks.front(), width) == std::vector<int>{6, 4, 6});
     }
-    CHECK(md::table_column_widths(document.blocks.front(), 27).empty());
+    // A 25 quedan 15 columnas y los pisos, min(natural, 6), suman 16: tarjetas.
+    CHECK(md::table_column_widths(document.blocks.front(), 25).empty());
 }
 
 TEST_CASE("vista: la tabla en fichas no cambia", "[vista][tabla]") {
@@ -578,4 +578,72 @@ TEST_CASE("vista: tiempo del reparto de ancho de tablas", "[vista][tabla][desemp
     CHECK(large_120 < 20.0);
     CHECK(large_200 < 20.0);
 #endif
+}
+
+TEST_CASE("vista: una tabla angosta que cabe no pasa a fichas", "[vista][tabla]") {
+    const std::string source = read_data("tabla_angosta.md");
+    const md::Document document = md::parse(source);
+    REQUIRE(document.blocks.size() == 1);
+    const md::Block& table = document.blocks.front();
+    const std::vector<std::string> natural{
+        "┌────┬────┬──────────────┐",
+        "│ N° │ Ok │ Producto     │",
+        "├────┼────┼──────────────┤",
+        "│  1 │ sí │ Café molido  │",
+        "│  2 │ no │ Pan de trigo │",
+        "│ 10 │ sí │ Leche        │",
+        "└────┴────┴──────────────┘",
+    };
+    // Anchos naturales 2, 2 y 12: dibujada completa mide 26 columnas.
+    for (const int width : {26, 30}) {
+        CAPTURE(width);
+        CHECK(md::table_column_widths(table, width) == std::vector<int>{2, 2, 12});
+        CHECK(rows_of(draw(source, width)) == natural);
+    }
+
+    // A 20: quedan 20 - (3 * 3 + 1) = 10 columnas y los pisos suman
+    // min(2, 6) + min(2, 6) + min(12, 6) = 10. Cabe: tabla, con el texto de
+    // la última columna ajustado.
+    CHECK(md::table_column_widths(table, 20) == std::vector<int>{2, 2, 6});
+    const auto rows = rows_of(draw(source, 20));
+    check_fits(rows, 20);
+    REQUIRE(rows.front().rfind("┌", 0) == 0);
+    std::string as_table;
+    for (const auto& row : table.rows) {
+        for (const md::Block& cell : row) {
+            as_table += cell_text(cell);
+        }
+    }
+    CHECK(glyphs_without_borders(joined(rows)) == glyphs_without_borders(as_table));
+    CHECK(joined(rows).find("│ 10 │ sí │ Leche  │") != std::string::npos);
+
+    // A 19 quedan 9 < 10: ahora sí, fichas.
+    CHECK(md::table_column_widths(table, 19).empty());
+    CHECK(joined(rows_of(draw(source, 19))).find("┌") == std::string::npos);
+}
+
+TEST_CASE("vista: una columna vacía no queda de ancho 0", "[vista][tabla]") {
+    const std::string source = "| A |  | C |\n|---|---|---|\n| uno |  | tres |\n| dos |  | |";
+    const md::Document document = md::parse(source);
+    REQUIRE(document.blocks.size() == 1);
+    for (int width = 1; width <= 40; ++width) {
+        CAPTURE(width);
+        const std::vector<int> widths = md::table_column_widths(document.blocks.front(), width);
+        for (const int w : widths) {
+            CHECK(w >= 1);
+        }
+        const auto rows = rows_of(draw(source, width));
+        check_fits(rows, width);
+        if (!widths.empty()) {
+            // Todas las filas de la tabla miden lo mismo: bordes alineados.
+            REQUIRE(widths.size() == 3);
+            const int table_width = ftxui::string_width(rows.front());
+            for (const std::string& row : rows) {
+                CHECK(ftxui::string_width(row) == table_width);
+            }
+            CHECK(rows.front().find("┬┬") == std::string::npos);
+        }
+    }
+    // Anchos naturales 3, 1 y 4: a 18 (8 + 3 * 3 + 1) va completa.
+    CHECK(md::table_column_widths(document.blocks.front(), 18) == std::vector<int>{3, 1, 4});
 }
