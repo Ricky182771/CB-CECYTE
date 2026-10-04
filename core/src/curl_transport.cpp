@@ -187,9 +187,13 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
 
     // Cabeceras. La key vive solo aquí y nunca se imprime ni se guarda (sección 9).
     std::unique_ptr<curl_slist, SlistDeleter> headers;
-    headers.reset(curl_slist_append(nullptr, "Content-Type: application/json"));
-    const std::string authorization = "Authorization: Bearer " + request.api_key;
-    headers.reset(curl_slist_append(headers.release(), authorization.c_str()));
+    const bool is_get = request.method == HttpMethod::Get;
+    headers.reset(curl_slist_append(nullptr, is_get ? "Accept: application/json"
+                                                    : "Content-Type: application/json"));
+    if (!request.api_key.empty()) { // Sin key (servidor local): sin Authorization.
+        const std::string authorization = "Authorization: Bearer " + request.api_key;
+        headers.reset(curl_slist_append(headers.release(), authorization.c_str()));
+    }
 
     CURLcode setup = CURLE_OK;
     const auto set = [&handle, &setup](CURLoption option, auto value) {
@@ -199,9 +203,13 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
     };
 
     set(CURLOPT_URL, request.url.c_str());
-    set(CURLOPT_POST, 1L);
-    set(CURLOPT_POSTFIELDS, request.body.c_str());
-    set(CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
+    if (is_get) {
+        set(CURLOPT_HTTPGET, 1L); // Sin cuerpo.
+    } else {
+        set(CURLOPT_POST, 1L);
+        set(CURLOPT_POSTFIELDS, request.body.c_str());
+        set(CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
+    }
     set(CURLOPT_HTTPHEADER, headers.get());
     if (stream != nullptr) {
         // Streaming: sin límite total, para no cortar respuestas largas que

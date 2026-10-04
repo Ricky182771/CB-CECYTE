@@ -11,11 +11,16 @@ namespace chatbot {
 
 class CancelToken;
 
+/// Método HTTP de la petición.
+enum class HttpMethod { Post, Get };
+
 /// Petición HTTP lista para enviarse.
 struct HttpRequest {
     std::string url;     ///< URL completa del endpoint.
-    std::string body;    ///< Cuerpo JSON de la petición.
-    std::string api_key; ///< Se usa solo para armar la cabecera Authorization; nunca se registra.
+    std::string body;    ///< Cuerpo JSON de la petición (vacío en un GET).
+    /// Se usa solo para armar la cabecera Authorization; nunca se registra.
+    /// Vacía: no se manda Authorization (servidor local sin key).
+    std::string api_key;
     /// En send(): timeout total de la petición. En send_stream(): timeout por
     /// inactividad (se aborta si no llegan datos durante ese tiempo, más unos
     /// segundos de margen de curl; no hay límite total). 0 significa sin
@@ -28,6 +33,8 @@ struct HttpRequest {
     /// aunque no lleguen datos (también durante la conexión): la latencia de
     /// cancelación es de alrededor de 1 s.
     const CancelToken* cancel = nullptr;
+    /// Post (con body) o Get (sin body, p. ej. GET {base_url}/models).
+    HttpMethod method = HttpMethod::Post;
 };
 
 /// Respuesta HTTP cruda, antes de interpretarla.

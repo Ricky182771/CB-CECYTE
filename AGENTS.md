@@ -97,8 +97,8 @@ chatbot/
 - **Errores:** `ChatError { ErrorKind kind; int http_status; std::string message; std::optional<std::chrono::seconds> retry_after; }`.
   `ErrorKind`: `Config`, `Auth`, `ModelNotFound`, `RateLimited`, `Server`, `Network`, `Timeout`, `BadResponse`, `InvalidRequest`, `Cancelled`.
 - **Resultado:** `Result<T>` mínimo sobre `std::variant<T, ChatError>`. Las excepciones pueden usarse internamente, **pero nunca cruzan la API pública**.
-- **Transporte:** interfaz `Transport` que hace el POST y devuelve estado HTTP, cabeceras relevantes (`Retry-After`) y cuerpo, o un error de red. `CurlTransport` es la implementación real; las pruebas usan un `FakeTransport`. Diséñala para poder agregar streaming en el hito 2 sin romper `complete`; si hace falta cambiar algo, pregunta.
-- **Cliente:** `ChatClient(Config, std::unique_ptr<Transport>)` con `complete(const std::vector<Message>&, const CancelToken* = nullptr) -> Result<std::string>` y `complete_stream(messages, on_delta, const CancelToken* = nullptr) -> Result<CompletionInfo>`. `CompletionInfo { std::string finish_reason; }` (`chatbot/completion_info.h`): el último `choices[0].finish_reason` no nulo que llegó, o vacío si nunca llegó.
+- **Transporte:** interfaz `Transport` que hace el POST (o el GET, con `HttpRequest::method = HttpMethod::Get`, sin cuerpo) y devuelve estado HTTP, cabeceras relevantes (`Retry-After`) y cuerpo, o un error de red. `CurlTransport` es la implementación real; las pruebas usan un `FakeTransport`. Diséñala para poder agregar streaming en el hito 2 sin romper `complete`; si hace falta cambiar algo, pregunta.
+- **Cliente:** `ChatClient(Config, std::unique_ptr<Transport>)` con `complete(const std::vector<Message>&, const CancelToken* = nullptr) -> Result<std::string>` y `complete_stream(messages, on_delta, const CancelToken* = nullptr) -> Result<CompletionInfo>`. `CompletionInfo { std::string finish_reason; }` (`chatbot/completion_info.h`): el último `choices[0].finish_reason` no nulo que llegó, o vacío si nunca llegó. `list_models(const CancelToken* = nullptr) -> Result<std::vector<std::string>>`: GET `{base_url}/models`; lee los `data[].id` que sean cadenas (sin `data` arreglo → `BadResponse`), quita el prefijo `models/`, sin duplicados y en orden; mismos errores, reintentos y cancelación que `complete`, y no necesita modelo.
 - **Cancelación:** `CancelToken` (`cancel()`, `is_cancelled()`, `wait_for(ms)`; seguro entre hilos, no copiable ni movible; quien lo crea lo mantiene vivo durante la petición). `ChatClient` lo revisa antes y después de cada intento (una cancelación durante un intento gana aunque haya terminado bien), lo pasa al transporte (`HttpRequest::cancel`) y a la espera de reintento; si se cancela, el resultado es `Cancelled` y no se reintenta. En la interfaz, `RequestRunner::cancel()` gana mientras `busy()` sea `true`, aunque la respuesta ya haya terminado en el hilo de trabajo. `CurlTransport` lo revisa desde `CURLOPT_XFERINFOFUNCTION`, que libcurl llama alrededor de una vez por segundo aunque no lleguen datos: la latencia de cancelación es de ~1 s.
 - **Reintentos** (dentro de `ChatClient`):
   - Reintentar solo `RateLimited`, `Server`, `Network` y `Timeout`.
@@ -114,7 +114,8 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 
 | Dato | Variable | Archivo | Por defecto |
 |------|----------|---------|-------------|
-| API key | `CHAT_API_KEY` | **nunca** | ninguno (error `Config` si falta) |
+| Proveedor (id del proveedor o `custom`) | — | `provider` | ninguno |
+| API key | `CHAT_API_KEY` | **nunca en `config.json`**; en `credentials.json`, por proveedor | ninguno (error `Config` si falta, salvo en host local) |
 | URL base | `CHAT_BASE_URL` | `base_url` | `https://integrate.api.nvidia.com/v1` |
 | Modelo | `CHAT_MODEL` | `model` | **ninguno** (error `Config` con mensaje claro si falta) |
 | Timeout (s): total en `complete`, por inactividad en `complete_stream` | `CHAT_TIMEOUT` | `timeout_seconds` | 120 |
@@ -124,7 +125,8 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 
 - Archivo: `$XDG_CONFIG_HOME/chatbot/config.json`, o `~/.config/chatbot/config.json` si no existe esa variable. Que el archivo no exista no es un error.
 - **Sin modelo por defecto a propósito:** los modelos de NIM se retiran con el tiempo y un nombre fijo en el código acabaría roto.
-- La key **solo** viene del entorno.
+- **La key:** primero `CHAT_API_KEY`; si no está, `credentials.json` (junto a `config.json`) con la clave del `provider` del archivo de configuración; si no, ninguna. Formato: `{ "version": 1, "keys": { "nvidia": "...", "custom:https://mi-servidor/v1": "..." } }` (los extremos propios van por su `base_url` efectiva, sin `/` final). Carpeta en 0700 y archivo en 0600, con escritura atómica; si el grupo u otros tienen algún permiso, no se lee y se devuelve error `Config` ("corre chmod 600 <ruta>"). **Por qué cambió** (antes la key solo venía del entorno): la pantalla de configuración necesita guardar la key sin que el usuario edite su shell; un archivo aparte, nunca `config.json`, la deja fuera de lo que se comparte o versiona.
+- `save_config_file` escribe `provider`, `base_url` (siempre) y `model` en `config.json`, conserva las demás claves y su orden, y escribe de forma atómica; nunca escribe la key.
 - **Conversaciones guardadas:** un archivo `<id>.json` por conversación (esquema versión 1; `id` = `AAAAMMDD-HHMMSS-xxxxxx`), con la carpeta en 0700 y los archivos en 0600. No se guarda el mensaje de sistema (al cargar se antepone el `kSystemPrompt` actual); cada respuesta guarda su `model` y su `finish_reason`. Se guarda solo tras cada par usuario/asistente terminado, con escritura atómica (`.tmp` + `fsync` + `rename` + `fsync` del directorio). Un archivo ilegible o de una versión desconocida se lista pero nunca se sobrescribe ni se borra.
 - `CHAT_DEBUG_SSE=/ruta/archivo` (`Config::debug_sse_path`): `ChatClient` agrega al archivo, por cada intento de `complete` y de `complete_stream`, fecha y hora, modelo, número de intento, estado HTTP y el cuerpo crudo de la respuesta, más una línea separadora. Nunca escribe cabeceras, la key ni el cuerpo de la petición. Si no se puede abrir o escribir, se ignora en silencio. El archivo contiene la conversación: solo para diagnosticar.
 
@@ -145,12 +147,13 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
   - Fallo de curl: `Network` o `Timeout` según el código.
   - Cuerpo que no se puede interpretar: `BadResponse`.
 - En errores, intentar extraer el mensaje del cuerpo (`error.message` o `detail`); si no hay, usar el texto del estado HTTP. Truncar cuerpos largos.
+- `base_url` se valida interpretando la URL: `https://` siempre; `http://` **solo** si el host es exactamente `localhost`, `127.0.0.1` o `[::1]` (cualquier puerto), para servidores locales como Ollama o llama.cpp; nunca con `usuario@` en la URL. Con host local la key es opcional y, si está vacía, `CurlTransport` no manda `Authorization`.
 - Verificación TLS **siempre activa**. Timeout de conexión 10 s.
 - `curl_global_init` se llama una sola vez (envuélvelo en RAII).
 
 ## 9. Seguridad y secretos
 
-- La key nunca se escribe en archivos, logs, mensajes de error, pruebas ni en el repositorio.
+- La key nunca se escribe en archivos (salvo `credentials.json`, con 0600), logs, volcados, mensajes de error, pruebas ni en el repositorio, ni se dibuja en claro.
 - Si se registra una cabecera `Authorization`, se redacta.
 - `.gitignore` debe cubrir directorios de build y cualquier archivo local de configuración o claves.
 - **Las pruebas nunca llaman a la API real.** `tools/smoke.cpp` es la única excepción y solo corre a mano.
