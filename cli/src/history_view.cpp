@@ -14,6 +14,10 @@ namespace chatbot::cli {
 
 namespace {
 
+/// Etiqueta decorada ("Tú:", "(cancelada)"...) en un hbox: dentro del vbox
+/// de la entrada se estiraría a todo el ancho, y el estilo con ella.
+ftxui::Element label(ftxui::Element element) { return ftxui::hbox({std::move(element)}); }
+
 bool same_entry(const Entry& a, const Entry& b) {
     return a.kind == b.kind && a.in_progress == b.in_progress && a.incomplete == b.incomplete &&
            a.cancelled == b.cancelled && a.text == b.text && a.note == b.note;
@@ -71,23 +75,23 @@ const md::Document& HistoryView::document_for(Cached& cached, const std::string&
 ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, int width) {
     switch (entry.kind) {
     case EntryKind::User:
-        return ftxui::vbox({ftxui::text("Tú:") | ftxui::bold, md::render_plain(entry.text, width)});
+        return ftxui::vbox({label(ftxui::text("Tú:") | ftxui::bold), md::render_plain(entry.text, width)});
     case EntryKind::Assistant: {
-        ftxui::Elements lines{ftxui::text("Asistente:") | ftxui::bold,
+        ftxui::Elements lines{label(ftxui::text("Asistente:") | ftxui::bold),
                               md::render(document_for(cached, entry.text), width)};
         if (entry.cancelled) {
-            lines.push_back(ftxui::text("(cancelada)") | ftxui::dim);
+            lines.push_back(label(ftxui::text("(cancelada)") | ftxui::dim));
         } else if (entry.incomplete) {
-            lines.push_back(ftxui::text("(respuesta incompleta)") | ftxui::dim);
+            lines.push_back(label(ftxui::text("(respuesta incompleta)") | ftxui::dim));
         } else if (!entry.note.empty()) {
-            lines.push_back(md::render_plain(entry.note, width) | ftxui::dim);
+            lines.push_back(md::render_plain(entry.note, width, ftxui::dim));
         }
         return ftxui::vbox(std::move(lines));
     }
     case EntryKind::Error:
-        return md::render_plain(entry.text, width) | ftxui::color(ftxui::Color::Red);
+        return md::render_plain(entry.text, width, ftxui::color(ftxui::Color::Red));
     case EntryKind::Notice:
-        return md::render_plain(entry.text, width) | ftxui::dim;
+        return md::render_plain(entry.text, width, ftxui::dim);
     }
     return ftxui::text("");
 }

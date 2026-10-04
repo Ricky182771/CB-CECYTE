@@ -195,3 +195,38 @@ TEST_CASE("historial: los bordes no se fusionan con lo que lo rodea", "[historia
     CHECK(screen.CellAt(0, 1).character == "│");
     CHECK(screen.CellAt(0, 2).character == "─");
 }
+
+TEST_CASE("historial: el estilo de etiquetas y texto plano no se estira", "[historial]") {
+    Entry cancelled = make(EntryKind::Assistant, "parcial");
+    cancelled.cancelled = true;
+    Entry noted = make(EntryKind::Assistant, "ok");
+    noted.note = "La respuesta se cortó por el límite de longitud.";
+    HistoryView view;
+    ftxui::Element element = view.render({make(EntryKind::User, "hola"), cancelled, noted,
+                                          make(EntryKind::Error, "Falló la conexión."),
+                                          make(EntryKind::Notice, "Aviso corto.")},
+                                         40);
+    ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40),
+                                                 ftxui::Dimension::Fit(element, true));
+    ftxui::Render(screen, element);
+    for (int y = 0; y < screen.dimy(); ++y) {
+        int last = -1;
+        for (int x = 0; x < screen.dimx(); ++x) {
+            const std::string& character = screen.CellAt(x, y).character;
+            if (!character.empty() && character != " ") {
+                last = x;
+            }
+        }
+        for (int x = last + 1; x < screen.dimx(); ++x) {
+            CAPTURE(x, y);
+            const ftxui::Cell& cell = screen.CellAt(x, y);
+            CHECK_FALSE(cell.bold);
+            CHECK_FALSE(cell.dim);
+            CHECK(cell.foreground_color == ftxui::Color(ftxui::Color::Default));
+        }
+    }
+    // El estilo sí está en el texto.
+    const std::string text = screen_text(screen);
+    CHECK(text.find("Falló la conexión.") != std::string::npos);
+    CHECK(screen.CellAt(0, 0).bold); // "Tú:"
+}
