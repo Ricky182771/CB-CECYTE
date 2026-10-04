@@ -1,0 +1,75 @@
+# Integración continua: compila y corre las pruebas con GCC y Clang en cada
+# PR y en cada push a main. Nunca usa una API key ni llama a una API real:
+# las pruebas usan FakeTransport y el único arranque del ejecutable es sin key.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.compiler }} / ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: gcc, preset: dev }
+          - { compiler: gcc, preset: asan }
+          - { compiler: gcc, preset: tsan }
+          - { compiler: gcc, preset: release }
+          - { compiler: clang, preset: dev }
+          - { compiler: clang, preset: release }
+    env:
+      CC: ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }}
+      CXX: ${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Ubuntu 24.04 trae Catch2 3.4 (find_package(Catch2 3) la acepta).
+      # FTXUI y md4c se descargan solos por FetchContent al configurar.
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ clang libcurl4-openssl-dev nlohmann-json3-dev catch2
+
+      # Con vm.mmap_rnd_bits=32 (kernels recientes), TSan falla con
+      # "FATAL: ThreadSanitizer: unexpected memory mapping".
+      - name: Ajustar ASLR para ThreadSanitizer
+        if: matrix.preset == 'tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Configurar
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Compilar
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Pruebas
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      # Sin CHAT_API_KEY el programa debe salir con código 1 y el error de
+      # configuración, sin abrir la interfaz ni conectarse a nada.
+      - name: Arranque sin API key
+        run: |
+          status=0
+          env -u CHAT_API_KEY ./build/${{ matrix.preset }}/cli/chatbot \
+            < /dev/null > salida.txt 2> errores.txt || status=$?
+          cat errores.txt
+          if [ "$status" -ne 1 ]; then
+            echo "Se esperaba el código de salida 1 y fue $status"
+            exit 1
+          fi
+          grep -q "error de configuración" errores.txt
+          grep -q "CHAT_API_KEY" errores.txt
