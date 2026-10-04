@@ -60,6 +60,7 @@ chatbot_set_warnings(chatbot_cli_lib)
 # usan con ftxui::Screen.
 add_library(chatbot_cli_ui STATIC
     src/history_view.cpp
+    src/input_style.cpp
     src/markdown_view.cpp)
 target_compile_features(chatbot_cli_ui PUBLIC cxx_std_20)
 target_link_libraries(chatbot_cli_ui PUBLIC chatbot_cli_lib ftxui::dom ftxui::screen)
