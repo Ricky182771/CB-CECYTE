@@ -32,6 +32,7 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 | 3 | Interfaz FTXUI mínima (historial arriba, caja de entrada abajo) | Hecho |
 | 4 | Cancelación, scroll del historial, recorte de historial largo, prueba automatizada del hilo de trabajo (ver nota) | Hecho |
 | 5 | Persistencia de conversaciones y render de markdown | Hecho |
+| — | Mantenimiento: preset release, CI, pulido de interfaz | Hecho |
 
 **Nota para el hito 4: prueba con hilos** (sin loop de FTXUI). Implementada con `RequestRunner` (`cli/src/request_runner.*`) y `tests/test_request_runner.cpp`; el transporte que se bloquea quedó aparte, en `tests/blocking_transport.hpp`:
 
@@ -58,6 +59,7 @@ chatbot/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── .gitignore
+├── .github/workflows/ci.yml  # CI: GCC (dev, asan, tsan, release) y Clang (dev, release)
 ├── core/
 │   ├── CMakeLists.txt
 │   ├── include/chatbot/     # headers públicos
@@ -172,6 +174,7 @@ Presets (con su preset de build y de test del mismo nombre):
 - `dev`: Debug con warnings.
 - `asan`: Debug con AddressSanitizer + UndefinedBehaviorSanitizer.
 - `tsan`: Debug con ThreadSanitizer (desde el hito 3: la interfaz usa un hilo de trabajo).
+- `release`: Release (`-O3 -DNDEBUG`, el valor de CMake) con los mismos warnings y `-Werror`. Es la build para usar el chatbot a diario (`./build/release/cli/chatbot`); sus pruebas también deben pasar. Con `NDEBUG` no hay `assert`: ninguna prueba debe depender de ellos.
 
 `asan` y `tsan` ponen los sanitizadores también en `CMAKE_C_FLAGS`, para que md4c (C) quede instrumentado. Los flags de warnings solo se aplican a nuestros targets (`chatbot_set_warnings`), no a md4c ni a FTXUI.
 
@@ -181,9 +184,12 @@ Comandos de verificación:
 cmake --preset dev  && cmake --build --preset dev  && ctest --preset dev  --output-on-failure
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan --output-on-failure
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan --output-on-failure
+cmake --preset release && cmake --build --preset release && ctest --preset release --output-on-failure
 ```
 
 Las pruebas de `RequestRunner` y de `CancelToken` crean hilos (deben pasar con `tsan`). Aun así, corre también `./build/tsan/cli/chatbot` con una conversación real, cancelando un par de veces, y revisa que no aparezca `WARNING: ThreadSanitizer`: el loop de FTXUI no está en las pruebas.
+
+La CI (`.github/workflows/ci.yml`, en cada PR y en cada push a `main`) corre estos mismos comandos con GCC en `dev`, `asan`, `tsan` y `release`, y con Clang en `dev` y `release`. Además, comprueba que el ejecutable sin `CHAT_API_KEY` salga con código 1. **La CI nunca usa API keys ni llama a una API real.** En el trabajo `tsan` pone `vm.mmap_rnd_bits=28`, porque con 32 TSan falla al arrancar.
 
 `ctest` corre dos ejecutables: `chatbot_tests` (núcleo y `chatbot_cli_lib`, sin FTXUI) y `chatbot_ui_tests` (vista de markdown e historial, dibujando con `ftxui::Screen`, sin terminal). Las pruebas de desempeño solo exigen tiempos en la build sin sanitizadores; con sanitizadores solo los muestran (`WARN`). Para revisar el render a ojo: `./build/dev/tools/md_preview --width 40 tests/data/markdown_muestra.md`.
 
@@ -205,14 +211,3 @@ Para el hito 1, sin red, usando `FakeTransport`:
 - [ ] Ningún secreto en el repositorio ni en la salida.
 - [ ] No hay código de hitos posteriores.
 - [ ] Informe final con la salida real de los comandos de la sección 11 y la lista de dudas pendientes.
-
-<!-- antislop:start -->
-## antislop
-Para trabajo de UI, copys, accesibilidad, layout o comentarios de código, carga el núcleo (`antislop`) y la skill de la tarea con la herramienta `skill`:
-- UI / visual: `antislop-ui`
-- Copys y textos: `antislop-copywriting`
-- Personas (contraste, teclado, foco, estados): `antislop-human`
-- Móvil / responsive: `antislop-layoutmobile`
-- Comentarios de código: `antislop-code`
-Antes de empezar, pregunta al usuario cuándo aplica antislop: durante el trabajo, o después de terminado. Modo acordado para este proyecto: durante (1).
-<!-- antislop:end -->

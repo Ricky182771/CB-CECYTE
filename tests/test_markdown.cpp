@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -314,11 +315,17 @@ TEST_CASE("markdown: documento de 200 KB", "[markdown][desempeno]") {
                "| A | B |\n|:--|--:|\n| 1 | 2 |\n\n"
                "```cpp\nint x = 0;\n```\n\n> cita\n\n";
     }
-    const auto start = std::chrono::steady_clock::now();
-    const Document document = parse(big);
-    const auto elapsed =
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);
-    CHECK(document.blocks.size() > 1000);
+    // Se mide tres veces y cuenta la más rápida: así una pausa de la máquina
+    // (otros procesos, un runner de CI compartido) no hace fallar la prueba,
+    // y un parser lento sigue fallando en las tres.
+    auto elapsed = std::chrono::microseconds::max();
+    for (int i = 0; i < 3; ++i) {
+        const auto start = std::chrono::steady_clock::now();
+        const Document document = parse(big);
+        elapsed = std::min(elapsed, std::chrono::duration_cast<std::chrono::microseconds>(
+                                        std::chrono::steady_clock::now() - start));
+        CHECK(document.blocks.size() > 1000);
+    }
     const double ms = std::chrono::duration<double, std::milli>(elapsed).count();
     WARN("parseo de " << big.size() / 1024 << " KB: " << ms << " ms");
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)

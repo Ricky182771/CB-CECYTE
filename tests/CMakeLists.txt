@@ -47,5 +47,8 @@ add_executable(chatbot_ui_tests
     test_markdown_view.cpp)
 target_compile_features(chatbot_ui_tests PRIVATE cxx_std_20)
 target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui Catch2::Catch2WithMain)
+# Archivos de tests/data (solo lectura).
+target_compile_definitions(chatbot_ui_tests PRIVATE
+    CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 chatbot_set_warnings(chatbot_ui_tests)
 add_test(NAME chatbot_ui_tests COMMAND chatbot_ui_tests)

@@ -7,6 +7,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace chatbot::cli::md {
 
@@ -18,6 +19,11 @@ namespace chatbot::cli::md {
 /// Texto plano (sin markdown) filtrado con sanitize() y ajustado a width
 /// columnas con las mismas reglas; conserva los espacios repetidos.
 [[nodiscard]] ftxui::Element render_plain(std::string_view text, int width);
+
+/// Anchos (columnas de pantalla, sin bordes) que render() da a las columnas
+/// de un bloque Table con ese ancho total; vacío si la tabla se dibuja como
+/// tarjetas. Sirve para probar y medir el reparto.
+[[nodiscard]] std::vector<int> table_column_widths(const Block& table, int width);
 
 /// Prepara una URL para ftxui::hyperlink, que la escribe tal cual dentro de
 /// una secuencia OSC 8: todo byte fuera de 0x21-0x7E se codifica como %XX.

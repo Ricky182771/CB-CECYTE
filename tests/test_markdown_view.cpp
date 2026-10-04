@@ -9,6 +9,9 @@
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
 
+#include <algorithm>
+#include <chrono>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -163,9 +166,9 @@ TEST_CASE("vista: URL de hyperlink sin bytes de control", "[vista]") {
 }
 
 TEST_CASE("vista: encabezados", "[vista]") {
-    const ftxui::Screen screen = draw("# Uno\n\n## Dos\n\n### Tres", 40);
+    const ftxui::Screen screen = draw("# Uno\n\n## Dos\n\n### Tres\n\n###### Seis", 40);
     const auto rows = rows_of(screen);
-    REQUIRE(rows.size() == 5);
+    REQUIRE(rows.size() == 7);
     CHECK(rows[0] == "Uno");
     CHECK(rows[1].empty()); // Línea en blanco entre bloques.
     CHECK(rows[2] == "Dos");
@@ -175,8 +178,16 @@ TEST_CASE("vista: encabezados", "[vista]") {
     CHECK(screen.CellAt(0, 2).bold);
     CHECK_FALSE(screen.CellAt(0, 2).underlined);
     CHECK_FALSE(screen.CellAt(0, 2).dim);
-    CHECK(screen.CellAt(0, 4).bold);
-    CHECK(screen.CellAt(0, 4).dim);
+    CHECK(screen.CellAt(0, 2).foreground_color == ftxui::Color(ftxui::Color::Default));
+    // H3-H6: negritas en cian, sin dim (se leen sobre fondos translúcidos).
+    CHECK(rows[6] == "Seis");
+    for (const int y : {4, 6}) {
+        CAPTURE(y);
+        CHECK(screen.CellAt(0, y).bold);
+        CHECK_FALSE(screen.CellAt(0, y).dim);
+        CHECK_FALSE(screen.CellAt(0, y).underlined);
+        CHECK(screen.CellAt(0, y).foreground_color == ftxui::Color(ftxui::Color::Cyan));
+    }
 }
 
 TEST_CASE("vista: lista anidada con sangría colgante", "[vista]") {
@@ -396,4 +407,175 @@ TEST_CASE("vista: texto vacío y ancho mínimo", "[vista]") {
     for (const std::string_view piece : {"pal", "abr", "lar", "cod", "1", "2"}) {
         CHECK(text.find(piece) != std::string::npos);
     }
+}
+
+namespace {
+
+std::string read_data(const std::string& name) {
+    std::ifstream file{std::string{CHATBOT_TEST_DATA_DIR} + "/" + name, std::ios::binary};
+    REQUIRE(file);
+    std::ostringstream content;
+    content << file.rdbuf();
+    return content.str();
+}
+
+/// Texto plano de una celda (como se dibuja, sin estilos).
+std::string cell_text(const md::Block& cell) {
+    std::string text;
+    for (const md::Run& run : cell.runs) {
+        text += run.text;
+    }
+    return text;
+}
+
+/// Caracteres visibles, ordenados, sin espacios ni dibujo de bordes.
+std::vector<std::string> glyphs_without_borders(const std::string& text) {
+    static const std::vector<std::string> kIgnored{" ", "\n", "│", "┌", "┐", "└", "┘",
+                                                   "├", "┤", "┬", "┴", "┼", "─"};
+    std::vector<std::string> glyphs;
+    for (const std::string& glyph : ftxui::Utf8ToGlyphs(text)) {
+        if (!glyph.empty() &&
+            std::find(kIgnored.begin(), kIgnored.end(), glyph) == kIgnored.end()) {
+            glyphs.push_back(glyph);
+        }
+    }
+    std::sort(glyphs.begin(), glyphs.end());
+    return glyphs;
+}
+
+/// Altos de las filas de una tabla dibujada (líneas entre separadores).
+std::vector<int> row_heights(const std::vector<std::string>& rows) {
+    std::vector<int> heights;
+    int current = 0;
+    for (const std::string& row : rows) {
+        if (row.rfind("│", 0) == 0) {
+            ++current;
+        } else if (current > 0) {
+            heights.push_back(current);
+            current = 0;
+        }
+    }
+    return heights;
+}
+
+} // namespace
+
+TEST_CASE("vista: el reparto del ancho minimiza el alto de la tabla", "[vista][tabla]") {
+    const auto rows = rows_of(draw(read_data("tabla_reparto.md"), 117));
+    check_fits(rows, 117);
+    REQUIRE(rows.front().rfind("┌", 0) == 0);
+    const std::vector<int> heights = row_heights(rows);
+    REQUIRE(heights.size() == 4); // Encabezado y tres filas.
+    for (const int height : heights) {
+        INFO(joined(rows));
+        CHECK(height <= 3);
+    }
+    CHECK(heights.front() == 1); // El encabezado no parte palabras.
+}
+
+TEST_CASE("vista: una tabla que cabe conserva sus anchos naturales", "[vista][tabla]") {
+    const md::Document document =
+        md::parse("| Nombre | Edad | Ciudad |\n|:--|--:|:-:|\n| Ana | 30 | León |\n| Bo | 5 | X |");
+    REQUIRE(document.blocks.size() == 1);
+    // Mide 26 con bordes, pero el paso a tarjetas (sin cambios en este
+    // ajuste) pide 6 columnas por columna: 6 * 3 + 10 = 28.
+    for (const int width : {28, 40, 80, 200}) {
+        CAPTURE(width);
+        CHECK(md::table_column_widths(document.blocks.front(), width) == std::vector<int>{6, 4, 6});
+    }
+    CHECK(md::table_column_widths(document.blocks.front(), 27).empty());
+}
+
+TEST_CASE("vista: la tabla en fichas no cambia", "[vista][tabla]") {
+    const auto rows = rows_of(draw(read_data("tabla_reparto.md"), 40));
+    CHECK(joined(rows) == read_data("tabla_reparto_fichas_40.txt"));
+}
+
+TEST_CASE("vista: ninguna tabla pierde texto en ningún ancho", "[vista][tabla]") {
+    const std::string source = read_data("tabla_reparto.md");
+    const md::Document document = md::parse(source);
+    REQUIRE(document.blocks.size() == 1);
+    const md::Block& table = document.blocks.front();
+    REQUIRE(table.kind == md::Block::Kind::Table);
+    REQUIRE(table.header_rows == 1);
+    // Texto que debe aparecer como tabla y como fichas ("Encabezado: valor").
+    std::string as_table;
+    std::string as_cards;
+    for (std::size_t r = 0; r < table.rows.size(); ++r) {
+        for (std::size_t c = 0; c < table.rows[r].size(); ++c) {
+            as_table += cell_text(table.rows[r][c]);
+            if (r >= table.header_rows) {
+                as_cards += cell_text(table.rows[0][c]) + ":" + cell_text(table.rows[r][c]);
+            }
+        }
+    }
+    const std::vector<std::string> expected_table = glyphs_without_borders(as_table);
+    const std::vector<std::string> expected_cards = glyphs_without_borders(as_cards);
+    for (int width = 30; width <= 140; ++width) {
+        CAPTURE(width);
+        const std::string drawn = joined(rows_of(draw(source, width)));
+        const bool cards = drawn.find("┌") == std::string::npos;
+        CHECK(glyphs_without_borders(drawn) == (cards ? expected_cards : expected_table));
+    }
+}
+
+TEST_CASE("vista: tiempo del reparto de ancho de tablas", "[vista][tabla][desempeno]") {
+    // Tabla grande: 10 columnas y 50 filas con textos de largos distintos.
+    std::string big = "|";
+    for (int c = 0; c < 10; ++c) {
+        big += " Columna " + std::to_string(c) + " |";
+    }
+    big += "\n|";
+    for (int c = 0; c < 10; ++c) {
+        big += "---|";
+    }
+    big += "\n";
+    const std::string words = "texto de relleno con palabras de largo variable para la celda ";
+    for (int r = 0; r < 50; ++r) {
+        big += "|";
+        for (int c = 0; c < 10; ++c) {
+            std::string cell;
+            const int repeat = 1 + (r * 7 + c * 3) % 6;
+            for (int k = 0; k < repeat; ++k) {
+                cell += words;
+            }
+            big += " " + cell + "|";
+        }
+        big += "\n";
+    }
+    const md::Document large = md::parse(big);
+    const md::Document small = md::parse(read_data("tabla_reparto.md"));
+    // El mejor de tres, para que una pausa de la máquina no cuente.
+    const auto best_of_three = [](const auto& work) {
+        double best = 1e9;
+        for (int i = 0; i < 3; ++i) {
+            const auto start = std::chrono::steady_clock::now();
+            work();
+            best = std::min(best, std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count());
+        }
+        return best;
+    };
+    const auto reparto = [&](const md::Document& document, int width) {
+        return best_of_three([&] {
+            CHECK_FALSE(md::table_column_widths(document.blocks.front(), width).empty());
+        });
+    };
+    const auto dibujo = [&](const md::Document& document, int width) {
+        return best_of_three([&] { (void)md::render(document, width); });
+    };
+    const double small_ms = reparto(small, 117);
+    const double large_120 = reparto(large, 120);
+    const double large_200 = reparto(large, 200);
+    WARN("reparto: tabla de prueba (117 col.) " << small_ms << " ms; tabla de 10x50 "
+                                                << large_120 << " ms a 120 col., " << large_200
+                                                << " ms a 200 col.");
+    WARN("dibujo completo: tabla de prueba (117 col.) "
+         << dibujo(small, 117) << " ms; tabla de 10x50 " << dibujo(large, 120)
+         << " ms a 120 col., " << dibujo(large, 200) << " ms a 200 col.");
+#if defined(NDEBUG) && !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
+    CHECK(large_120 < 20.0);
+    CHECK(large_200 < 20.0);
+#endif
 }
