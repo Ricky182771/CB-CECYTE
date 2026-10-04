@@ -1,4 +1,7 @@
 # Chatbot de CECYTE
+
+[![CI](https://github.com/Ricky182771/CB-CECYTE/actions/workflows/ci.yml/badge.svg)](https://github.com/Ricky182771/CB-CECYTE/actions/workflows/ci.yml)
+
 Repositorio para almacenar el código del chatbot hecho por estudiantes de CECyTE como sevicio social.
 
 ## Compilar y ejecutar
@@ -24,7 +27,15 @@ Las pruebas necesitan Catch2 v3:
 - Ubuntu 24.04 (trae la 3.4.0) y Debian 13 "trixie" (trae la 3.7.1): el paquete `catch2` de `apt` basta.
 - Debian 12 "bookworm": su paquete `catch2` es la v2 (2.13.10), así que CMake descarga la v3 por FetchContent al configurar. Otra opción es instalar la 3.7.1 desde `bookworm-backports`.
 
-### Compilar y correr las pruebas
+### Compilar para usar el chatbot
+
+```bash
+cmake --preset release && cmake --build --preset release
+```
+
+El programa queda en `./build/release/cli/chatbot`. Es la build optimizada: con conversaciones largas o al cambiar el tamaño de la terminal responde varias veces más rápido que la de desarrollo.
+
+### Compilar para desarrollar
 
 ```bash
 cmake --preset dev  && cmake --build --preset dev  && ctest --preset dev  --output-on-failure
@@ -34,8 +45,13 @@ Otros presets:
 
 - `asan`: AddressSanitizer + UndefinedBehaviorSanitizer.
 - `tsan`: ThreadSanitizer.
+- `release`: la build optimizada; sus pruebas también deben pasar.
 
 Se usan igual, cambiando `dev` por el nombre del preset. Cada preset compila en `build/<preset>/`.
+
+### Integración continua
+
+En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las dos suites de pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY`, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
 
 ### Configurar
 
@@ -78,13 +94,13 @@ Los archivos contienen **el texto completo de tus conversaciones**. Por eso la c
 `CHAT_DEBUG_SSE=/ruta/archivo` (solo por variable de entorno) guarda en ese archivo, por cada intento de petición (tanto las respuestas por fragmentos, que usa la interfaz, como las completas, que usa `tools/smoke` sin `--stream`), la fecha, el modelo, el número de intento, el estado HTTP y el cuerpo crudo de la respuesta. Nunca guarda la key, las cabeceras ni lo que tú envías, pero **sí contiene las respuestas del modelo, es decir, la conversación**. Úsalo solo para diagnosticar un problema y borra el archivo después. Si no se puede escribir, el chatbot sigue funcionando sin avisar.
 
 ```bash
-CHAT_DEBUG_SSE=/tmp/chat-debug.txt ./build/dev/cli/chatbot
+CHAT_DEBUG_SSE=/tmp/chat-debug.txt ./build/release/cli/chatbot
 ```
 
 ### Ejecutar
 
 ```bash
-./build/dev/cli/chatbot
+./build/release/cli/chatbot
 ```
 
 Teclas:
@@ -104,7 +120,7 @@ En la lista de conversaciones: ↑/↓, PgUp/PgDn y Home/End para moverte; Enter
 
 Si subes en el historial, la vista se queda donde está aunque llegue texto nuevo, y la línea de estado muestra `↓ Hay más abajo (End)`, o `(PgDn)` si hay texto en la caja (porque ahí End mueve el cursor). Al enviar un mensaje, la vista regresa abajo.
 
-El chatbot captura el ratón para la rueda. Para seleccionar texto con el ratón, mantén Shift mientras arrastras, como en la mayoría de terminales con apps que usan el ratón.
+El chatbot captura el ratón para la rueda. Para seleccionar texto con el ratón, mantén Shift mientras arrastras, como en la mayoría de terminales con apps que usan el ratón. Para abrir un enlace, Shift+clic sobre él (en Kitty también Ctrl+Shift+clic): un clic simple lo recibe el chatbot y no abre nada.
 
 ### Markdown en las respuestas
 
@@ -117,7 +133,7 @@ Se muestra:
 - Listas con viñetas y numeradas, anidadas, y listas de tareas (`- [ ]` y `- [x]`).
 - Bloques de código con el lenguaje como título. Las líneas largas se parten, sin colores de sintaxis.
 - Tablas con alineación por columna. Si no caben, el texto se ajusta dentro de las celdas; si ni así caben, cada fila se muestra como una tarjeta `Encabezado: valor`.
-- Enlaces: el texto subrayado y la dirección al lado. En las terminales que lo soportan, el enlace se abre con clic.
+- Enlaces: el texto subrayado y la dirección al lado. En las terminales que lo soportan, el enlace se abre con Shift+clic.
 - Imágenes como `[imagen: descripción]` con su dirección, porque la terminal no muestra imágenes.
 - Alertas de GitHub (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`).
 - Notas al pie (`[^1]`), que aparecen al final de la respuesta.
@@ -128,7 +144,7 @@ El HTML dentro de la respuesta se muestra tal cual, como texto. Los caracteres d
 Para ver cómo se muestra un archivo markdown sin usar la API:
 
 ```bash
-./build/dev/tools/md_preview --width 60 tests/data/markdown_muestra.md
+./build/release/tools/md_preview --width 60 tests/data/markdown_muestra.md
 ```
 
 `--width` es el ancho en columnas (80 si no lo pones). Si la salida es una terminal, se ve con colores y estilos; si la rediriges a un archivo, sale como texto plano.

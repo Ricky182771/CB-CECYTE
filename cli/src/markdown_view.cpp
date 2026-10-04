@@ -24,6 +24,7 @@ struct Look {
     bool dim = false;
     bool highlight = false;
     bool code = false;
+    bool accent = false; ///< Subtítulos H3-H6.
     std::string link;
 
     bool operator==(const Look&) const = default;
@@ -37,6 +38,7 @@ Look merge(Look look, const Look& base) {
     look.dim = look.dim || base.dim;
     look.highlight = look.highlight || base.highlight;
     look.code = look.code || base.code;
+    look.accent = look.accent || base.accent;
     if (look.link.empty()) {
         look.link = base.link;
     }
@@ -190,59 +192,149 @@ std::vector<Atom> atoms_of(const Block& block, const Look& base) {
     return atoms;
 }
 
-/// Ajusta los átomos a width columnas. Una palabra que no cabe en la línea
-/// pasa a la siguiente; si no cabe ni en una línea vacía, se parte por
-/// caracteres. Toda línea tiene al menos un carácter, aunque sea ancho.
-std::vector<Line> flow(const std::vector<Atom>& atoms, int width) {
+/// Medidas de un átomo para el ajuste. Los caracteres (para partir una
+/// palabra más ancha que la línea) se calculan solo si hacen falta.
+struct Measure {
+    int width = 0;
+    bool split = false; ///< glyphs y glyph_widths ya calculados.
+    std::vector<std::string> glyphs;
+    std::vector<int> glyph_widths;
+};
+
+std::vector<Measure> measure(const std::vector<Atom>& atoms) {
+    std::vector<Measure> measures(atoms.size());
+    for (std::size_t i = 0; i < atoms.size(); ++i) {
+        if (atoms[i].kind != Atom::Kind::Break) {
+            measures[i].width = ftxui::string_width(atoms[i].text);
+        }
+    }
+    return measures;
+}
+
+void split_glyphs(const Atom& atom, Measure& measure) {
+    if (measure.split) {
+        return;
+    }
+    for (std::string& glyph : ftxui::Utf8ToGlyphs(atom.text)) {
+        if (glyph.empty()) {
+            continue; // Segunda celda de un carácter ancho.
+        }
+        measure.glyph_widths.push_back(ftxui::string_width(glyph));
+        measure.glyphs.push_back(std::move(glyph));
+    }
+    measure.split = true;
+}
+
+/// Ajuste de líneas: una palabra que no cabe en la línea pasa a la
+/// siguiente; si no cabe ni en una línea vacía, se parte por caracteres.
+/// Toda línea tiene al menos un carácter, aunque sea ancho. El resultado va
+/// a sink: Lines lo arma y LineCount solo cuenta, con el mismo cálculo.
+template <typename Sink>
+void layout(const std::vector<Atom>& atoms, std::vector<Measure>& measures, int width,
+            Sink& sink) {
     width = std::max(width, 1);
-    std::vector<Line> lines(1);
-    const Atom* pending_space = nullptr;
-    for (const Atom& atom : atoms) {
-        Line* line = &lines.back();
+    int line_width = 0;
+    std::size_t pending = atoms.size(); // Espacio pendiente (índice), o ninguno.
+    for (std::size_t i = 0; i < atoms.size(); ++i) {
+        const Atom& atom = atoms[i];
         switch (atom.kind) {
         case Atom::Kind::Break:
-            lines.emplace_back();
-            pending_space = nullptr;
+            sink.new_line();
+            line_width = 0;
+            pending = atoms.size();
             continue;
         case Atom::Kind::Space:
-            if (line->width > 0) {
-                pending_space = &atom;
+            if (line_width > 0) {
+                pending = i;
             }
             continue;
         case Atom::Kind::Word:
             break;
         }
-        const int atom_width = ftxui::string_width(atom.text);
-        const int space = pending_space != nullptr ? ftxui::string_width(pending_space->text) : 0;
-        if (line->width + space + atom_width <= width) {
-            if (pending_space != nullptr) {
-                line->append(pending_space->text, space, pending_space->look);
+        const bool has_space = pending < atoms.size();
+        const int atom_width = measures[i].width;
+        const int space = has_space ? measures[pending].width : 0;
+        if (line_width + space + atom_width <= width) {
+            if (has_space) {
+                sink.add(atoms[pending].text, space, atoms[pending].look);
             }
-            line->append(atom.text, atom_width, atom.look);
+            sink.add(atom.text, atom_width, atom.look);
+            line_width += space + atom_width;
         } else if (atom_width <= width) {
-            lines.emplace_back();
-            lines.back().append(atom.text, atom_width, atom.look);
+            sink.new_line();
+            sink.add(atom.text, atom_width, atom.look);
+            line_width = atom_width;
         } else {
             // Más ancho que la línea: llena lo que queda y sigue partiendo.
-            if (pending_space != nullptr && line->width + space < width) {
-                line->append(pending_space->text, space, pending_space->look);
-            } else if (line->width > 0) {
-                lines.emplace_back();
+            if (has_space && line_width + space < width) {
+                sink.add(atoms[pending].text, space, atoms[pending].look);
+                line_width += space;
+            } else if (line_width > 0) {
+                sink.new_line();
+                line_width = 0;
             }
-            for (const std::string& glyph : ftxui::Utf8ToGlyphs(atom.text)) {
-                if (glyph.empty()) {
-                    continue; // Segunda celda de un carácter ancho.
+            Measure& parts = measures[i];
+            split_glyphs(atom, parts);
+            for (std::size_t k = 0; k < parts.glyphs.size(); ++k) {
+                const int glyph_width = parts.glyph_widths[k];
+                if (line_width + glyph_width > width && line_width > 0) {
+                    sink.new_line();
+                    line_width = 0;
                 }
-                const int glyph_width = ftxui::string_width(glyph);
-                if (lines.back().width + glyph_width > width && lines.back().width > 0) {
-                    lines.emplace_back();
-                }
-                lines.back().append(glyph, glyph_width, atom.look);
+                sink.add(parts.glyphs[k], glyph_width, atom.look);
+                line_width += glyph_width;
             }
         }
-        pending_space = nullptr;
+        pending = atoms.size();
     }
-    return lines;
+}
+
+struct Lines {
+    std::vector<Line> lines = std::vector<Line>(1);
+    void new_line() { lines.emplace_back(); }
+    void add(const std::string& text, int width, const Look& look) {
+        lines.back().append(text, width, look);
+    }
+};
+
+struct LineCount {
+    int lines = 1;
+    void new_line() { ++lines; }
+    void add(const std::string& /*text*/, int /*width*/, const Look& /*look*/) {}
+};
+
+/// Ajusta los átomos a width columnas (ver layout()).
+std::vector<Line> flow(const std::vector<Atom>& atoms, int width) {
+    std::vector<Measure> measures = measure(atoms);
+    Lines sink;
+    layout(atoms, measures, width, sink);
+    return std::move(sink.lines);
+}
+
+struct MaxWidth {
+    int widest = 0;
+    int current = 0;
+    void new_line() { current = 0; }
+    void add(const std::string& /*text*/, int width, const Look& /*look*/) {
+        current += width;
+        widest = std::max(widest, current);
+    }
+};
+
+/// Ancho de la línea más larga sin ajustar (solo los saltos duros cortan).
+int natural_width(const std::vector<Atom>& atoms) {
+    std::vector<Measure> measures = measure(atoms);
+    MaxWidth sink;
+    layout(atoms, measures, 1 << 20, sink);
+    return sink.widest;
+}
+
+/// Cuántas líneas da flow(atoms, width), sin armarlas. measures sale de
+/// measure(atoms) y se reusa entre llamadas.
+int count_lines(const std::vector<Atom>& atoms, std::vector<Measure>& measures, int width) {
+    LineCount sink;
+    layout(atoms, measures, width, sink);
+    return sink.lines;
 }
 
 Element decorate(Element element, const Look& look) {
@@ -261,7 +353,9 @@ Element decorate(Element element, const Look& look) {
     if (look.dim) {
         element = ftxui::dim(std::move(element));
     }
-    if (look.code) {
+    if (look.code || look.accent) {
+        // Cian de la paleta de 16 colores: cada tema de terminal lo ajusta
+        // para que se lea sobre su fondo, claro u oscuro.
         element = ftxui::color(ftxui::Color::Cyan, std::move(element));
     }
     if (look.highlight) {
@@ -330,6 +424,10 @@ std::string alert_label(const std::string& type) {
     return "Nota";
 }
 
+/// Ancho mínimo de una columna de tabla; si ni así cabe, la tabla se dibuja
+/// como tarjetas.
+constexpr int kMinColumn = 6;
+
 class Renderer {
 public:
     Element blocks(const std::vector<Block>& list, int width, bool spaced) {
@@ -354,7 +452,9 @@ private:
             Look base;
             base.bold = true;
             base.underline = block.level == 1;
-            base.dim = block.level >= 3;
+            // H3-H6 en color en vez de tenues: dim casi no se lee sobre
+            // fondos translúcidos.
+            base.accent = block.level >= 3;
             return lines_element(flow(atoms_of(block, base), width));
         }
         case Block::Kind::Quote:
@@ -476,36 +576,57 @@ private:
         return hanging("[" + std::to_string(block.footnote) + "] ", block.children, width, true);
     }
 
-    Element table(const Block& block, int width) {
-        std::size_t columns = block.align.size();
-        for (const auto& row : block.rows) {
-            columns = std::max(columns, row.size());
-        }
-        if (columns == 0) {
-            return ftxui::text("");
-        }
-        // Átomos de cada celda (el encabezado en negritas).
+public:
+    /// Lo que hace falta para dibujar una tabla: átomos de cada celda (el
+    /// encabezado en negritas), ancho natural de cada columna y anchos
+    /// repartidos (vacío si la tabla va como tarjetas).
+    struct TableLayout {
+        std::size_t columns = 0;
         std::vector<std::vector<std::vector<Atom>>> cells;
-        std::vector<int> natural(columns, 1);
+        std::vector<int> natural;
+        std::vector<int> widths;
+    };
+
+    static TableLayout table_layout(const Block& block, int width) {
+        TableLayout layout;
+        for (const auto& row : block.rows) {
+            layout.columns = std::max(layout.columns, row.size());
+        }
+        layout.columns = std::max(layout.columns, block.align.size());
+        if (layout.columns == 0) {
+            return layout;
+        }
+        layout.natural.assign(layout.columns, 1);
         for (std::size_t r = 0; r < block.rows.size(); ++r) {
             Look base;
             base.bold = r < block.header_rows;
-            auto& row_atoms = cells.emplace_back(columns);
+            auto& row_atoms = layout.cells.emplace_back(layout.columns);
             for (std::size_t c = 0; c < block.rows[r].size(); ++c) {
                 row_atoms[c] = atoms_of(block.rows[r][c], base);
-                for (const Line& line : flow(row_atoms[c], 1 << 20)) {
-                    natural[c] = std::max(natural[c], line.width);
-                }
+                layout.natural[c] = std::max(layout.natural[c], natural_width(row_atoms[c]));
             }
         }
         // "│ a │ b │": tres columnas por celda más la barra inicial.
-        const int count = static_cast<int>(columns);
+        const int count = static_cast<int>(layout.columns);
         const int available = width - 3 * count - 1;
-        constexpr int kMinColumn = 6;
-        if (available < kMinColumn * count) {
-            return cards(block, cells, width);
+        if (available >= kMinColumn * count) {
+            layout.widths = distribute(layout.cells, layout.natural, available);
         }
-        const std::vector<int> widths = distribute(natural, available);
+        return layout;
+    }
+
+private:
+    Element table(const Block& block, int width) {
+        TableLayout layout = table_layout(block, width);
+        if (layout.columns == 0) {
+            return ftxui::text("");
+        }
+        if (layout.widths.empty()) {
+            return cards(block, layout.cells, width);
+        }
+        const std::size_t columns = layout.columns;
+        const auto& cells = layout.cells;
+        const std::vector<int>& widths = layout.widths;
 
         std::vector<Line> lines;
         const auto rule = [&](std::string_view left, std::string_view mid,
@@ -569,9 +690,23 @@ private:
         return lines_element(lines);
     }
 
-    /// Reparte el ancho: cada columna recibe su ancho natural hasta un tope
-    /// común; lo que sobra se da a las columnas recortadas.
-    static std::vector<int> distribute(const std::vector<int>& natural, int available) {
+    /// Reparte el ancho de las columnas para que la tabla mida lo menos
+    /// posible de alto (la suma, por fila, de su celda más alta, medida con
+    /// el mismo flow() que dibuja). Si cabe con el ancho natural de cada
+    /// columna, se usa ese. Si no:
+    /// 1. Punto de partida: la menor altura H tal que todas las columnas
+    ///    caben con todas sus celdas en H líneas o menos, y en cada columna
+    ///    el menor ancho que lo logra. Ese ancho no baja de la palabra más
+    ///    larga de la columna (para no partir palabras si se puede); si así
+    ///    no caben, ese piso se recorta parejo, hasta min(natural, kMinColumn).
+    ///    Empezar todas en el mínimo no sirve: cuando varias columnas son a
+    ///    la vez la más alta de una fila, ensanchar una sola no baja la
+    ///    fila, ninguna mejora y todo el ancho se va a una columna.
+    /// 2. Las columnas de pantalla que sobran se dan una por una a la columna
+    ///    donde más baja el alto total; en empate, a la que más lejos está
+    ///    de su ancho natural.
+    static std::vector<int> distribute(const std::vector<std::vector<std::vector<Atom>>>& cells,
+                                       const std::vector<int>& natural, int available) {
         int total = 0;
         for (const int w : natural) {
             total += w;
@@ -579,32 +714,164 @@ private:
         if (total <= available) {
             return natural;
         }
-        const auto used = [&](int cap) {
+        const std::size_t columns = natural.size();
+        const std::size_t rows = cells.size();
+        // Medidas de cada celda: se calculan una vez para todos los anchos.
+        std::vector<std::vector<std::vector<Measure>>> measures(rows);
+        for (std::size_t r = 0; r < rows; ++r) {
+            for (std::size_t c = 0; c < columns; ++c) {
+                measures[r].push_back(measure(cells[r][c]));
+            }
+        }
+        // Líneas de cada celda de la columna c con el ancho dado.
+        const auto lines_at = [&](std::size_t c, int width) {
+            std::vector<int> lines(rows);
+            for (std::size_t r = 0; r < rows; ++r) {
+                lines[r] = count_lines(cells[r][c], measures[r][c], width);
+            }
+            return lines;
+        };
+        const auto tallest = [&](std::size_t c, int width) {
+            const std::vector<int> lines = lines_at(c, width);
+            return lines.empty() ? 1 : *std::max_element(lines.begin(), lines.end());
+        };
+
+        // 1. Menor H con la que todo cabe. Con más ancho nunca hay más líneas
+        //    (ajuste voraz), así que se puede buscar por bisección.
+        // Piso de cada columna: su palabra más larga, entre el mínimo y el
+        // ancho natural.
+        std::vector<int> minimum(columns);
+        std::vector<int> word(columns);
+        for (std::size_t c = 0; c < columns; ++c) {
+            minimum[c] = std::min(natural[c], kMinColumn);
+            int longest = 0;
+            for (std::size_t r = 0; r < rows; ++r) {
+                for (const Atom& atom : cells[r][c]) {
+                    if (atom.kind == Atom::Kind::Word) {
+                        longest = std::max(longest, ftxui::string_width(atom.text));
+                    }
+                }
+            }
+            word[c] = std::clamp(longest, minimum[c], natural[c]);
+        }
+        const auto floors_with = [&](int cap) {
             int sum = 0;
-            for (const int w : natural) {
-                sum += std::min(w, cap);
+            for (std::size_t c = 0; c < columns; ++c) {
+                sum += std::max(minimum[c], std::min(word[c], cap));
             }
             return sum;
         };
-        int low = 1;
-        int high = *std::max_element(natural.begin(), natural.end());
-        while (low < high) { // Mayor tope que todavía cabe.
-            const int mid = (low + high + 1) / 2;
-            if (used(mid) <= available) {
-                low = mid;
+        int cap = kMinColumn; // Con este tope los pisos son el mínimo: caben.
+        int cap_high = *std::max_element(word.begin(), word.end());
+        while (cap < cap_high) { // Mayor tope con el que los pisos caben.
+            const int mid = cap + (cap_high - cap + 1) / 2;
+            if (floors_with(mid) <= available) {
+                cap = mid;
             } else {
-                high = mid - 1;
+                cap_high = mid - 1;
             }
         }
-        std::vector<int> widths;
-        int left = available - used(low);
-        for (const int w : natural) {
-            int width = std::min(w, low);
-            if (w > low && left > 0) {
-                ++width;
-                --left;
+        int highest = 1;
+        for (std::size_t c = 0; c < columns; ++c) {
+            minimum[c] = std::max(minimum[c], std::min(word[c], cap));
+            highest = std::max(highest, tallest(c, minimum[c]));
+        }
+        // Anchos para que ninguna celda pase de h líneas; false si no caben.
+        const auto widths_for = [&](int h, std::vector<int>& out) {
+            int sum = 0;
+            for (std::size_t c = 0; c < columns; ++c) {
+                int low = minimum[c];
+                int high = natural[c];
+                if (tallest(c, high) > h) {
+                    return false;
+                }
+                while (low < high) {
+                    const int mid = low + (high - low) / 2;
+                    if (tallest(c, mid) <= h) {
+                        high = mid;
+                    } else {
+                        low = mid + 1;
+                    }
+                }
+                out[c] = low;
+                sum += low;
             }
-            widths.push_back(width);
+            return sum <= available;
+        };
+        std::vector<int> widths = minimum; // Con h = highest siempre cabe.
+        int low_h = 1;
+        int high_h = highest;
+        std::vector<int> candidate(columns);
+        while (low_h < high_h) {
+            const int mid = low_h + (high_h - low_h) / 2;
+            if (widths_for(mid, candidate)) {
+                high_h = mid;
+            } else {
+                low_h = mid + 1;
+            }
+        }
+        if (widths_for(low_h, candidate)) {
+            widths = candidate;
+        }
+        int left = available;
+        for (const int w : widths) {
+            left -= w;
+        }
+
+        // 2. Lo que sobra, columna por columna.
+        // current: con el ancho actual; wider: con una columna más (vacío si
+        // la columna ya tiene su ancho natural). Solo se recalcula la columna
+        // que cambia.
+        std::vector<std::vector<int>> current(columns);
+        std::vector<std::vector<int>> wider(columns);
+        for (std::size_t c = 0; c < columns; ++c) {
+            current[c] = lines_at(c, widths[c]);
+            if (widths[c] < natural[c]) {
+                wider[c] = lines_at(c, widths[c] + 1);
+            }
+        }
+        // Alto total si la columna changed tuviera las líneas dadas.
+        const auto height_with = [&](std::size_t changed, const std::vector<int>& lines) {
+            int height = 0;
+            for (std::size_t r = 0; r < rows; ++r) {
+                int row = lines[r];
+                for (std::size_t c = 0; c < columns; ++c) {
+                    if (c != changed) {
+                        row = std::max(row, current[c][r]);
+                    }
+                }
+                height += row;
+            }
+            return height;
+        };
+        while (left > 0) {
+            const int height = columns > 0 ? height_with(0, current[0]) : 0;
+            std::size_t best = columns;
+            int best_gain = 0;
+            int best_missing = 0;
+            for (std::size_t c = 0; c < columns; ++c) {
+                if (widths[c] >= natural[c]) {
+                    continue;
+                }
+                const int gain = height - height_with(c, wider[c]);
+                const int missing = natural[c] - widths[c];
+                if (best == columns || gain > best_gain ||
+                    (gain == best_gain && missing > best_missing)) {
+                    best = c;
+                    best_gain = gain;
+                    best_missing = missing;
+                }
+            }
+            if (best == columns) {
+                break; // Todas tienen su ancho natural (no pasa si no cabía).
+            }
+            ++widths[best];
+            --left;
+            current[best] = std::move(wider[best]);
+            wider[best].clear();
+            if (widths[best] < natural[best]) {
+                wider[best] = lines_at(best, widths[best] + 1);
+            }
         }
         return widths;
     }
@@ -651,6 +918,10 @@ private:
 };
 
 } // namespace
+
+std::vector<int> table_column_widths(const Block& table, int width) {
+    return Renderer::table_layout(table, std::max(width, 1)).widths;
+}
 
 std::string hyperlink_target(std::string_view url) {
     static constexpr char kHex[] = "0123456789ABCDEF";
