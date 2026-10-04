@@ -369,26 +369,32 @@ Element decorate(Element element, const Look& look) {
     return element;
 }
 
-Element line_element(const Line& line) {
+/// Una línea ya ajustada. Los tramos van siempre en un hbox, también si es
+/// uno solo: el vbox de afuera estira a sus hijos a todo el ancho, y un text
+/// decorado suelto llevaría el subrayado, el tachado, el fondo o el enlace
+/// hasta el borde. Dentro del hbox cada text mide solo lo que su contenido.
+/// style (opcional) se aplica a cada tramo, nunca al relleno.
+Element line_element(const Line& line, const ftxui::Decorator& style = {}) {
     if (line.segments.empty()) {
         return ftxui::text("");
-    }
-    if (line.segments.size() == 1) {
-        return decorate(ftxui::text(line.segments.front().text), line.segments.front().look);
     }
     Elements parts;
     parts.reserve(line.segments.size());
     for (const Segment& segment : line.segments) {
-        parts.push_back(decorate(ftxui::text(segment.text), segment.look));
+        Element part = decorate(ftxui::text(segment.text), segment.look);
+        if (style) {
+            part = style(std::move(part));
+        }
+        parts.push_back(std::move(part));
     }
     return ftxui::hbox(std::move(parts));
 }
 
-Element lines_element(const std::vector<Line>& lines) {
+Element lines_element(const std::vector<Line>& lines, const ftxui::Decorator& style = {}) {
     Elements rows;
     rows.reserve(lines.size());
     for (const Line& line : lines) {
-        rows.push_back(line_element(line));
+        rows.push_back(line_element(line, style));
     }
     return ftxui::vbox(std::move(rows));
 }
@@ -466,7 +472,8 @@ private:
             return with_bar(blocks(block.children, width - 2, true));
         case Block::Kind::Alert: {
             Elements rows;
-            rows.push_back(ftxui::bold(ftxui::text(alert_label(block.info))));
+            // En un hbox para que las negritas no se estiren con el vbox.
+            rows.push_back(ftxui::hbox({ftxui::bold(ftxui::text(alert_label(block.info)))}));
             if (!block.children.empty()) {
                 rows.push_back(blocks(block.children, width - 2, true));
             }
@@ -950,10 +957,10 @@ std::string hyperlink_target(std::string_view url) {
     return out;
 }
 
-Element render_plain(std::string_view text, int width) {
+Element render_plain(std::string_view text, int width, const ftxui::Decorator& style) {
     std::vector<Atom> atoms;
     push_words(atoms, sanitize(text), Look{}, false);
-    return lines_element(flow(atoms, std::max(width, 1)));
+    return lines_element(flow(atoms, std::max(width, 1)), style);
 }
 
 Element render(const Document& document, int width) {

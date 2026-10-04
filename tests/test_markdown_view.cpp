@@ -647,3 +647,81 @@ TEST_CASE("vista: una columna vacía no queda de ancho 0", "[vista][tabla]") {
     // Anchos naturales 3, 1 y 4: a 18 (8 + 3 * 3 + 1) va completa.
     CHECK(md::table_column_widths(document.blocks.front(), 18) == std::vector<int>{3, 1, 4});
 }
+
+namespace {
+
+/// Columna del último carácter visible de la fila y, o -1 si no hay.
+int last_visible(const ftxui::Screen& screen, int y) {
+    int last = -1;
+    for (int x = 0; x < screen.dimx(); ++x) {
+        const std::string& character = screen.CellAt(x, y).character;
+        if (!character.empty() && character != " ") {
+            last = x;
+        }
+    }
+    return last;
+}
+
+/// Ninguna celda después del último carácter de cada fila lleva subrayado,
+/// tachado, fondo ni hipervínculo: los decoradores cubren solo el texto. Con
+/// strict, tampoco negritas, dim ni color de letra (no se ven sobre espacios,
+/// pero tampoco deben estirarse).
+void check_no_style_past_text(const ftxui::Screen& screen, bool strict = false) {
+    for (int y = 0; y < screen.dimy(); ++y) {
+        for (int x = last_visible(screen, y) + 1; x < screen.dimx(); ++x) {
+            CAPTURE(x, y);
+            const ftxui::Cell& cell = screen.CellAt(x, y);
+            CHECK_FALSE(cell.underlined);
+            CHECK_FALSE(cell.strikethrough);
+            CHECK(cell.background_color == ftxui::Color(ftxui::Color::Default));
+            CHECK(cell.hyperlink == 0);
+            if (strict) {
+                CHECK_FALSE(cell.bold);
+                CHECK_FALSE(cell.dim);
+                CHECK(cell.foreground_color == ftxui::Color(ftxui::Color::Default));
+            }
+        }
+    }
+}
+
+} // namespace
+
+TEST_CASE("vista: el estilo de una línea no se estira hasta el borde", "[vista]") {
+    struct Case {
+        const char* source;
+        const char* text; ///< Texto que sí lleva el estilo.
+    };
+    const Case cases[] = {
+        {"# Título", "Título"},
+        {"<https://es.wikipedia.org>", "https://es.wikipedia.org"},
+        {"==resaltado==", "resaltado"},
+        {"~~tachado~~", "tachado"},
+    };
+    for (const Case& c : cases) {
+        CAPTURE(c.source);
+        const ftxui::Screen screen = draw(c.source, 40);
+        REQUIRE(rows_of(screen).front() == c.text);
+        // El texto sí lleva su estilo...
+        const ftxui::Cell& first = screen.CellAt(0, 0);
+        CHECK((first.underlined || first.strikethrough || first.hyperlink != 0 ||
+               first.background_color != ftxui::Color(ftxui::Color::Default)));
+        // ...y el relleno a la derecha, no.
+        check_no_style_past_text(screen, true);
+    }
+}
+
+TEST_CASE("vista: el estilo no se estira en tablas, notas, citas, listas ni código",
+          "[vista]") {
+    const char* sources[] = {
+        "| A | B |\n|---|---|\n| [x](https://ej.com) | ~~y~~ |",
+        "Texto[^1].\n\n[^1]: [nota](https://ej.com)",
+        "> [cita](https://ej.com)",
+        "- ==uno==\n- ~~dos~~",
+        "```cpp\nint x;\n```",
+        "> [!NOTE]\n> ~~alerta~~",
+    };
+    for (const char* source : sources) {
+        CAPTURE(source);
+        check_no_style_past_text(draw(source, 40), true);
+    }
+}

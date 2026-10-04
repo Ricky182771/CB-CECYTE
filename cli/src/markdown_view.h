@@ -17,8 +17,11 @@ namespace chatbot::cli::md {
 [[nodiscard]] ftxui::Element render(const Document& document, int width);
 
 /// Texto plano (sin markdown) filtrado con sanitize() y ajustado a width
-/// columnas con las mismas reglas; conserva los espacios repetidos.
-[[nodiscard]] ftxui::Element render_plain(std::string_view text, int width);
+/// columnas con las mismas reglas; conserva los espacios repetidos. style
+/// (por ejemplo, ftxui::dim) se aplica solo al texto de cada línea, no al
+/// relleno hasta el borde.
+[[nodiscard]] ftxui::Element render_plain(std::string_view text, int width,
+                                          const ftxui::Decorator& style = {});
 
 /// Anchos (columnas de pantalla, sin bordes) que render() da a las columnas
 /// de un bloque Table con ese ancho total; vacío si la tabla se dibuja como
