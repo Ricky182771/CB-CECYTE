@@ -466,7 +466,10 @@ private:
             // H3-H6 en color en vez de tenues: dim casi no se lee sobre
             // fondos translúcidos.
             base.accent = block.level >= 3;
-            return lines_element(flow(atoms_of(block, base), width));
+            if (block.level < 3) {
+                return lines_element(flow(atoms_of(block, base), width));
+            }
+            return subheading(block, base, width);
         }
         case Block::Kind::Quote:
             return with_bar(blocks(block.children, width - 2, true));
@@ -498,6 +501,30 @@ private:
             break;
         }
         return lines_element(flow(atoms_of(block, Look{}), width));
+    }
+
+    /// H3-H6: la marca "▍ " con el estilo del título, para que se distingan
+    /// de H2 aunque el color del tema quede casi igual al del texto. Si el
+    /// título ocupa varias líneas, las siguientes llevan una sangría del
+    /// ancho de la marca, alineadas con el texto. Solo es dibujo: el árbol
+    /// (y lo que se guarda o se manda a la API) no cambia.
+    static Element subheading(const Block& block, const Look& base, int width) {
+        static const std::string kMark = "▍ ";
+        const int mark_width = ftxui::string_width(kMark);
+        std::vector<Line> lines;
+        for (const Line& source : flow(atoms_of(block, base), width - mark_width)) {
+            Line line;
+            if (lines.empty()) {
+                line.append(kMark, mark_width, base);
+            } else {
+                pad(line, mark_width);
+            }
+            for (const Segment& segment : source.segments) {
+                line.append(segment.text, segment.look);
+            }
+            lines.push_back(std::move(line));
+        }
+        return lines_element(lines);
     }
 
     /// Barra "│ " tenue a la izquierda, del alto del contenido.
