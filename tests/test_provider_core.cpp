@@ -198,7 +198,7 @@ TEST_CASE("credentials.json: ida y vuelta, permisos 0600 y carpeta 0700", "[prov
 TEST_CASE("credentials.json con permisos abiertos no se lee", "[proveedor][credenciales]") {
     const ScopedTempDir dir;
     const std::filesystem::path path = dir.path() / "credentials.json";
-    for (const mode_t mode : {0640, 0604, 0660, 0644}) {
+    for (const mode_t mode : {mode_t{0640}, mode_t{0604}, mode_t{0660}, mode_t{0644}}) {
         INFO(std::oct << mode);
         write(path, std::string{R"({"version":1,"keys":{"nvidia":")"} + kSecret + "\"}}", mode);
         const auto loaded = chatbot::load_credentials(path.string());
