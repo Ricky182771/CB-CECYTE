@@ -804,8 +804,12 @@ int main() {
     });
 
     if (incomplete.has_value()) {
-        open_settings(kSetupNotice); // Falta la key o el modelo.
-        flash = kSetupNotice;        // Si no se pudo abrir, al menos el aviso.
+        // Falta la key o el modelo. El aviso del tema, si hay, va también.
+        const std::string notice = appearance_warning.empty()
+                                       ? std::string{kSetupNotice}
+                                       : std::string{kSetupNotice} + " " + appearance_warning;
+        open_settings(notice);
+        flash = notice; // Si no se pudo abrir, al menos el aviso.
     } else {
         input->TakeFocus();
     }

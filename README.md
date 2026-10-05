@@ -96,13 +96,27 @@ Lo que guarda la pantalla va a `~/.config/chatbot/config.json` (o `$XDG_CONFIG_H
     "base_url": "https://integrate.api.nvidia.com/v1",
     "model": "nvidia/nemotron-3-super-120b-a12b",
     "timeout_seconds": 120,
-    "history_limit": 32000
+    "history_limit": 32000,
+    "appearance": { "theme": "catppuccin-mocha", "background": "theme" }
 }
 ```
 
 Las variables de entorno (`CHAT_API_KEY`, `CHAT_BASE_URL`, `CHAT_MODEL`, `CHAT_TIMEOUT`, `CHAT_HISTORY_LIMIT`) tienen prioridad sobre lo guardado. En la pantalla, un campo definido por una de ellas muestra su valor con `(definido por CHAT_…)` y no se puede editar (la key, siempre enmascarada: solo sus últimos 4 caracteres).
 
 `CHAT_HISTORY_LIMIT` (o `history_limit` en el archivo) limita cuánto historial se envía en cada mensaje. Se mide en bytes del texto, más o menos un carácter por byte (los acentos y la ñ cuentan doble). El valor por defecto es 32000; `0` significa sin límite. Si la conversación pasa del límite, se omiten los mensajes más antiguos y la línea de estado lo avisa. Si el servidor rechaza la petición por demasiado larga, el chatbot recorta el historial a la mitad (del límite o del tamaño real, lo que sea menor) y reintenta una vez.
+
+#### Colores y accesibilidad
+
+En la configuración, la categoría **Colores y Accesibilidad** elige el tema y el fondo; se aplican al guardar, sin reiniciar, y se guardan en `config.json` como `"appearance"`.
+
+- **Tema:** `Catppuccin Mocha` (por defecto) usa sus propios colores RGB, iguales en cualquier terminal. `De la terminal` usa la paleta de 16 colores de tu terminal, como antes de los temas.
+- **Fondo:** `Del tema` pinta el fondo del tema en toda la pantalla; `Transparente` deja el fondo y el color de texto de tu terminal y solo colorea los acentos (encabezados, código, enlaces…). Con `De la terminal` no aplica.
+
+Si `config.json` nombra un tema que no existe, se usa el de por defecto y la línea de estado lo avisa.
+
+En todas las listas, la fila del cursor se marca con el color de selección (o invertida con `De la terminal`) solo mientras la lista tiene el foco, y `●` marca lo elegido. El campo o botón con el foco lleva su etiqueta con el color de selección.
+
+Si tu terminal no muestra colores de 24 bits, se aproximan a 256 o 16. Con la variable `NO_COLOR` definida no se usa ningún color (solo negritas, subrayado, tenue e invertido): con un tema RGB, la fila del cursor deja de distinguirse; usa `De la terminal` si necesitas `NO_COLOR`.
 
 #### Conversaciones guardadas
 
@@ -180,6 +194,7 @@ Para ver cómo se muestra un archivo markdown sin usar la API:
 
 ```bash
 ./build/release/tools/md_preview --width 60 tests/data/markdown_muestra.md
+./build/release/tools/md_preview --theme terminal tests/data/markdown_muestra.md
 ```
 
-`--width` es el ancho en columnas (80 si no lo pones). Si la salida es una terminal, se ve con colores y estilos; si la rediriges a un archivo, sale como texto plano.
+`--width` es el ancho en columnas (80 si no lo pones). `--theme` elige el tema (`catppuccin-mocha` si no lo pones, o `terminal`) y `--background theme|terminal` el fondo. Si la salida es una terminal, se ve con colores y estilos; si la rediriges a un archivo, sale como texto plano.
