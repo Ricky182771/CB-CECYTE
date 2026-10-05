@@ -18,7 +18,8 @@ constexpr int kWidth = 30;
 /// de FTXUI, el elemento ocupa toda la línea (xflex | frame).
 ftxui::Screen draw(const std::string& content, bool hovered, bool focused, bool placeholder) {
     ftxui::Element element = ftxui::text(content) | ftxui::xflex | ftxui::frame;
-    element = chatbot::cli::input_transform(std::move(element), hovered, focused, placeholder);
+    element = chatbot::cli::input_transform(std::move(element), hovered, focused, placeholder,
+                                            chatbot::cli::terminal_palette());
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth),
                                                  ftxui::Dimension::Fixed(1));
     ftxui::Render(screen, element);

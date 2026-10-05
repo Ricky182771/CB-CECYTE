@@ -17,6 +17,7 @@
 #include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
+#include "theme.h"
 
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
@@ -186,6 +187,23 @@ int main() {
     chatbot::Config config = initial.value(); ///< La vigente; cambia al guardar la configuración.
     std::string model;                       ///< Modelo del cliente; vacío sin configuración.
 
+    // Tema y fondo de config.json ("appearance"). Un valor desconocido usa
+    // el de por defecto y deja un aviso en la línea de estado.
+    std::string appearance_warning;
+    chatbot::cli::Appearance appearance;
+    if (const std::optional<std::string> path = chatbot::default_config_path()) {
+        const chatbot::Result<chatbot::AppearanceValues> saved =
+            chatbot::load_appearance_values(*path);
+        if (saved.is_ok()) {
+            appearance = chatbot::cli::resolve_appearance(
+                saved.value().theme, saved.value().background, &appearance_warning);
+        } else {
+            appearance_warning = saved.error().message;
+        }
+    }
+    /// Con lo que se dibuja todo; cambia al guardar la apariencia.
+    chatbot::cli::Palette palette{appearance};
+
     // El orden de declaración importa: se destruyen en orden inverso. El
     // runner se destruye antes que screen y client (cancela y hace join del
     // hilo, que usa ambos); igual el cargador de modelos, que une sus hilos.
@@ -202,7 +220,7 @@ int main() {
     std::size_t last_dropped = 0;
     chatbot::cli::Sidebar sidebar;
     sidebar.open(store.list(), conversation.id());
-    std::string flash; ///< Aviso de la línea de estado hasta la siguiente tecla.
+    std::string flash = appearance_warning; ///< Aviso de la línea de estado hasta la siguiente tecla.
     // Barra lateral: visible al arrancar si la terminal es ancha. Si el ancho
     // la ocultó, el ancho la vuelve a mostrar; si la ocultó Ctrl+B, no.
     bool last_wide = ftxui::Terminal::Size().dimx >= chatbot::cli::kSidebarMinTerminal;
@@ -297,9 +315,9 @@ int main() {
     ftxui::InputOption input_option;
     input_option.multiline = false;
     // Sin el fondo invertido del transform por defecto (ver input_style.h).
-    input_option.transform = [](ftxui::InputState state) {
+    input_option.transform = [&palette](ftxui::InputState state) {
         return chatbot::cli::input_transform(std::move(state.element), state.hovered,
-                                             state.focused, state.is_placeholder);
+                                             state.focused, state.is_placeholder, palette);
     };
     input_option.on_enter = [&] {
         send();
@@ -311,7 +329,7 @@ int main() {
 
     // Pantalla de configuración. Al cerrarse, vuelve la conversación.
     chatbot::cli::SettingsScreen settings(
-        models_loader,
+        models_loader, palette,
         [&](const chatbot::cli::ProviderSettings& form) -> std::optional<std::string> {
             const std::optional<std::string> config_path = chatbot::default_config_path();
             const std::optional<std::string> credentials_path =
@@ -346,6 +364,24 @@ int main() {
             conversation.add_notice("Ahora se usa " + model + " de " + form.provider_label() +
                                     ".");
             scroll.to_bottom();
+            return std::nullopt;
+        },
+        [&](const chatbot::cli::Appearance& chosen) -> std::optional<std::string> {
+            const std::optional<std::string> config_path = chatbot::default_config_path();
+            if (!config_path.has_value()) {
+                return "No se encontró la carpeta de configuración (define HOME o "
+                       "XDG_CONFIG_HOME).";
+            }
+            const chatbot::AppearanceValues values{
+                std::string{chosen.theme->id},
+                std::string{chatbot::cli::background_id(chosen.background)}};
+            if (const auto error = chatbot::save_appearance(*config_path, values)) {
+                return error->message;
+            }
+            // Se aplica sin reiniciar: la caché del historial se invalida
+            // sola (su llave incluye el tema y el fondo).
+            appearance = chosen;
+            palette = chatbot::cli::Palette{appearance};
             return std::nullopt;
         },
         [&] {
@@ -397,7 +433,7 @@ int main() {
         right_tab = 1;
         settings.open(chatbot::cli::ProviderSettings(values.value(), credentials.value(),
                                                      std::move(env)),
-                      config, std::move(notice));
+                      config, appearance, std::move(notice));
     };
 
     // Ejecuta lo que pidió la barra de conversaciones.
@@ -485,7 +521,7 @@ int main() {
         const std::vector<chatbot::cli::SidebarRow> rows = sidebar.rows(today());
         sidebar.fit(rows, sidebar_rows_visible());
         return chatbot::cli::render_sidebar(sidebar, rows, split_size,
-                                            ftxui::Terminal::Size().dimy, focused) |
+                                            ftxui::Terminal::Size().dimy, focused, palette) |
                ftxui::reflect(sidebar_box);
     });
 
@@ -493,7 +529,9 @@ int main() {
         // El historial ocupa el ancho que deja la barra (más su divisor y un
         // espacio de separación).
         const int width = ftxui::Terminal::Size().dimx - (sidebar_visible ? split_size + 2 : 0);
-        ftxui::Element body = scroll.apply(history.render(conversation.entries(), width));
+        ftxui::Element body =
+            scroll.apply(history.render(conversation.entries(), width, palette));
+        const ftxui::Decorator notice = palette.ink(&chatbot::cli::Theme::notice);
 
         ftxui::Elements status;
         if (sidebar_visible && sidebar_panel->Focused()) {
@@ -502,7 +540,7 @@ int main() {
             } else if (flash.empty() && !busy()) {
                 // La ayuda solo si no hay otro aviso: juntos no caben.
                 status.push_back(
-                    ftxui::text("Enter abre · Supr borra · Esc vuelve a la caja") | ftxui::dim);
+                    ftxui::text("Enter abre · Supr borra · Esc vuelve a la caja") | notice);
             }
         }
         if (!flash.empty()) {
@@ -520,7 +558,7 @@ int main() {
         if (last_dropped > 0) {
             status.push_back(ftxui::text("Se omitieron " + std::to_string(last_dropped) +
                                          " mensajes antiguos para no exceder el límite.") |
-                             ftxui::dim);
+                             notice);
         }
         ftxui::Elements status_line;
         for (ftxui::Element& item : status) {
@@ -543,12 +581,14 @@ int main() {
         ftxui::Element content = ftxui::vbox({
             // Si no cabe, se encoge el título y el aviso de teclas queda entero.
             ftxui::hbox({ftxui::text(title) | ftxui::bold | ftxui::flex_shrink, ftxui::filler(),
-                         ftxui::text(" Ctrl+B barra · Ctrl+O conversaciones") | ftxui::dim}),
+                         ftxui::text(" Ctrl+B barra · Ctrl+O conversaciones") | notice}),
             std::move(body),
-            ftxui::separator(),
+            ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
             ftxui::hbox(std::move(status_line)),
             // El prompt en negritas marca la caja sin un bloque de color.
-            ftxui::hbox({ftxui::text("> ") | ftxui::bold, input->Render() | ftxui::flex}),
+            ftxui::hbox({ftxui::text("> ") | ftxui::bold |
+                             palette.ink(&chatbot::cli::Theme::user_label),
+                         input->Render() | ftxui::flex}),
         });
         if (sidebar_visible) {
             // Un espacio entre el borde de la barra y la conversación.
@@ -572,7 +612,7 @@ int main() {
     split_option.direction = ftxui::Direction::Left;
     split_option.main_size = &split_size;
     split_option.separator_func = [&] {
-        return sidebar_visible ? chatbot::cli::sidebar_divider() : ftxui::emptyElement();
+        return sidebar_visible ? chatbot::cli::sidebar_divider(palette) : ftxui::emptyElement();
     };
     split_option.min = &split_min;
     split_option.max = &split_max;
@@ -614,7 +654,8 @@ int main() {
         } else {
             split_size = 0;
         }
-        return split->Render();
+        // Fondo y texto del tema en toda la pantalla (Palette::base).
+        return split->Render() | palette.base();
     });
 
     // Ctrl+C se maneja aquí: con el manejo por defecto, FTXUI restaura la

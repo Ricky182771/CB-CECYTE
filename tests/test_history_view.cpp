@@ -38,7 +38,7 @@ std::string screen_text(const ftxui::Screen& screen) {
 }
 
 std::string draw(HistoryView& view, const std::vector<Entry>& entries, int width) {
-    ftxui::Element element = view.render(entries, width);
+    ftxui::Element element = view.render(entries, width, chatbot::cli::terminal_palette());
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                                  ftxui::Dimension::Fit(element, true));
     ftxui::Render(screen, element);
@@ -82,28 +82,28 @@ TEST_CASE("historial: solo vuelve a parsear lo que cambió", "[historial]") {
     HistoryView view;
     std::vector<Entry> entries{make(EntryKind::User, "pregunta"),
                                make(EntryKind::Assistant, "respuesta **uno**")};
-    (void)view.render(entries, 80);
+    (void)view.render(entries, 80, chatbot::cli::terminal_palette());
     CHECK(view.parse_count() == 1); // Solo las del asistente se parsean.
-    (void)view.render(entries, 80);
+    (void)view.render(entries, 80, chatbot::cli::terminal_palette());
     CHECK(view.draw_count() == 2); // El segundo cuadro reusa lo dibujado.
-    (void)view.render(entries, 40); // Otro ancho: el árbol sirve igual.
+    (void)view.render(entries, 40, chatbot::cli::terminal_palette()); // Otro ancho: el árbol sirve igual.
     CHECK(view.parse_count() == 1);
     CHECK(view.draw_count() == 4);
 
     // Llega más texto del flujo: solo esa entrada se parsea de nuevo.
     entries.push_back(make(EntryKind::User, "otra"));
     entries.push_back(make(EntryKind::Assistant, "parcial"));
-    (void)view.render(entries, 80);
+    (void)view.render(entries, 80, chatbot::cli::terminal_palette());
     CHECK(view.parse_count() == 2);
     entries.back().text += " y más";
-    (void)view.render(entries, 80);
+    (void)view.render(entries, 80, chatbot::cli::terminal_palette());
     CHECK(view.parse_count() == 3);
 
     // Otra conversación con menos entradas: lo que cambió se parsea.
     const std::vector<Entry> other{make(EntryKind::Assistant, "distinta")};
-    (void)view.render(other, 80);
+    (void)view.render(other, 80, chatbot::cli::terminal_palette());
     CHECK(view.parse_count() == 4);
-    (void)view.render(other, 80);
+    (void)view.render(other, 80, chatbot::cli::terminal_palette());
     CHECK(view.parse_count() == 4);
 }
 
@@ -133,7 +133,7 @@ TEST_CASE("historial: cuadro con 100 entradas y unos 200 KB", "[historial][desem
     const auto frame = [&](HistoryView& view) {
         const auto start = std::chrono::steady_clock::now();
         // Como en la interfaz: historial dentro de un frame vertical de 40 líneas.
-        ftxui::Element element = view.render(entries, 100) | ftxui::focusPositionRelative(0.f, 1.f) |
+        ftxui::Element element = view.render(entries, 100, chatbot::cli::terminal_palette()) | ftxui::focusPositionRelative(0.f, 1.f) |
                                  ftxui::yframe;
         ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(100),
                                                      ftxui::Dimension::Fixed(40));
@@ -156,7 +156,7 @@ TEST_CASE("historial: cuadro con 100 entradas y unos 200 KB", "[historial][desem
     entries.front().text += " ";
     const auto resize_start = std::chrono::steady_clock::now();
     {
-        ftxui::Element element = view.render(entries, 80) | ftxui::yframe;
+        ftxui::Element element = view.render(entries, 80, chatbot::cli::terminal_palette()) | ftxui::yframe;
         ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(80),
                                                      ftxui::Dimension::Fixed(40));
         ftxui::Render(screen, element);
@@ -187,7 +187,7 @@ TEST_CASE("historial: los bordes no se fusionan con lo que lo rodea", "[historia
     // "│" no debe convertir el separador en "┴".
     HistoryView view;
     ftxui::Element element =
-        ftxui::vbox({view.render({make(EntryKind::Assistant, "> cita")}, 20), ftxui::separator()});
+        ftxui::vbox({view.render({make(EntryKind::Assistant, "> cita")}, 20, chatbot::cli::terminal_palette()), ftxui::separator()});
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(20),
                                                  ftxui::Dimension::Fit(element, true));
     ftxui::Render(screen, element);
@@ -205,7 +205,7 @@ TEST_CASE("historial: el estilo de etiquetas y texto plano no se estira", "[hist
     ftxui::Element element = view.render({make(EntryKind::User, "hola"), cancelled, noted,
                                           make(EntryKind::Error, "Falló la conexión."),
                                           make(EntryKind::Notice, "Aviso corto.")},
-                                         40);
+                                         40, chatbot::cli::terminal_palette());
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40),
                                                  ftxui::Dimension::Fit(element, true));
     ftxui::Render(screen, element);

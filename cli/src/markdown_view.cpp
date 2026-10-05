@@ -21,7 +21,8 @@ struct Look {
     bool italic = false;
     bool underline = false;
     bool strike = false;
-    bool dim = false;
+    bool muted = false;        ///< Texto secundario (URL entre paréntesis).
+    bool table_border = false; ///< Líneas de una tabla.
     bool highlight = false;
     bool code = false;
     bool accent = false; ///< Subtítulos H3-H6.
@@ -35,7 +36,8 @@ Look merge(Look look, const Look& base) {
     look.italic = look.italic || base.italic;
     look.underline = look.underline || base.underline;
     look.strike = look.strike || base.strike;
-    look.dim = look.dim || base.dim;
+    look.muted = look.muted || base.muted;
+    look.table_border = look.table_border || base.table_border;
     look.highlight = look.highlight || base.highlight;
     look.code = look.code || base.code;
     look.accent = look.accent || base.accent;
@@ -135,7 +137,7 @@ std::vector<Atom> atoms_of(const Block& block, const Look& base) {
         const Link& link = block.links[static_cast<std::size_t>(index)];
         if (!link.autolink && !link.url.empty() && link_text != link.url) {
             Look look = base;
-            look.dim = true;
+            look.muted = true;
             push_space(atoms, look);
             look.link = link.url;
             push_words(atoms, "(" + link.url + ")", look);
@@ -174,11 +176,11 @@ std::vector<Atom> atoms_of(const Block& block, const Look& base) {
         case Run::Kind::Image: {
             push_words(atoms, run.text.empty() ? "[imagen]" : "[imagen: " + run.text + "]", look);
             if (!run.url.empty()) {
-                Look dim = base;
-                dim.dim = true;
-                push_space(atoms, dim);
-                dim.link = run.url;
-                push_words(atoms, "(" + run.url + ")", dim);
+                Look muted = base;
+                muted.muted = true;
+                push_space(atoms, muted);
+                muted.link = run.url;
+                push_words(atoms, "(" + run.url + ")", muted);
             }
             break;
         }
@@ -337,7 +339,7 @@ int count_lines(const std::vector<Atom>& atoms, std::vector<Measure>& measures, 
     return sink.lines;
 }
 
-Element decorate(Element element, const Look& look) {
+Element decorate(Element element, const Look& look, const Palette& palette) {
     if (look.bold) {
         element = ftxui::bold(std::move(element));
     }
@@ -350,18 +352,23 @@ Element decorate(Element element, const Look& look) {
     if (look.strike) {
         element = ftxui::strikethrough(std::move(element));
     }
-    if (look.dim) {
-        element = ftxui::dim(std::move(element));
+    // Cada decorador envuelve a los anteriores: el color del de más adentro
+    // gana (por ejemplo, el del código dentro de un resaltado).
+    if (look.muted) {
+        element = palette.ink(&Theme::notice)(std::move(element));
+    } else if (!look.link.empty()) {
+        element = palette.ink(&Theme::link)(std::move(element));
     }
-    if (look.code || look.accent) {
-        // Cian de la paleta de 16 colores: cada tema de terminal lo ajusta
-        // para que se lea sobre su fondo, claro u oscuro.
-        element = ftxui::color(ftxui::Color::Cyan, std::move(element));
+    if (look.table_border) {
+        element = palette.ink(&Theme::table_border)(std::move(element));
+    }
+    if (look.code) {
+        element = palette.ink(&Theme::inline_code)(std::move(element));
+    } else if (look.accent) {
+        element = palette.ink(&Theme::heading_accent)(std::move(element));
     }
     if (look.highlight) {
-        // Texto negro sobre amarillo: se lee en temas claros y oscuros.
-        element = ftxui::bgcolor(ftxui::Color::Yellow,
-                                 ftxui::color(ftxui::Color::Black, std::move(element)));
+        element = palette.highlight()(std::move(element));
     }
     if (!look.link.empty()) {
         element = ftxui::hyperlink(hyperlink_target(look.link), std::move(element));
@@ -374,14 +381,15 @@ Element decorate(Element element, const Look& look) {
 /// decorado suelto llevaría el subrayado, el tachado, el fondo o el enlace
 /// hasta el borde. Dentro del hbox cada text mide solo lo que su contenido.
 /// style (opcional) se aplica a cada tramo, nunca al relleno.
-Element line_element(const Line& line, const ftxui::Decorator& style = {}) {
+Element line_element(const Line& line, const Palette& palette,
+                     const ftxui::Decorator& style = {}) {
     if (line.segments.empty()) {
         return ftxui::text("");
     }
     Elements parts;
     parts.reserve(line.segments.size());
     for (const Segment& segment : line.segments) {
-        Element part = decorate(ftxui::text(segment.text), segment.look);
+        Element part = decorate(ftxui::text(segment.text), segment.look, palette);
         if (style) {
             part = style(std::move(part));
         }
@@ -390,11 +398,12 @@ Element line_element(const Line& line, const ftxui::Decorator& style = {}) {
     return ftxui::hbox(std::move(parts));
 }
 
-Element lines_element(const std::vector<Line>& lines, const ftxui::Decorator& style = {}) {
+Element lines_element(const std::vector<Line>& lines, const Palette& palette,
+                      const ftxui::Decorator& style = {}) {
     Elements rows;
     rows.reserve(lines.size());
     for (const Line& line : lines) {
-        rows.push_back(line_element(line, style));
+        rows.push_back(line_element(line, palette, style));
     }
     return ftxui::vbox(std::move(rows));
 }
@@ -412,6 +421,23 @@ std::string repeat(std::string_view piece, int count) {
         out += piece;
     }
     return out;
+}
+
+/// Campo del tema con el color de un tipo de alerta.
+ThemeColor Theme::*alert_ink(const std::string& type) {
+    if (type == "tip") {
+        return &Theme::alert_tip;
+    }
+    if (type == "important") {
+        return &Theme::alert_important;
+    }
+    if (type == "warning") {
+        return &Theme::alert_warning;
+    }
+    if (type == "caution") {
+        return &Theme::alert_caution;
+    }
+    return &Theme::alert_note;
 }
 
 std::string alert_label(const std::string& type) {
@@ -441,6 +467,8 @@ int column_floor(int natural) { return std::clamp(natural, 1, kMinColumn); }
 
 class Renderer {
 public:
+    explicit Renderer(const Palette& palette) : palette_(palette) {}
+
     Element blocks(const std::vector<Block>& list, int width, bool spaced) {
         Elements rows;
         for (const Block& block : list) {
@@ -467,20 +495,25 @@ private:
             // fondos translúcidos.
             base.accent = block.level >= 3;
             if (block.level < 3) {
-                return lines_element(flow(atoms_of(block, base), width));
+                return lines_element(flow(atoms_of(block, base), width), palette_);
             }
             return subheading(block, base, width);
         }
         case Block::Kind::Quote:
-            return with_bar(blocks(block.children, width - 2, true));
+            return with_bar(blocks(block.children, width - 2, true), &Theme::quote_bar);
         case Block::Kind::Alert: {
+            // La etiqueta y la barra en el color del tipo de alerta; si el
+            // tema no le da color, la barra va como la de una cita.
+            ThemeColor Theme::*ink = alert_ink(block.info);
+            const bool colored = (palette_.theme().*ink).kind != ThemeColor::Kind::None;
             Elements rows;
             // En un hbox para que las negritas no se estiren con el vbox.
-            rows.push_back(ftxui::hbox({ftxui::bold(ftxui::text(alert_label(block.info)))}));
+            rows.push_back(ftxui::hbox(
+                {palette_.ink(ink)(ftxui::bold(ftxui::text(alert_label(block.info))))}));
             if (!block.children.empty()) {
                 rows.push_back(blocks(block.children, width - 2, true));
             }
-            return with_bar(ftxui::vbox(std::move(rows)));
+            return with_bar(ftxui::vbox(std::move(rows)), colored ? ink : &Theme::quote_bar);
         }
         case Block::Kind::BulletList:
         case Block::Kind::OrderedList:
@@ -490,7 +523,7 @@ private:
         case Block::Kind::Code:
             return code(block, width);
         case Block::Kind::Rule:
-            return ftxui::separator();
+            return ftxui::separator() | palette_.ink(&Theme::border);
         case Block::Kind::Table:
             return table(block, width);
         case Block::Kind::FootnoteDef:
@@ -500,7 +533,7 @@ private:
         case Block::Kind::Paragraph:
             break;
         }
-        return lines_element(flow(atoms_of(block, Look{}), width));
+        return lines_element(flow(atoms_of(block, Look{}), width), palette_);
     }
 
     /// H3-H6: la marca "▍ " con el estilo del título, para que se distingan
@@ -508,7 +541,7 @@ private:
     /// título ocupa varias líneas, las siguientes llevan una sangría del
     /// ancho de la marca, alineadas con el texto. Solo es dibujo: el árbol
     /// (y lo que se guarda o se manda a la API) no cambia.
-    static Element subheading(const Block& block, const Look& base, int width) {
+    Element subheading(const Block& block, const Look& base, int width) const {
         static const std::string kMark = "▍ ";
         const int mark_width = ftxui::string_width(kMark);
         std::vector<Line> lines;
@@ -524,12 +557,12 @@ private:
             }
             lines.push_back(std::move(line));
         }
-        return lines_element(lines);
+        return lines_element(lines, palette_);
     }
 
-    /// Barra "│ " tenue a la izquierda, del alto del contenido.
-    static Element with_bar(Element content) {
-        return ftxui::hbox({ftxui::dim(ftxui::separatorLight()), ftxui::text(" "),
+    /// Barra "│ " a la izquierda (en el color bar), del alto del contenido.
+    Element with_bar(Element content, ThemeColor Theme::*bar) const {
+        return ftxui::hbox({ftxui::separatorLight() | palette_.ink(bar), ftxui::text(" "),
                             std::move(content)});
     }
 
@@ -576,7 +609,7 @@ private:
         return ftxui::vbox(std::move(rows));
     }
 
-    static Element code(const Block& block, int width) {
+    Element code(const Block& block, int width) const {
         // El marco y un espacio de margen a cada lado ocupan cuatro columnas.
         const int inner = std::max(width - 4, 1);
         std::vector<Line> lines;
@@ -603,12 +636,17 @@ private:
             }
             rest.remove_prefix(end + 1);
         }
-        Element content = ftxui::hbox(
-            {ftxui::text(" "), ftxui::flex(lines_element(lines)), ftxui::text(" ")});
+        Element content = ftxui::hbox({ftxui::text(" "),
+                                       ftxui::flex(lines_element(lines, palette_)),
+                                       ftxui::text(" ")}) |
+                          palette_.inside_border();
         if (block.info.empty()) {
-            return ftxui::borderRounded(std::move(content));
+            return ftxui::borderRounded(std::move(content)) | palette_.ink(&Theme::border);
         }
-        return ftxui::window(ftxui::dim(ftxui::text(" " + block.info + " ")), std::move(content));
+        Element title = ftxui::text(" " + block.info + " ") | palette_.inside_border() |
+                        palette_.ink(&Theme::notice);
+        return ftxui::window(std::move(title), std::move(content)) |
+               palette_.ink(&Theme::border);
     }
 
     Element footnote(const Block& block, int width) {
@@ -682,12 +720,12 @@ private:
             }
             Line line;
             Look look;
-            look.dim = true;
+            look.table_border = true;
             line.append(text, look);
             lines.push_back(std::move(line));
         };
         Look border;
-        border.dim = true;
+        border.table_border = true;
         std::vector<std::vector<std::vector<Line>>> wrapped(cells.size());
         bool multiline = false;
         for (std::size_t r = 0; r < cells.size(); ++r) {
@@ -731,7 +769,7 @@ private:
             }
         }
         rule("└", "┴", "┘");
-        return lines_element(lines);
+        return lines_element(lines, palette_);
     }
 
     /// Reparte el ancho de las columnas para que la tabla mida lo menos
@@ -921,13 +959,13 @@ private:
     }
 
     /// Tabla demasiado ancha: una tarjeta por fila con "Encabezado: valor".
-    static Element cards(const Block& block,
-                         const std::vector<std::vector<std::vector<Atom>>>& cells, int width) {
+    Element cards(const Block& block, const std::vector<std::vector<std::vector<Atom>>>& cells,
+                  int width) const {
         Elements rows;
         const std::size_t first = block.header_rows > 0 ? block.header_rows : 0;
         for (std::size_t r = first; r < cells.size(); ++r) {
             if (!rows.empty()) {
-                rows.push_back(ftxui::dim(ftxui::separatorLight()));
+                rows.push_back(ftxui::separatorLight() | palette_.ink(&Theme::table_border));
             }
             for (std::size_t c = 0; c < cells[r].size(); ++c) {
                 std::vector<Atom> atoms;
@@ -947,17 +985,18 @@ private:
                 }
                 push_space(atoms, Look{});
                 atoms.insert(atoms.end(), cells[r][c].begin(), cells[r][c].end());
-                rows.push_back(lines_element(flow(atoms, width)));
+                rows.push_back(lines_element(flow(atoms, width), palette_));
             }
         }
         if (rows.empty()) { // Solo encabezado: también se muestra.
             for (std::size_t c = 0; c < cells.front().size(); ++c) {
-                rows.push_back(lines_element(flow(cells.front()[c], width)));
+                rows.push_back(lines_element(flow(cells.front()[c], width), palette_));
             }
         }
         return ftxui::vbox(std::move(rows));
     }
 
+    const Palette& palette_;
     int bullet_depth_ = 0;
 };
 
@@ -987,12 +1026,13 @@ std::string hyperlink_target(std::string_view url) {
 Element render_plain(std::string_view text, int width, const ftxui::Decorator& style) {
     std::vector<Atom> atoms;
     push_words(atoms, sanitize(text), Look{}, false);
-    return lines_element(flow(atoms, std::max(width, 1)), style);
+    // Sin Look, la paleta no se usa.
+    return lines_element(flow(atoms, std::max(width, 1)), terminal_palette(), style);
 }
 
-Element render(const Document& document, int width) {
+Element render(const Document& document, int width, const Palette& palette) {
     width = std::max(width, 1);
-    Renderer renderer;
+    Renderer renderer(palette);
     Element body = renderer.blocks(document.blocks, width, true);
     if (document.footnotes.empty()) {
         return body;
@@ -1002,7 +1042,7 @@ Element render(const Document& document, int width) {
         rows.push_back(std::move(body));
         rows.push_back(ftxui::text(""));
     }
-    rows.push_back(ftxui::separator());
+    rows.push_back(ftxui::separator() | palette.ink(&Theme::border));
     rows.push_back(renderer.blocks(document.footnotes, width, false));
     return ftxui::vbox(std::move(rows));
 }

@@ -72,32 +72,39 @@ const md::Document& HistoryView::document_for(Cached& cached, const std::string&
     return cached.document;
 }
 
-ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, int width) {
+ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, int width,
+                                          const Palette& palette) {
+    const ftxui::Decorator notice = palette.ink(&Theme::notice);
     switch (entry.kind) {
     case EntryKind::User:
-        return ftxui::vbox({label(ftxui::text("Tú:") | ftxui::bold), md::render_plain(entry.text, width)});
+        return ftxui::vbox(
+            {label(ftxui::text("Tú:") | ftxui::bold | palette.ink(&Theme::user_label)),
+             md::render_plain(entry.text, width)});
     case EntryKind::Assistant: {
-        ftxui::Elements lines{label(ftxui::text("Asistente:") | ftxui::bold),
-                              md::render(document_for(cached, entry.text), width)};
+        ftxui::Elements lines{
+            label(ftxui::text("Asistente:") | ftxui::bold | palette.ink(&Theme::assistant_label)),
+            md::render(document_for(cached, entry.text), width, palette)};
         if (entry.cancelled) {
-            lines.push_back(label(ftxui::text("(cancelada)") | ftxui::dim));
+            lines.push_back(label(ftxui::text("(cancelada)") | notice));
         } else if (entry.incomplete) {
-            lines.push_back(label(ftxui::text("(respuesta incompleta)") | ftxui::dim));
+            lines.push_back(label(ftxui::text("(respuesta incompleta)") | notice));
         } else if (!entry.note.empty()) {
-            lines.push_back(md::render_plain(entry.note, width, ftxui::dim));
+            lines.push_back(md::render_plain(entry.note, width, notice));
         }
         return ftxui::vbox(std::move(lines));
     }
     case EntryKind::Error:
-        return md::render_plain(entry.text, width, ftxui::color(ftxui::Color::Red));
+        return md::render_plain(entry.text, width, palette.ink(&Theme::error));
     case EntryKind::Notice:
-        return md::render_plain(entry.text, width, ftxui::dim);
+        return md::render_plain(entry.text, width, notice);
     }
     return ftxui::text("");
 }
 
-ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width) {
+ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
+                                   const Palette& palette) {
     width = std::max(width, 1);
+    const std::string palette_key = palette.key();
     // Si cambió la conversación, las entradas se comparan por contenido: las
     // iguales se reusan y las demás se vuelven a dibujar.
     cache_.resize(entries.size());
@@ -106,8 +113,11 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width)
     for (std::size_t i = 0; i < entries.size(); ++i) {
         Cached& cached = cache_[i];
         const Entry& entry = entries[i];
-        if (!cached.image || cached.width != width || !same_entry(cached.drawn, entry)) {
-            ftxui::Element element = entry_element(cached, entry, width);
+        if (!cached.image || cached.width != width || cached.palette_key != palette_key ||
+            !same_entry(cached.drawn, entry)) {
+            // Con el fondo y el texto de la paleta: Picture copia las celdas
+            // tal cual, también su fondo.
+            ftxui::Element element = entry_element(cached, entry, width, palette) | palette.base();
             // El ajuste de líneas es propio (sin flexbox), así que el alto
             // mínimo es el alto final: no hace falta Dimension::Fit.
             element->ComputeRequirement();
@@ -116,6 +126,7 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width)
             ftxui::Render(*image, element);
             cached.image = std::move(image);
             cached.width = width;
+            cached.palette_key = palette_key;
             cached.drawn = entry;
             ++draw_count_;
         }
