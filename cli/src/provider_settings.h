@@ -108,7 +108,9 @@ public:
     /// base con la URL, la key y el modelo efectivos del formulario.
     [[nodiscard]] Config request_config(Config base) const;
     /// Error para mostrar si no se puede guardar (URL, key o modelo), o
-    /// nullopt.
+    /// nullopt. Una key escrita que empieza con "$", trae espacios o saltos
+    /// de línea, o mide menos de 20 caracteres se rechaza (el mensaje nunca
+    /// la incluye).
     [[nodiscard]] std::optional<std::string> validate() const;
     /// Lo que se escribe en config.json. Con CHAT_MODEL definida se
     /// conserva el modelo guardado.

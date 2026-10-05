@@ -2,11 +2,25 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
+#include <string_view>
 #include <utility>
 
 namespace chatbot::cli {
 
 namespace {
+
+/// Largo mínimo de una key escrita en el formulario.
+constexpr std::size_t kMinKeyLength = 20;
+
+/// false si la key escrita parece el nombre de una variable ("$NIMKEY"),
+/// trae espacios o saltos de línea, o es demasiado corta para ser completa.
+bool plausible_key(std::string_view key) {
+    if (key.size() < kMinKeyLength || key.front() == '$') {
+        return false;
+    }
+    return key.find_first_of(" \t\n\r\v\f") == std::string_view::npos;
+}
 
 std::string lowercase(std::string_view text) {
     std::string out{text};
@@ -248,6 +262,10 @@ std::optional<std::string> ProviderSettings::validate() const {
     }
     if (const std::optional<ChatError> error = validate_base_url(url)) {
         return error->message;
+    }
+    // El mensaje nunca incluye la key.
+    if (!key_locked() && !key_.empty() && !plausible_key(key_)) {
+        return "Eso parece el nombre de una variable o una key incompleta; pega la key completa.";
     }
     if (effective_key().empty() && !is_local_base_url(url)) {
         return "Falta la API key de " + provider_label() + ".";

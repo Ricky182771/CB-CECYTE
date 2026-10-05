@@ -75,7 +75,7 @@ La forma más fácil es la pantalla de configuración: ábrela con **F2** o con 
 
 "No confirmada" no quiere decir que falle: el chatbot la pide igual y, si falla, te deja escribir el modelo.
 
-**Dónde se guarda la key:** en `~/.config/chatbot/credentials.json` (o `$XDG_CONFIG_HOME/chatbot/credentials.json`), una por proveedor (y una por URL en los personalizados). El archivo se escribe con permisos 0600 y su carpeta con 0700. Si alguien le abre los permisos (grupo u otros), el chatbot no lo lee y te pide correr `chmod 600` sobre él. La key nunca va en `config.json`, en los volcados de depuración ni en las conversaciones guardadas. No copies `credentials.json` al repositorio (está en `.gitignore`).
+**Dónde se guarda la key:** en `~/.config/chatbot/credentials.json` (o `$XDG_CONFIG_HOME/chatbot/credentials.json`), una por proveedor (y una por URL en los personalizados). El archivo se escribe con permisos 0600 y su carpeta con 0700. Si alguien le abre los permisos (grupo u otros), el chatbot no lo lee y te pide correr `chmod 600` sobre él. Al guardar, una key que empieza con `$`, trae espacios o saltos de línea, o mide menos de 20 caracteres no se guarda: suele ser el nombre de una variable (`$NIMKEY`) o una key cortada al copiarla. La key nunca va en `config.json`, en los volcados de depuración ni en las conversaciones guardadas. No copies `credentials.json` al repositorio (está en `.gitignore`).
 
 **Servidor local (Ollama, llama.cpp…):** elige `Ollama (local)` o `Personalizado…` con una URL como `http://localhost:8080/v1`. Solo se acepta `http://` para `localhost`, `127.0.0.1` o `[::1]` (cualquier puerto), y ahí la key es opcional; cualquier otro servidor necesita `https://`, para que la key y la conversación no viajen sin cifrar.
 
