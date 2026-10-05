@@ -234,3 +234,46 @@ TEST_CASE("ajustes: cambios sin guardar y validación", "[proveedor][ajustes]") 
     REQUIRE(settings.validate().has_value());
     CHECK_THAT(*settings.validate(), Catch::Matchers::ContainsSubstring("https://"));
 }
+
+TEST_CASE("ajustes: una key que parece variable o incompleta no se guarda",
+          "[proveedor][ajustes]") {
+    const std::string kMessage =
+        "Eso parece el nombre de una variable o una key incompleta; pega la key completa.";
+    ProviderSettings settings(saved("nvidia", "https://integrate.api.nvidia.com/v1", "m"),
+                              credentials_with("nvidia", kSecret), {});
+    const std::string rejected[] = {
+        "$NIMKEY",
+        "  ",
+        "abc",
+        "$" + std::string(40, 'a'),                     // Larga, pero empieza con "$".
+        std::string(30, 'a') + " " + std::string(5, 'b'), // Con un espacio.
+        std::string(30, 'a') + "\n",                    // Con un salto de línea.
+        std::string(19, 'k'),                           // Un carácter menos del mínimo.
+    };
+    for (const std::string& key : rejected) {
+        INFO("largo " << key.size());
+        settings.set_key(key);
+        const std::optional<std::string> error = settings.validate();
+        REQUIRE(error.has_value());
+        CHECK(*error == kMessage); // Nunca incluye el valor.
+    }
+
+    const std::string accepted[] = {std::string(70, 'x'), "nvapi-" + std::string(64, 'Z'),
+                                    std::string(20, 'k')};
+    for (const std::string& key : accepted) {
+        INFO("largo " << key.size());
+        settings.set_key(key);
+        CHECK_FALSE(settings.validate().has_value());
+    }
+
+    // Sin key escrita se conserva la guardada: no se valida.
+    settings.set_key("");
+    CHECK_FALSE(settings.validate().has_value());
+    // Con CHAT_API_KEY definida, la del formulario no cuenta.
+    SettingsEnv env;
+    env.api_key = "$EN_EL_ENTORNO";
+    ProviderSettings locked(saved("nvidia", "https://integrate.api.nvidia.com/v1", "m"),
+                            credentials_with("nvidia", kSecret), env);
+    CHECK_FALSE(locked.set_key("abc"));
+    CHECK_FALSE(locked.validate().has_value());
+}
