@@ -87,6 +87,7 @@ private:
     Appearance saved_appearance_; ///< El vigente al abrir (o al guardar).
     std::string status_;          ///< Aviso o error bajo el formulario.
     bool confirm_discard_ = false; ///< Se preguntó "¿Descartar los cambios?".
+    bool no_color_ = false;
 
     // Lo que editan los componentes.
     std::vector<std::string> category_names_;
@@ -102,6 +103,8 @@ private:
     std::string key_text_;
     std::string filter_text_;
     std::string model_text_;
+    mutable std::vector<ftxui::Box> model_row_boxes_;
+    mutable ftxui::Box models_box_{0, -1, 0, -1};
 
     ftxui::Component categories_;
     ftxui::Component theme_list_;

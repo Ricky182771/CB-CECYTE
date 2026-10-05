@@ -1,5 +1,6 @@
 #include "conversation.h"
 #include "history_view.h"
+#include "performance.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -169,17 +170,10 @@ TEST_CASE("historial: cuadro con 100 entradas y unos 200 KB", "[historial][desem
                           << "la última respuesta cambiando " << streaming
                           << " ms; cambio de ancho " << resize << " ms");
     CHECK(view.parse_count() == 51);
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-    // Con sanitizadores solo se mide.
-#elif defined(__has_feature)
-#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer)
-    CHECK(steady < 50.0);
-    CHECK(streaming < 50.0);
-#endif
-#else
-    CHECK(steady < 50.0);
-    CHECK(streaming < 50.0);
-#endif
+    if (chatbot_test::strict_performance()) {
+        CHECK(steady < 50.0);
+        CHECK(streaming < 50.0);
+    }
 }
 
 TEST_CASE("historial: los bordes no se fusionan con lo que lo rodea", "[historial]") {

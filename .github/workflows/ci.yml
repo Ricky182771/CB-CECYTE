@@ -57,7 +57,11 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Pruebas
-        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+        run: |
+          if [ "${{ matrix.preset }}" = "release" ]; then
+            export CHATBOT_STRICT_PERF=1
+          fi
+          ctest --preset ${{ matrix.preset }} --output-on-failure
 
       # Sin CHAT_API_KEY el programa debe salir con código 1 y el error de
       # configuración, sin abrir la interfaz ni conectarse a nada.

@@ -2,6 +2,7 @@
 #include "chatbot/chat_client.h"
 #include "chatbot/sleeper.h"
 #include "fake_transport.hpp"
+#include "performance.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -58,7 +59,7 @@ TEST_CASE("CancelToken::wait_for devuelve true rápido si otro hilo cancela", "[
     token.cancel();
     REQUIRE(waiter.wait_for(kThreadTimeout) == std::future_status::ready);
     CHECK(waiter.get());
-    CHECK(Clock::now() - start < std::chrono::seconds{2});
+    chatbot_test::report_latency("CancelToken: cancelación", Clock::now() - start);
 }
 
 TEST_CASE("RealSleeper: sin cancelar completa la espera", "[cancelacion]") {
@@ -79,7 +80,7 @@ TEST_CASE("RealSleeper: la cancelación desde otro hilo interrumpe la espera",
     token.cancel();
     REQUIRE(waiter.wait_for(kThreadTimeout) == std::future_status::ready);
     CHECK_FALSE(waiter.get());
-    CHECK(Clock::now() - start < std::chrono::seconds{2});
+    chatbot_test::report_latency("RealSleeper: cancelación", Clock::now() - start);
 }
 
 TEST_CASE("complete: token cancelado antes de llamar no hace peticiones", "[cancelacion]") {

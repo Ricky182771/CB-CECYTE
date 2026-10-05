@@ -184,7 +184,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         ftxui::Maybe(model_input_, [this] { return settings_ && !settings_->model_locked(); }),
     });
     const ftxui::Component appearance_form = ftxui::Container::Vertical({
-        theme_list_,
+        ftxui::Maybe(theme_list_, [this] { return !no_color_; }),
         // Con un tema sin fondo propio, el fondo no aplica: no toma el foco.
         ftxui::Maybe(background_list_, [this] { return background_enabled(); }),
     });
@@ -202,6 +202,10 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
                           std::string notice) {
     settings_ = std::move(settings);
     base_ = std::move(base);
+    no_color_ = no_color_enabled();
+    if (no_color_) {
+        appearance = resolve_appearance("", "");
+    }
     saved_appearance_ = appearance;
     category_ = kProvider;
     theme_selected_ = 0;
@@ -234,13 +238,16 @@ Appearance SettingsScreen::chosen_appearance() const {
 }
 
 bool SettingsScreen::appearance_dirty() const {
+    if (no_color_) {
+        return false;
+    }
     const Appearance chosen = chosen_appearance();
     return chosen.theme != saved_appearance_.theme ||
            chosen.background != saved_appearance_.background;
 }
 
 bool SettingsScreen::background_enabled() const {
-    return has_own_background(themes()[static_cast<std::size_t>(theme_selected_)]);
+    return !no_color_ && has_own_background(themes()[static_cast<std::size_t>(theme_selected_)]);
 }
 
 bool SettingsScreen::request_close() {
@@ -327,7 +334,9 @@ void SettingsScreen::move_focus(int step) {
     // Las categorías, los campos de la categoría elegida y los botones.
     std::vector<ftxui::Component> order{categories_};
     if (category_ == kAppearance) {
-        order.push_back(theme_list_);
+        if (!no_color_) {
+            order.push_back(theme_list_);
+        }
         if (background_enabled()) {
             order.push_back(background_list_);
         }
@@ -388,6 +397,31 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
         move_focus(event == ftxui::Event::Tab ? 1 : -1);
         return true;
     }
+    if (category_ == kProvider && event.is_mouse() &&
+        settings_->models_state() == ModelsState::Loaded && !model_row_boxes_.empty()) {
+        auto mouse_event = event;
+        const auto& mouse = mouse_event.mouse();
+        if (models_box_.Contain(mouse.x, mouse.y)) {
+            if (mouse.button == ftxui::Mouse::WheelUp || mouse.button == ftxui::Mouse::WheelDown) {
+                filter_input_->TakeFocus();
+                settings_->move_highlight(mouse.button == ftxui::Mouse::WheelUp ? -1 : 1);
+                return true;
+            }
+            if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed) {
+                for (std::size_t i = 0; i < model_row_boxes_.size(); ++i) {
+                    if (model_row_boxes_[i].Contain(mouse.x, mouse.y)) {
+                        filter_input_->TakeFocus();
+                        settings_->move_highlight(static_cast<int>(i) -
+                                                   static_cast<int>(settings_->highlighted()));
+                        if (settings_->pick_highlighted()) {
+                            model_text_ = settings_->model();
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+    }
     if (category_ == kProvider && filter_input_->Focused()) {
         // Con el filtro, ↑/↓ (y PgUp/PgDn) mueven el resaltado de la lista.
         const std::pair<const ftxui::Event*, int> moves[] = {
@@ -407,6 +441,7 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
 }
 
 ftxui::Element SettingsScreen::render_models() const {
+    model_row_boxes_.clear();
     const ProviderSettings& s = *settings_;
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
     switch (s.models_state()) {
@@ -443,7 +478,8 @@ ftxui::Element SettingsScreen::render_models() const {
         }
     }
     // La lista tiene el foco mientras lo tiene el filtro: ↑/↓ mueven el cursor.
-    return choice_list(labels, s.highlighted(), chosen, filter_input_->Focused(), palette_);
+    return choice_list(labels, s.highlighted(), chosen, filter_input_->Focused(), palette_,
+                        &model_row_boxes_);
 }
 
 ftxui::Element SettingsScreen::render_provider() const {
@@ -492,13 +528,23 @@ ftxui::Element SettingsScreen::render_provider() const {
                      field_label("Filtrar:", filter_input_->Focused(), palette_),
                      ftxui::text(" "), filter_input_->Render() | ftxui::flex, ftxui::text(" "),
                      refresh_button_->Render()}),
-        render_models() | ftxui::flex,
+        render_models() | ftxui::flex | ftxui::reflect(models_box_),
         ftxui::hbox({label("Modelo", model_input_->Focused(), palette_), std::move(model)}),
     });
 }
 
 ftxui::Element SettingsScreen::render_appearance() const {
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
+    if (no_color_) {
+        return ftxui::vbox({
+            ftxui::text("Colores y Accesibilidad") | ftxui::bold,
+            ftxui::text(""),
+            ftxui::hbox({label("Tema", false, palette_), ftxui::text("De la terminal") | notice}),
+            ftxui::hbox({label("Fondo", false, palette_), ftxui::text("Transparente") | notice}),
+            ftxui::text("Desactivado por NO_COLOR") | notice,
+            ftxui::filler(),
+        });
+    }
     ftxui::Element background;
     if (background_enabled()) {
         background = background_list_->Render();

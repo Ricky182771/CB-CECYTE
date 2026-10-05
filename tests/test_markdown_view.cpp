@@ -1,5 +1,7 @@
 #include "markdown.h"
 #include "markdown_view.h"
+#include "performance.hpp"
+#include "table_fixture.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -522,30 +524,7 @@ TEST_CASE("vista: ninguna tabla pierde texto en ningún ancho", "[vista][tabla]"
 }
 
 TEST_CASE("vista: tiempo del reparto de ancho de tablas", "[vista][tabla][desempeno]") {
-    // Tabla grande: 10 columnas y 50 filas con textos de largos distintos.
-    std::string big = "|";
-    for (int c = 0; c < 10; ++c) {
-        big += " Columna " + std::to_string(c) + " |";
-    }
-    big += "\n|";
-    for (int c = 0; c < 10; ++c) {
-        big += "---|";
-    }
-    big += "\n";
-    const std::string words = "texto de relleno con palabras de largo variable para la celda ";
-    for (int r = 0; r < 50; ++r) {
-        big += "|";
-        for (int c = 0; c < 10; ++c) {
-            std::string cell;
-            const int repeat = 1 + (r * 7 + c * 3) % 6;
-            for (int k = 0; k < repeat; ++k) {
-                cell += words;
-            }
-            big += " " + cell + "|";
-        }
-        big += "\n";
-    }
-    const md::Document large = md::parse(big);
+    const md::Document large = md::parse(chatbot_test::table_10x50());
     const md::Document small = md::parse(read_data("tabla_reparto.md"));
     // El mejor de tres, para que una pausa de la máquina no cuente.
     const auto best_of_three = [](const auto& work) {
@@ -576,10 +555,39 @@ TEST_CASE("vista: tiempo del reparto de ancho de tablas", "[vista][tabla][desemp
     WARN("dibujo completo: tabla de prueba (117 col.) "
          << dibujo(small, 117) << " ms; tabla de 10x50 " << dibujo(large, 120)
          << " ms a 120 col., " << dibujo(large, 200) << " ms a 200 col.");
-#if defined(NDEBUG) && !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
-    CHECK(large_120 < 20.0);
-    CHECK(large_200 < 20.0);
-#endif
+    if (chatbot_test::strict_performance()) {
+        CHECK(large_120 < 20.0);
+        CHECK(large_200 < 20.0);
+    }
+}
+
+TEST_CASE("vista: reparto idéntico al algoritmo sin caché entre 30 y 200 columnas",
+          "[vista][tabla][reparto]") {
+    const md::Document documents[] = {
+        md::parse(read_data("tabla_reparto.md")),
+        md::parse(read_data("tabla_angosta.md")),
+        md::parse(chatbot_test::table_10x50()),
+    };
+    std::istringstream reference(read_data("tabla_anchos_referencia.txt"));
+    for (std::size_t table = 0; table < 3; ++table) {
+        REQUIRE(documents[table].blocks.size() == 1);
+        for (int width = 30; width <= 200; ++width) {
+            CAPTURE(table, width);
+            std::size_t recorded_table = 0;
+            int recorded_width = 0;
+            std::size_t count = 0;
+            REQUIRE(static_cast<bool>(reference >> recorded_table >> recorded_width >> count));
+            REQUIRE(recorded_table == table);
+            REQUIRE(recorded_width == width);
+            std::vector<int> expected(count);
+            for (int& column : expected) {
+                REQUIRE(static_cast<bool>(reference >> column));
+            }
+            CHECK(md::table_column_widths(documents[table].blocks.front(), width) == expected);
+        }
+    }
+    reference >> std::ws;
+    CHECK(reference.eof());
 }
 
 TEST_CASE("vista: una tabla angosta que cabe no pasa a fichas", "[vista][tabla]") {

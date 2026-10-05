@@ -1,4 +1,5 @@
 #include "request_runner.h"
+#include "performance.hpp"
 
 #include "blocking_transport.hpp"
 #include "chatbot/chat_client.h"
@@ -157,7 +158,7 @@ TEST_CASE("RequestRunner: cancelar sin datos termina en menos de 2 s", "[runner]
     harness.runner->cancel();
     REQUIRE(harness.wait_done());
 
-    CHECK(Clock::now() - cancelled_at < std::chrono::seconds{2});
+    chatbot_test::report_latency("RequestRunner: cancelación", Clock::now() - cancelled_at);
     REQUIRE(harness.outcome.result.has_value());
     REQUIRE(harness.outcome.result->is_error());
     CHECK(harness.outcome.result->error().kind == ErrorKind::Cancelled);
@@ -194,7 +195,7 @@ TEST_CASE("RequestRunner: cancelar durante la espera de reintento con RealSleepe
     harness.runner->cancel();
     REQUIRE(harness.wait_done());
 
-    CHECK(Clock::now() - cancelled_at < std::chrono::seconds{2});
+    chatbot_test::report_latency("RequestRunner: cancelar reintento", Clock::now() - cancelled_at);
     REQUIRE(harness.outcome.result->is_error());
     CHECK(harness.outcome.result->error().kind == ErrorKind::Cancelled);
     CHECK(blocking->requests().size() == 1);
@@ -212,7 +213,7 @@ TEST_CASE("RequestRunner: destruirlo con el transporte bloqueado regresa en meno
     std::future<void> destroyed =
         std::async(std::launch::async, [&harness] { harness.runner.reset(); });
     REQUIRE(destroyed.wait_for(kThreadTimeout) == std::future_status::ready);
-    CHECK(Clock::now() - start < std::chrono::seconds{2});
+    chatbot_test::report_latency("RequestRunner: destructor", Clock::now() - start);
 }
 
 TEST_CASE("RequestRunner: reintento por contexto tras 400 con menos mensajes",

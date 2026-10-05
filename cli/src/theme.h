@@ -90,6 +90,9 @@ struct Appearance {
     BackgroundMode background = BackgroundMode::FromTheme;
 };
 
+/// NO_COLOR definida y no vacía desactiva la elección de colores.
+[[nodiscard]] bool no_color_enabled();
+
 /// Resuelve lo leído de config.json ("appearance"). Un id de tema o un modo
 /// de fondo desconocido usan el valor por defecto, sin fallar, y dejan un
 /// aviso en warning; vacío cuenta como no definido (sin aviso).

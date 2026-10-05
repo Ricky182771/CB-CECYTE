@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
@@ -225,8 +226,19 @@ std::optional<BackgroundMode> parse_background(std::string_view id) {
     return std::nullopt;
 }
 
+bool no_color_enabled() {
+    const char* value = std::getenv("NO_COLOR");
+    return value != nullptr && *value != '\0';
+}
+
 Appearance resolve_appearance(std::string_view theme_id, std::string_view background,
                               std::string* warning) {
+    if (no_color_enabled()) {
+        if (warning != nullptr) {
+            warning->clear();
+        }
+        return Appearance{find_theme("terminal"), BackgroundMode::Transparent};
+    }
     Appearance appearance;
     std::string notes;
     if (!theme_id.empty()) {

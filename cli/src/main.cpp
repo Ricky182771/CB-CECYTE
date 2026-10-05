@@ -18,6 +18,7 @@
 #include "sidebar.h"
 #include "sidebar_view.h"
 #include "theme.h"
+#include "title_bar.h"
 
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
@@ -190,7 +191,7 @@ int main() {
     // Tema y fondo de config.json ("appearance"). Un valor desconocido usa
     // el de por defecto y deja un aviso en la línea de estado.
     std::string appearance_warning;
-    chatbot::cli::Appearance appearance;
+    chatbot::cli::Appearance appearance = chatbot::cli::resolve_appearance("", "");
     if (const std::optional<std::string> path = chatbot::default_config_path()) {
         const chatbot::Result<chatbot::AppearanceValues> saved =
             chatbot::load_appearance_values(*path);
@@ -579,9 +580,7 @@ int main() {
             (conversation.title().empty() ? std::string{"Nueva conversación"}
                                           : chatbot::cli::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
-            // Si no cabe, se encoge el título y el aviso de teclas queda entero.
-            ftxui::hbox({ftxui::text(title) | ftxui::bold | ftxui::flex_shrink, ftxui::filler(),
-                         ftxui::text(" Ctrl+B barra · Ctrl+O conversaciones") | notice}),
+            chatbot::cli::title_bar(title, width, palette),
             std::move(body),
             ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
             ftxui::hbox(std::move(status_line)),
@@ -699,6 +698,9 @@ int main() {
                 }
             }
             return true; // Ningún evento del ratón sobre la barra cambia el foco.
+        }
+        if (settings.is_open()) {
+            return false;
         }
         if (mouse.button == ftxui::Mouse::WheelUp) {
             scroll.by(-kWheelStep);
