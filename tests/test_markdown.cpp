@@ -1,4 +1,5 @@
 #include "markdown.h"
+#include "performance.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -328,13 +329,7 @@ TEST_CASE("markdown: documento de 200 KB", "[markdown][desempeno]") {
     }
     const double ms = std::chrono::duration<double, std::milli>(elapsed).count();
     WARN("parseo de " << big.size() / 1024 << " KB: " << ms << " ms");
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-    // Con sanitizadores solo se mide; el límite aplica a la build dev.
-#elif defined(__has_feature)
-#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer)
-    CHECK(elapsed < std::chrono::milliseconds{100});
-#endif
-#else
-    CHECK(elapsed < std::chrono::milliseconds{100});
-#endif
+    if (chatbot_test::strict_performance()) {
+        CHECK(elapsed < std::chrono::milliseconds{100});
+    }
 }

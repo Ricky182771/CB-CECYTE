@@ -49,6 +49,8 @@ Otros presets:
 
 Se usan igual, cambiando `dev` por el nombre del preset. Cada preset compila en `build/<preset>/`.
 
+Las pruebas de tiempo siempre miden y reportan con `WARN`. Sus límites solo hacen fallar la prueba con `CHATBOT_STRICT_PERF=1` (por ejemplo, `CHATBOT_STRICT_PERF=1 ctest --preset release --verbose`). La CI activa esa variable solo en release, con GCC y Clang. Esto incluye parseo, reparto de tablas, dibujo del historial y latencia de cancelación/destrucción. Las esperas máximas entre hilos y la comprobación de que una espera no termine antes de tiempo siguen siendo verificaciones funcionales obligatorias.
+
 ### Integración continua
 
 En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las dos suites de pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.

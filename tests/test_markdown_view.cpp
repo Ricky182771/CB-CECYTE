@@ -1,5 +1,6 @@
 #include "markdown.h"
 #include "markdown_view.h"
+#include "performance.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -576,10 +577,10 @@ TEST_CASE("vista: tiempo del reparto de ancho de tablas", "[vista][tabla][desemp
     WARN("dibujo completo: tabla de prueba (117 col.) "
          << dibujo(small, 117) << " ms; tabla de 10x50 " << dibujo(large, 120)
          << " ms a 120 col., " << dibujo(large, 200) << " ms a 200 col.");
-#if defined(NDEBUG) && !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
-    CHECK(large_120 < 20.0);
-    CHECK(large_200 < 20.0);
-#endif
+    if (chatbot_test::strict_performance()) {
+        CHECK(large_120 < 20.0);
+        CHECK(large_200 < 20.0);
+    }
 }
 
 TEST_CASE("vista: una tabla angosta que cabe no pasa a fichas", "[vista][tabla]") {
