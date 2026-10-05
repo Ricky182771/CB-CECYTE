@@ -700,6 +700,9 @@ int main() {
             }
             return true; // Ningún evento del ratón sobre la barra cambia el foco.
         }
+        if (settings.is_open()) {
+            return false;
+        }
         if (mouse.button == ftxui::Mouse::WheelUp) {
             scroll.by(-kWheelStep);
             return true;

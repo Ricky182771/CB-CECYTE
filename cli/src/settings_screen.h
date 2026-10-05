@@ -103,6 +103,8 @@ private:
     std::string key_text_;
     std::string filter_text_;
     std::string model_text_;
+    mutable std::vector<ftxui::Box> model_row_boxes_;
+    mutable ftxui::Box models_box_{0, -1, 0, -1};
 
     ftxui::Component categories_;
     ftxui::Component theme_list_;

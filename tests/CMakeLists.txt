@@ -47,13 +47,15 @@ add_test(NAME chatbot_tests COMMAND chatbot_tests)
 # Pruebas de la vista de markdown: dibujan con ftxui::Screen (sin terminal).
 # Van aparte para que chatbot_tests no enlace FTXUI.
 add_executable(chatbot_ui_tests
+    ${PROJECT_SOURCE_DIR}/cli/src/settings_screen.cpp
+    test_settings_screen.cpp
     test_history_view.cpp
     test_input_style.cpp
     test_sidebar_view.cpp
     test_markdown_view.cpp
     test_theme.cpp)
 target_compile_features(chatbot_ui_tests PRIVATE cxx_std_20)
-target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui Catch2::Catch2WithMain)
+target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui ftxui::component Catch2::Catch2WithMain)
 # Archivos de tests/data (solo lectura).
 target_compile_definitions(chatbot_ui_tests PRIVATE
     CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")

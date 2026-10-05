@@ -397,6 +397,31 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
         move_focus(event == ftxui::Event::Tab ? 1 : -1);
         return true;
     }
+    if (category_ == kProvider && event.is_mouse() &&
+        settings_->models_state() == ModelsState::Loaded && !model_row_boxes_.empty()) {
+        auto mouse_event = event;
+        const auto& mouse = mouse_event.mouse();
+        if (models_box_.Contain(mouse.x, mouse.y)) {
+            if (mouse.button == ftxui::Mouse::WheelUp || mouse.button == ftxui::Mouse::WheelDown) {
+                filter_input_->TakeFocus();
+                settings_->move_highlight(mouse.button == ftxui::Mouse::WheelUp ? -1 : 1);
+                return true;
+            }
+            if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed) {
+                for (std::size_t i = 0; i < model_row_boxes_.size(); ++i) {
+                    if (model_row_boxes_[i].Contain(mouse.x, mouse.y)) {
+                        filter_input_->TakeFocus();
+                        settings_->move_highlight(static_cast<int>(i) -
+                                                   static_cast<int>(settings_->highlighted()));
+                        if (settings_->pick_highlighted()) {
+                            model_text_ = settings_->model();
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+    }
     if (category_ == kProvider && filter_input_->Focused()) {
         // Con el filtro, ↑/↓ (y PgUp/PgDn) mueven el resaltado de la lista.
         const std::pair<const ftxui::Event*, int> moves[] = {
@@ -416,6 +441,7 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
 }
 
 ftxui::Element SettingsScreen::render_models() const {
+    model_row_boxes_.clear();
     const ProviderSettings& s = *settings_;
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
     switch (s.models_state()) {
@@ -452,7 +478,8 @@ ftxui::Element SettingsScreen::render_models() const {
         }
     }
     // La lista tiene el foco mientras lo tiene el filtro: ↑/↓ mueven el cursor.
-    return choice_list(labels, s.highlighted(), chosen, filter_input_->Focused(), palette_);
+    return choice_list(labels, s.highlighted(), chosen, filter_input_->Focused(), palette_,
+                        &model_row_boxes_);
 }
 
 ftxui::Element SettingsScreen::render_provider() const {
@@ -501,7 +528,7 @@ ftxui::Element SettingsScreen::render_provider() const {
                      field_label("Filtrar:", filter_input_->Focused(), palette_),
                      ftxui::text(" "), filter_input_->Render() | ftxui::flex, ftxui::text(" "),
                      refresh_button_->Render()}),
-        render_models() | ftxui::flex,
+        render_models() | ftxui::flex | ftxui::reflect(models_box_),
         ftxui::hbox({label("Modelo", model_input_->Focused(), palette_), std::move(model)}),
     });
 }

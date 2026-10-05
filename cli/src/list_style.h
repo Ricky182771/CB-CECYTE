@@ -4,6 +4,7 @@
 #include "theme.h"
 
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/box.hpp>
 
 #include <cstddef>
 #include <optional>
@@ -38,7 +39,8 @@ inline constexpr std::string_view kNotChosenMark = "  ";
 /// elegida, si hay.
 [[nodiscard]] ftxui::Element choice_list(const std::vector<std::string>& labels,
                                          std::size_t cursor, std::optional<std::size_t> chosen,
-                                         bool focused, const Palette& palette);
+                                         bool focused, const Palette& palette,
+                                         std::vector<ftxui::Box>* row_boxes = nullptr);
 
 /// Etiqueta de un campo de formulario: con el foco, con la selección.
 [[nodiscard]] ftxui::Element field_label(std::string_view text, bool focused,
