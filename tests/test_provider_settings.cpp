@@ -256,6 +256,7 @@ TEST_CASE("ajustes: una key que parece variable o incompleta no se guarda",
         const std::optional<std::string> error = settings.validate();
         REQUIRE(error.has_value());
         CHECK(*error == kMessage); // Nunca incluye el valor.
+        CHECK_FALSE(settings.credential_update().has_value());
     }
 
     const std::string accepted[] = {std::string(70, 'x'), "nvapi-" + std::string(64, 'Z'),
@@ -264,6 +265,7 @@ TEST_CASE("ajustes: una key que parece variable o incompleta no se guarda",
         INFO("largo " << key.size());
         settings.set_key(key);
         CHECK_FALSE(settings.validate().has_value());
+        CHECK(settings.credential_update().has_value());
     }
 
     // Sin key escrita se conserva la guardada: no se valida.
@@ -276,4 +278,14 @@ TEST_CASE("ajustes: una key que parece variable o incompleta no se guarda",
                             credentials_with("nvidia", kSecret), env);
     CHECK_FALSE(locked.set_key("abc"));
     CHECK_FALSE(locked.validate().has_value());
+}
+
+TEST_CASE("ajustes: key vacía válida en Ollama y en un host local", "[proveedor][ajustes]") {
+    for (const ConfigFileValues& values : {
+             saved("ollama", "http://localhost:11434/v1", "m"),
+             saved("custom", "http://localhost:8080/v1", "m")}) {
+        ProviderSettings settings(values, {}, {});
+        CHECK_FALSE(settings.validate().has_value());
+        CHECK_FALSE(settings.credential_update().has_value());
+    }
 }

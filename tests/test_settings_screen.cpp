@@ -170,3 +170,29 @@ TEST_CASE("configuración: NO_COLOR bloquea tema y fondo y no los guarda", "[aju
     CHECK(h.appearance_saves == 0);
     CHECK_FALSE(h.settings.is_open());
 }
+
+TEST_CASE("configuración: Guardar rechaza keys incompletas sin llamar al guardado", "[ajustes][key]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    const std::string key = GENERATE(std::string{"$NIMKEY"}, std::string{"  "},
+                                      std::string{"abc"}, std::string(30, 'a') + "\n");
+    Harness h;
+    h.open("modelo-0", key);
+    h.save();
+    CHECK_FALSE(h.saved_model.has_value());
+    CHECK(h.settings.is_open());
+    const auto screen = h.draw();
+    CHECK(find(screen, "Eso parece el nombre de una variable").x >= 0);
+    CHECK(find(screen, "pega la key completa.").x >= 0);
+    if (key == "$NIMKEY" || key == "abc") {
+        CHECK(find(screen, key).x < 0);
+    }
+}
+
+TEST_CASE("configuración: Guardar acepta una key sintética completa", "[ajustes][key]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", std::string(70, 'x'));
+    h.save();
+    CHECK(h.saved_model == "modelo-0");
+    CHECK_FALSE(h.settings.is_open());
+}

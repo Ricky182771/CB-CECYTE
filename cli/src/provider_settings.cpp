@@ -285,7 +285,7 @@ ConfigFileValues ProviderSettings::file_values() const {
 }
 
 std::optional<std::pair<std::string, std::string>> ProviderSettings::credential_update() const {
-    if (key_locked() || key_.empty()) {
+    if (key_locked() || !plausible_key(key_)) {
         return std::nullopt;
     }
     return std::pair{credentials_key(provider_info().id, effective_base_url()), key_};
