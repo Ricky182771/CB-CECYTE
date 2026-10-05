@@ -190,7 +190,7 @@ int main() {
     // Tema y fondo de config.json ("appearance"). Un valor desconocido usa
     // el de por defecto y deja un aviso en la línea de estado.
     std::string appearance_warning;
-    chatbot::cli::Appearance appearance;
+    chatbot::cli::Appearance appearance = chatbot::cli::resolve_appearance("", "");
     if (const std::optional<std::string> path = chatbot::default_config_path()) {
         const chatbot::Result<chatbot::AppearanceValues> saved =
             chatbot::load_appearance_values(*path);

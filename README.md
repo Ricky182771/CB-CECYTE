@@ -116,7 +116,7 @@ Si `config.json` nombra un tema que no existe, se usa el de por defecto y la lí
 
 En todas las listas, la fila del cursor se marca con el color de selección (o invertida con `De la terminal`) solo mientras la lista tiene el foco, y `●` marca lo elegido. El campo o botón con el foco lleva su etiqueta con el color de selección.
 
-Si tu terminal no muestra colores de 24 bits, se aproximan a 256 o 16. Con la variable `NO_COLOR` definida no se usa ningún color (solo negritas, subrayado, tenue e invertido): con un tema RGB, la fila del cursor deja de distinguirse; usa `De la terminal` si necesitas `NO_COLOR`.
+Si tu terminal no muestra colores de 24 bits, se aproximan a 256 o 16. Con `NO_COLOR` definida y no vacía se usa automáticamente `De la terminal`, con fondo transparente y cursor invertido. Tema y fondo aparecen deshabilitados con la nota `Desactivado por NO_COLOR`; la configuración guardada se conserva.
 
 #### Conversaciones guardadas
 

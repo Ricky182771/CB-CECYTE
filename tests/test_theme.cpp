@@ -8,6 +8,7 @@
 
 #include "chatbot/config.h"
 #include "temp_dir.hpp"
+#include "no_color_guard.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -228,6 +229,7 @@ TEST_CASE("Contraste de cada tema con fondo propio", "[tema]") {
 }
 
 TEST_CASE("resolve_appearance: valores conocidos, vacíos y desconocidos", "[tema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
     std::string warning = "x";
     auto appearance = chatbot::cli::resolve_appearance("", "", &warning);
     CHECK(appearance.theme == &chatbot::cli::default_theme());
@@ -247,6 +249,7 @@ TEST_CASE("resolve_appearance: valores conocidos, vacíos y desconocidos", "[tem
 }
 
 TEST_CASE("config.json con un tema desconocido cae al de por defecto", "[tema][config]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
     const chatbot_test::ScopedTempDir dir;
     const std::string config = (dir.path() / "config.json").string();
     {
@@ -260,6 +263,33 @@ TEST_CASE("config.json con un tema desconocido cae al de por defecto", "[tema][c
         chatbot::cli::resolve_appearance(values.value().theme, values.value().background, &warning);
     CHECK(appearance.theme == &chatbot::cli::default_theme());
     CHECK_FALSE(warning.empty());
+}
+
+TEST_CASE("NO_COLOR: el cursor de modelos queda invertido sin alterar config.json", "[tema]") {
+    const char* value = GENERATE(static_cast<const char*>(nullptr), "", "1", "0");
+    const chatbot_test::NoColorGuard environment(value);
+    const chatbot_test::ScopedTempDir dir;
+    const std::string config = (dir.path() / "config.json").string();
+    const std::string contents =
+        R"({"appearance":{"theme":"catppuccin-mocha","background":"theme"}})";
+    {
+        std::ofstream file(config);
+        file << contents;
+    }
+    const auto saved = chatbot::load_appearance_values(config);
+    REQUIRE(saved.is_ok());
+    const auto appearance = chatbot::cli::resolve_appearance(saved.value().theme,
+                                                             saved.value().background);
+    const bool disabled = value != nullptr && *value != '\0';
+    CHECK(chatbot::cli::no_color_enabled() == disabled);
+    CHECK(appearance.theme->id == (disabled ? "terminal" : "catppuccin-mocha"));
+    const Palette palette(appearance);
+    const auto screen = draw(chatbot::cli::choice_list({"modelo-a", "modelo-b"}, 1,
+                                                       std::nullopt, true, palette), 30);
+    const auto cursor = find(screen, "modelo-b");
+    REQUIRE(cursor.x >= 0);
+    CHECK(screen.CellAt(cursor.x, cursor.y).inverted == disabled);
+    CHECK(read_file(config) == contents);
 }
 
 TEST_CASE("Fondo del tema: todas las celdas del historial lo llevan", "[tema]") {

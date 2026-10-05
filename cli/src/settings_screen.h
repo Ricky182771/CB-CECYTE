@@ -87,6 +87,7 @@ private:
     Appearance saved_appearance_; ///< El vigente al abrir (o al guardar).
     std::string status_;          ///< Aviso o error bajo el formulario.
     bool confirm_discard_ = false; ///< Se preguntó "¿Descartar los cambios?".
+    bool no_color_ = false;
 
     // Lo que editan los componentes.
     std::vector<std::string> category_names_;

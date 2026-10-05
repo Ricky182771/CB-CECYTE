@@ -184,7 +184,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         ftxui::Maybe(model_input_, [this] { return settings_ && !settings_->model_locked(); }),
     });
     const ftxui::Component appearance_form = ftxui::Container::Vertical({
-        theme_list_,
+        ftxui::Maybe(theme_list_, [this] { return !no_color_; }),
         // Con un tema sin fondo propio, el fondo no aplica: no toma el foco.
         ftxui::Maybe(background_list_, [this] { return background_enabled(); }),
     });
@@ -202,6 +202,10 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
                           std::string notice) {
     settings_ = std::move(settings);
     base_ = std::move(base);
+    no_color_ = no_color_enabled();
+    if (no_color_) {
+        appearance = resolve_appearance("", "");
+    }
     saved_appearance_ = appearance;
     category_ = kProvider;
     theme_selected_ = 0;
@@ -234,13 +238,16 @@ Appearance SettingsScreen::chosen_appearance() const {
 }
 
 bool SettingsScreen::appearance_dirty() const {
+    if (no_color_) {
+        return false;
+    }
     const Appearance chosen = chosen_appearance();
     return chosen.theme != saved_appearance_.theme ||
            chosen.background != saved_appearance_.background;
 }
 
 bool SettingsScreen::background_enabled() const {
-    return has_own_background(themes()[static_cast<std::size_t>(theme_selected_)]);
+    return !no_color_ && has_own_background(themes()[static_cast<std::size_t>(theme_selected_)]);
 }
 
 bool SettingsScreen::request_close() {
@@ -327,7 +334,9 @@ void SettingsScreen::move_focus(int step) {
     // Las categorías, los campos de la categoría elegida y los botones.
     std::vector<ftxui::Component> order{categories_};
     if (category_ == kAppearance) {
-        order.push_back(theme_list_);
+        if (!no_color_) {
+            order.push_back(theme_list_);
+        }
         if (background_enabled()) {
             order.push_back(background_list_);
         }
@@ -499,6 +508,16 @@ ftxui::Element SettingsScreen::render_provider() const {
 
 ftxui::Element SettingsScreen::render_appearance() const {
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
+    if (no_color_) {
+        return ftxui::vbox({
+            ftxui::text("Colores y Accesibilidad") | ftxui::bold,
+            ftxui::text(""),
+            ftxui::hbox({label("Tema", false, palette_), ftxui::text("De la terminal") | notice}),
+            ftxui::hbox({label("Fondo", false, palette_), ftxui::text("Transparente") | notice}),
+            ftxui::text("Desactivado por NO_COLOR") | notice,
+            ftxui::filler(),
+        });
+    }
     ftxui::Element background;
     if (background_enabled()) {
         background = background_list_->Render();
