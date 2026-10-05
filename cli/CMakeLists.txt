@@ -68,7 +68,8 @@ add_library(chatbot_cli_ui STATIC
     src/list_style.cpp
     src/sidebar_view.cpp
     src/markdown_view.cpp
-    src/theme.cpp)
+    src/theme.cpp
+    src/title_bar.cpp)
 target_compile_features(chatbot_cli_ui PUBLIC cxx_std_20)
 target_link_libraries(chatbot_cli_ui PUBLIC chatbot_cli_lib ftxui::dom ftxui::screen)
 chatbot_set_warnings(chatbot_cli_ui)

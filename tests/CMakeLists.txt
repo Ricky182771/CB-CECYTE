@@ -53,7 +53,8 @@ add_executable(chatbot_ui_tests
     test_input_style.cpp
     test_sidebar_view.cpp
     test_markdown_view.cpp
-    test_theme.cpp)
+    test_theme.cpp
+    test_title_bar.cpp)
 target_compile_features(chatbot_ui_tests PRIVATE cxx_std_20)
 target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui ftxui::component Catch2::Catch2WithMain)
 # Archivos de tests/data (solo lectura).

@@ -18,6 +18,7 @@
 #include "sidebar.h"
 #include "sidebar_view.h"
 #include "theme.h"
+#include "title_bar.h"
 
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
@@ -579,9 +580,7 @@ int main() {
             (conversation.title().empty() ? std::string{"Nueva conversación"}
                                           : chatbot::cli::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
-            // Si no cabe, se encoge el título y el aviso de teclas queda entero.
-            ftxui::hbox({ftxui::text(title) | ftxui::bold | ftxui::flex_shrink, ftxui::filler(),
-                         ftxui::text(" Ctrl+B barra · Ctrl+O conversaciones") | notice}),
+            chatbot::cli::title_bar(title, width, palette),
             std::move(body),
             ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
             ftxui::hbox(std::move(status_line)),
