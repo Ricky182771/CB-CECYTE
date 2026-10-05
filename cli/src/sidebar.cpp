@@ -79,21 +79,23 @@ std::string group_label(CalendarDay day, CalendarDay today) {
 
 void Sidebar::open(std::vector<ConversationSummary> items, std::string current_id) {
     list_.open(std::move(items), std::move(current_id));
-    new_selected_ = list_.empty() || !list_.is_current(list_.selected());
+    pick_ = list_.empty() || !list_.is_current(list_.selected()) ? Pick::New
+                                                                  : Pick::Conversation;
     top_ = 0;
 }
 
 void Sidebar::refresh(std::vector<ConversationSummary> items, std::string current_id) {
     list_.refresh(std::move(items));
     list_.set_current(std::move(current_id));
-    if (list_.empty()) {
-        new_selected_ = true;
+    if (list_.empty() && pick_ == Pick::Conversation) {
+        pick_ = Pick::New;
     }
 }
 
 std::vector<SidebarRow> Sidebar::rows(CalendarDay today) const {
     std::vector<SidebarRow> rows;
     rows.push_back(SidebarRow{SidebarRow::Kind::New, {}, 0});
+    rows.push_back(SidebarRow{SidebarRow::Kind::Settings, {}, 0});
     std::string previous;
     for (std::size_t i = 0; i < list_.items().size(); ++i) {
         const ConversationSummary& item = list_.items()[i];
@@ -116,7 +118,7 @@ std::vector<SidebarRow> Sidebar::rows(CalendarDay today) const {
 }
 
 std::size_t Sidebar::selected_row(const std::vector<SidebarRow>& rows) const {
-    if (!new_selected_) {
+    if (pick_ == Pick::Conversation) {
         for (std::size_t r = 0; r < rows.size(); ++r) {
             if (rows[r].kind == SidebarRow::Kind::Conversation &&
                 rows[r].index == list_.selected()) {
@@ -124,7 +126,19 @@ std::size_t Sidebar::selected_row(const std::vector<SidebarRow>& rows) const {
             }
         }
     }
-    return 0; // "+ Nueva".
+    const SidebarRow::Kind fixed =
+        pick_ == Pick::Settings ? SidebarRow::Kind::Settings : SidebarRow::Kind::New;
+    for (std::size_t r = 0; r < rows.size(); ++r) {
+        if (rows[r].kind == fixed) {
+            return r;
+        }
+    }
+    return 0;
+}
+
+void Sidebar::pick_conversation(std::size_t index) {
+    pick_ = Pick::Conversation;
+    list_.select(index);
 }
 
 ListAction Sidebar::handle(ListKey key, std::string_view character, std::size_t page_size) {
@@ -133,35 +147,47 @@ ListAction Sidebar::handle(ListKey key, std::string_view character, std::size_t 
     if (list_.confirmation().has_value() || key == ListKey::Escape) {
         return list_.handle(key, character, page_size);
     }
-    if (list_.empty()) {
-        new_selected_ = true;
+    if (list_.empty() && pick_ == Pick::Conversation) {
+        pick_ = Pick::New;
     }
-    if (new_selected_) {
+    if (pick_ != Pick::Conversation) {
+        const bool on_new = pick_ == Pick::New;
         const std::size_t last = list_.empty() ? 0 : list_.items().size() - 1;
         const std::size_t page = std::max<std::size_t>(page_size, 1);
         switch (key) {
         case ListKey::Enter:
-            return ListAction{ListAction::Type::New, {}};
+            return ListAction{on_new ? ListAction::Type::New : ListAction::Type::Settings, {}};
+        case ListKey::Up:
+        case ListKey::PageUp:
+            pick_ = Pick::New; // Desde "⚙ Configuración"; en "+ Nueva" no cambia.
+            return {};
         case ListKey::Down:
+            if (on_new) {
+                pick_ = Pick::Settings;
+            } else if (!list_.empty()) {
+                pick_conversation(0);
+            }
+            return {};
         case ListKey::PageDown:
         case ListKey::Home:
         case ListKey::End:
-            if (!list_.empty()) {
-                new_selected_ = false;
-                if (key == ListKey::PageDown) {
-                    list_.select(std::min(page - 1, last));
-                } else {
-                    list_.select(key == ListKey::End ? last : 0);
+            if (list_.empty()) {
+                if (key != ListKey::Home) {
+                    pick_ = Pick::Settings;
                 }
+            } else if (key == ListKey::PageDown) {
+                pick_conversation(std::min(page - 1, last));
+            } else {
+                pick_conversation(key == ListKey::End ? last : 0);
             }
             return {};
         default:
-            return {}; // ↑, PgUp, Supr y el resto no hacen nada aquí.
+            return {}; // Supr y el resto no hacen nada aquí.
         }
     }
-    // Desde la primera conversación, ↑ y PgUp suben a "+ Nueva".
+    // Desde la primera conversación, ↑ y PgUp suben a "⚙ Configuración".
     if ((key == ListKey::Up || key == ListKey::PageUp) && list_.selected() == 0) {
-        new_selected_ = true;
+        pick_ = Pick::Settings;
         return {};
     }
     return list_.handle(key, character, page_size);
@@ -219,6 +245,9 @@ ListAction Sidebar::click(std::size_t line, const std::vector<SidebarRow>& rows)
     if (rows[r].kind == SidebarRow::Kind::New) {
         return ListAction{ListAction::Type::New, {}};
     }
+    if (rows[r].kind == SidebarRow::Kind::Settings) {
+        return ListAction{ListAction::Type::Settings, {}};
+    }
     if (!list_.can_open(rows[r].index)) {
         return {};
     }
@@ -226,12 +255,11 @@ ListAction Sidebar::click(std::size_t line, const std::vector<SidebarRow>& rows)
 }
 
 void Sidebar::select_row(const SidebarRow& row) {
-    if (row.kind == SidebarRow::Kind::New) {
-        new_selected_ = true;
+    if (row.kind == SidebarRow::Kind::New || row.kind == SidebarRow::Kind::Settings) {
+        pick_ = row.kind == SidebarRow::Kind::New ? Pick::New : Pick::Settings;
         list_.select(list_.selected()); // Cancela una confirmación pendiente.
     } else if (row.kind == SidebarRow::Kind::Conversation) {
-        new_selected_ = false;
-        list_.select(row.index);
+        pick_conversation(row.index);
     }
 }
 

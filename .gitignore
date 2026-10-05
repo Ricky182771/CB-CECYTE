@@ -3,6 +3,7 @@
 
 # Archivos locales de configuración y claves (nunca versionar secretos)
 config.json
+credentials.json
 *.local.json
 .env
 .env.*

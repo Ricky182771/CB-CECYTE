@@ -15,6 +15,8 @@ namespace {
 constexpr std::string_view kTitle = " Conversaciones ";
 constexpr std::string_view kNew = "+ Nueva";
 constexpr std::string_view kNewKey = "  (Ctrl+N)";
+constexpr std::string_view kSettings = "⚙ Configuración";
+constexpr std::string_view kSettingsKey = "  (F2)";
 constexpr std::string_view kUnreadable = " (ilegible)";
 
 std::string repeat(std::string_view piece, int count) {
@@ -45,13 +47,17 @@ ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int co
         parts.push_back(style ? style(ftxui::text(text)) : ftxui::text(text));
     };
     switch (row.kind) {
-    case SidebarRow::Kind::New: {
-        const std::string full = std::string{kNew} + std::string{kNewKey};
-        if (ftxui::string_width(full) <= content_width) {
-            add(std::string{kNew}, {});
-            add(std::string{kNewKey}, ftxui::dim);
+    case SidebarRow::Kind::New:
+    case SidebarRow::Kind::Settings: {
+        // La tecla, tenue, solo si cabe entera.
+        const bool is_new = row.kind == SidebarRow::Kind::New;
+        const std::string_view label = is_new ? kNew : kSettings;
+        const std::string_view key = is_new ? kNewKey : kSettingsKey;
+        if (ftxui::string_width(std::string{label} + std::string{key}) <= content_width) {
+            add(std::string{label}, {});
+            add(std::string{key}, ftxui::dim);
         } else {
-            add(fit_width(kNew, content_width), {});
+            add(fit_width(label, content_width), {});
         }
         break;
     }

@@ -40,13 +40,16 @@ std::vector<ConversationSummary> sample() {
     };
 }
 
-/// Las filas como texto: "+", "#Grupo" o el id de la conversación.
+/// Las filas como texto: "+", "⚙", "#Grupo" o el id de la conversación.
 std::vector<std::string> describe(const Sidebar& sidebar, const std::vector<SidebarRow>& rows) {
     std::vector<std::string> out;
     for (const SidebarRow& row : rows) {
         switch (row.kind) {
         case SidebarRow::Kind::New:
             out.emplace_back("+");
+            break;
+        case SidebarRow::Kind::Settings:
+            out.emplace_back("⚙");
             break;
         case SidebarRow::Kind::Header:
             out.push_back("#" + row.text);
@@ -59,9 +62,15 @@ std::vector<std::string> describe(const Sidebar& sidebar, const std::vector<Side
     return out;
 }
 
-/// Id de la conversación seleccionada, o "+" si es la fila "+ Nueva".
+/// Id de la conversación seleccionada, o "+" / "⚙" si es una fila fija.
 std::string selected(const Sidebar& sidebar) {
-    return sidebar.new_selected() ? "+" : sidebar.list().items()[sidebar.list().selected()].id;
+    if (sidebar.new_selected()) {
+        return "+";
+    }
+    if (sidebar.settings_selected()) {
+        return "⚙";
+    }
+    return sidebar.list().items()[sidebar.list().selected()].id;
 }
 
 } // namespace
@@ -70,7 +79,7 @@ TEST_CASE("barra: grupos por fecha con hoy fijo", "[barra]") {
     Sidebar sidebar;
     sidebar.open(sample(), "");
     CHECK(describe(sidebar, sidebar.rows(kToday)) ==
-          std::vector<std::string>{"+", "#Hoy", "hoy", "#Ayer", "ayer", "#Últimos 7 días", "hace3",
+          std::vector<std::string>{"+", "⚙", "#Hoy", "hoy", "#Ayer", "ayer", "#Últimos 7 días", "hace3",
                                    "#24 sep", "hace10", "#15 dic 2025", "antiguo", "#Sin fecha",
                                    "roto.json"});
 }
@@ -81,10 +90,10 @@ TEST_CASE("barra: los grupos vacíos no aparecen", "[barra]") {
                   item("c", "2026-09-02T07:00:00-06:00")},
                  "");
     CHECK(describe(sidebar, sidebar.rows(kToday)) ==
-          std::vector<std::string>{"+", "#Hoy", "a", "b", "#2 sep", "c"});
+          std::vector<std::string>{"+", "⚙", "#Hoy", "a", "b", "#2 sep", "c"});
     Sidebar empty;
     empty.open({}, "");
-    CHECK(describe(empty, empty.rows(kToday)) == std::vector<std::string>{"+"});
+    CHECK(describe(empty, empty.rows(kToday)) == std::vector<std::string>{"+", "⚙"});
 }
 
 TEST_CASE("barra: nombre del grupo según los días", "[barra]") {
@@ -106,7 +115,7 @@ TEST_CASE("barra: cambio de día a medianoche", "[barra]") {
                   item("antes", "2026-10-03T23:59:00-06:00")},
                  "");
     CHECK(describe(sidebar, sidebar.rows(kToday)) ==
-          std::vector<std::string>{"+", "#Hoy", "despues", "#Ayer", "antes"});
+          std::vector<std::string>{"+", "⚙", "#Hoy", "despues", "#Ayer", "antes"});
 }
 
 TEST_CASE("barra: fechas de updated_at", "[barra]") {
@@ -124,11 +133,16 @@ TEST_CASE("barra: la navegación salta encabezados", "[barra]") {
     CHECK(sidebar.handle(ListKey::Up, {}, 5).type == ListAction::Type::None);
     CHECK(selected(sidebar) == "+");
     (void)sidebar.handle(ListKey::Down, {}, 5);
+    CHECK(selected(sidebar) == "⚙");
+    CHECK(sidebar.selected_row(sidebar.rows(kToday)) == 1);
+    (void)sidebar.handle(ListKey::Down, {}, 5); // Salta "Hoy".
     CHECK(selected(sidebar) == "hoy");
     (void)sidebar.handle(ListKey::Down, {}, 5); // Salta "Ayer".
     CHECK(selected(sidebar) == "ayer");
-    CHECK(sidebar.selected_row(sidebar.rows(kToday)) == 4);
+    CHECK(sidebar.selected_row(sidebar.rows(kToday)) == 5);
     (void)sidebar.handle(ListKey::Up, {}, 5);
+    (void)sidebar.handle(ListKey::Up, {}, 5);
+    CHECK(selected(sidebar) == "⚙");
     (void)sidebar.handle(ListKey::Up, {}, 5);
     CHECK(selected(sidebar) == "+");
     (void)sidebar.handle(ListKey::End, {}, 5);
@@ -140,16 +154,28 @@ TEST_CASE("barra: la navegación salta encabezados", "[barra]") {
     (void)sidebar.handle(ListKey::PageUp, {}, 3);
     CHECK(selected(sidebar) == "hoy");
     (void)sidebar.handle(ListKey::PageUp, {}, 3);
+    CHECK(selected(sidebar) == "⚙");
+    (void)sidebar.handle(ListKey::PageUp, {}, 3);
     CHECK(selected(sidebar) == "+");
+    // PgDn desde una fila fija: la conversación de una página (índice 2).
+    (void)sidebar.handle(ListKey::PageDown, {}, 3);
+    CHECK(selected(sidebar) == "hace3");
 }
 
-TEST_CASE("barra: sin conversaciones Home y End se quedan en + Nueva", "[barra]") {
+TEST_CASE("barra: sin conversaciones solo se mueve entre las filas fijas", "[barra]") {
     Sidebar sidebar;
     sidebar.open({}, "");
-    for (const ListKey key : {ListKey::Home, ListKey::End, ListKey::Down, ListKey::PageDown}) {
+    CHECK(sidebar.handle(ListKey::Home, {}, 5).type == ListAction::Type::None);
+    CHECK(sidebar.new_selected());
+    for (const ListKey key : {ListKey::Down, ListKey::End, ListKey::PageDown, ListKey::Down}) {
         CHECK(sidebar.handle(key, {}, 5).type == ListAction::Type::None);
-        CHECK(sidebar.new_selected());
+        CHECK(sidebar.settings_selected());
     }
+    CHECK(sidebar.handle(ListKey::Delete, {}, 5).type == ListAction::Type::None);
+    CHECK_FALSE(sidebar.confirmation().has_value());
+    CHECK(sidebar.handle(ListKey::Enter, {}, 5).type == ListAction::Type::Settings);
+    (void)sidebar.handle(ListKey::Up, {}, 5);
+    CHECK(sidebar.new_selected());
     CHECK(sidebar.handle(ListKey::Enter, {}, 5).type == ListAction::Type::New);
 }
 
@@ -160,6 +186,10 @@ TEST_CASE("barra: Enter, Supr y Esc", "[barra]") {
     CHECK(sidebar.handle(ListKey::Delete, {}, 5).type == ListAction::Type::None); // En "+ Nueva".
     CHECK_FALSE(sidebar.confirmation().has_value());
 
+    (void)sidebar.handle(ListKey::Down, {}, 5);
+    CHECK(sidebar.handle(ListKey::Enter, {}, 5).type == ListAction::Type::Settings);
+    CHECK(sidebar.handle(ListKey::Delete, {}, 5).type == ListAction::Type::None); // En "⚙".
+    CHECK_FALSE(sidebar.confirmation().has_value());
     (void)sidebar.handle(ListKey::Down, {}, 5);
     const ListAction open = sidebar.handle(ListKey::Enter, {}, 5);
     CHECK(open.type == ListAction::Type::Open);
@@ -192,18 +222,20 @@ TEST_CASE("barra: clic por línea, también desplazada", "[barra]") {
     sidebar.fit(rows, 5);
     REQUIRE(sidebar.top() == 0);
     CHECK(sidebar.click(0, rows).type == ListAction::Type::New);
-    CHECK(sidebar.click(1, rows).type == ListAction::Type::None); // "Hoy".
-    const ListAction first = sidebar.click(2, rows);
+    CHECK(sidebar.click(1, rows).type == ListAction::Type::Settings);
+    CHECK(selected(sidebar) == "⚙");
+    CHECK(sidebar.click(2, rows).type == ListAction::Type::None); // "Hoy".
+    const ListAction first = sidebar.click(3, rows);
     CHECK(first.type == ListAction::Type::Open);
     CHECK(first.id == "hoy");
     CHECK(selected(sidebar) == "hoy");
     CHECK(sidebar.click(40, rows).type == ListAction::Type::None); // Debajo de la última.
 
-    // Al final de la lista la vista baja: 13 filas, 5 visibles → desde la 8.
+    // Al final de la lista la vista baja: 14 filas, 5 visibles → desde la 9.
     (void)sidebar.handle(ListKey::End, {}, 5);
     sidebar.fit(rows, 5);
-    CHECK(sidebar.top() == 8);
-    const ListAction shifted = sidebar.click(0, rows); // Fila 8: "hace10".
+    CHECK(sidebar.top() == 9);
+    const ListAction shifted = sidebar.click(0, rows); // Fila 9: "hace10".
     CHECK(shifted.type == ListAction::Type::Open);
     CHECK(shifted.id == "hace10");
     CHECK(sidebar.click(4, rows).type == ListAction::Type::None); // Ilegible: se selecciona, no abre.
@@ -218,14 +250,14 @@ TEST_CASE("barra: la rueda desplaza y la selección queda a la vista", "[barra]"
     sidebar.scroll(3, rows, 5);
     CHECK(sidebar.top() == 3);
     // "+ Nueva" (fila 0) salió de la vista: pasa a la primera visible.
-    CHECK(selected(sidebar) == "ayer");
+    CHECK(selected(sidebar) == "hoy");
     sidebar.scroll(100, rows, 5);
-    CHECK(sidebar.top() == 8); // No pasa del final.
+    CHECK(sidebar.top() == 9); // No pasa del final.
     CHECK(selected(sidebar) == "hace10");
     sidebar.scroll(-100, rows, 5);
     CHECK(sidebar.top() == 0);
-    // "hace10" (fila 8) salió por abajo: pasa a la última visible.
-    CHECK(selected(sidebar) == "ayer");
+    // "hace10" (fila 9) salió por abajo: pasa a la última visible.
+    CHECK(selected(sidebar) == "hoy");
 }
 
 TEST_CASE("barra: la selección se conserva al refrescar", "[barra]") {
@@ -240,7 +272,7 @@ TEST_CASE("barra: la selección se conserva al refrescar", "[barra]") {
     std::rotate(items.begin(), items.begin() + 2, items.begin() + 3);
     sidebar.refresh(items, "hace3");
     CHECK(selected(sidebar) == "hace3");
-    CHECK(describe(sidebar, sidebar.rows(kToday)).at(2) == "hace3");
+    CHECK(describe(sidebar, sidebar.rows(kToday)).at(3) == "hace3");
 
     // Se borró: queda la misma posición.
     items.erase(items.begin());

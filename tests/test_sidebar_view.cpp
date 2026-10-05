@@ -111,14 +111,19 @@ TEST_CASE("barra: dibujo con bordes, grupos y títulos recortados", "[barra][vis
     }
     // "│ " + 21 columnas de contenido + " " + "│" (el divisor).
     CHECK(rows[1] == "│ + Nueva  (Ctrl+N)     │");
-    CHECK(rows[2] == "│ Hoy                   │");
-    CHECK(rows[3] == "│ ● Recursividad en C+… │"); // La abierta lleva ●.
-    CHECK(rows[4] == "│   漢字漢字漢字漢字漢… │"); // 9 anchos (18) + "…" = 19: sin partir.
-    CHECK(rows[5] == "│ Ayer                  │");
-    CHECK(rows[6] == "│   Emoji 😀😀😀😀😀😀… │");
-    CHECK(rows[7] == "│ Sin fecha             │");
+    CHECK(rows[2] == "│ ⚙ Configuración  (F2) │");
+    CHECK(rows[3] == "│ Hoy                   │");
+    CHECK(rows[4] == "│ ● Recursividad en C+… │"); // La abierta lleva ●.
+    CHECK(rows[5] == "│   漢字漢字漢字漢字漢… │"); // 9 anchos (18) + "…" = 19: sin partir.
+    CHECK(rows[6] == "│ Ayer                  │");
+    CHECK(rows[7] == "│   Emoji 😀😀😀😀😀😀… │");
+    CHECK(rows[8] == "│ Sin fecha             │");
     // En las ilegibles se recorta el nombre, no "(ilegible)".
-    CHECK(rows[8] == "│   roto.js… (ilegible) │");
+    CHECK(rows[9] == "│   roto.js… (ilegible) │");
+    // La tecla de las filas fijas va tenue.
+    CHECK(screen.CellAt(2, 2).character == "⚙");
+    CHECK_FALSE(screen.CellAt(2, 2).dim);
+    CHECK(screen.CellAt(20, 2).dim);
 }
 
 TEST_CASE("barra: la ilegible va tenue", "[barra][vista]") {
@@ -174,7 +179,8 @@ TEST_CASE("barra: lista vacía y vista desplazada", "[barra][vista]") {
     empty.open({}, "");
     const auto empty_rows = rows_of(draw(empty, 40, 6, true));
     CHECK(empty_rows[1].find("+ Nueva") != std::string::npos);
-    CHECK(empty_rows[2].find("No hay conversaciones guardadas.") != std::string::npos);
+    CHECK(empty_rows[2].find("⚙ Configuración") != std::string::npos);
+    CHECK(empty_rows[3].find("No hay conversaciones guardadas.") != std::string::npos);
 
     // Con 3 filas visibles y la última seleccionada, la vista baja.
     Sidebar sidebar;

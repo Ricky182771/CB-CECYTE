@@ -305,3 +305,57 @@ TEST_CASE("save_config_file conserva llaves y nunca escribe la key", "[proveedor
               .has_value());
     CHECK(read(config) == "{ roto");
 }
+
+TEST_CASE("load_config para la interfaz: sin key ni modelo no es error", "[proveedor][config]") {
+    const ScopedTempDir dir;
+    const std::filesystem::path config = dir.path() / "chatbot" / "config.json";
+    FakeEnv env;
+    const auto options = [&](bool allow) {
+        chatbot::ConfigOptions result{
+            env, [config] { return std::optional<std::string>{config.string()}; }, {}};
+        result.allow_missing_key_and_model = allow;
+        return result;
+    };
+    // Sin archivo ni entorno: falta todo.
+    REQUIRE(chatbot::load_config(options(false)).is_error());
+    const auto partial = chatbot::load_config(options(true));
+    REQUIRE(partial.is_ok());
+    CHECK(partial.value().api_key.empty());
+    CHECK(partial.value().model.empty());
+    REQUIRE(chatbot::validate_config(partial.value()).has_value());
+
+    // Los demás errores siguen saliendo: URL inválida, JSON inválido y
+    // credentials.json con permisos abiertos.
+    env.values["CHAT_BASE_URL"] = "http://192.168.1.10/v1";
+    CHECK(chatbot::load_config(options(true)).is_error());
+    env.values.erase("CHAT_BASE_URL");
+    write(config, "{ no es json", 0644);
+    CHECK(chatbot::load_config(options(true)).is_error());
+    write(config, R"({"provider":"nvidia"})", 0644);
+    write(config.parent_path() / "credentials.json", R"({"version":1,"keys":{}})", 0644);
+    const auto open = chatbot::load_config(options(true));
+    REQUIRE(open.is_error());
+    CHECK_THAT(open.error().message, Catch::Matchers::ContainsSubstring("chmod 600"));
+}
+
+TEST_CASE("load_config_file_values lee config.json sin el entorno", "[proveedor][config]") {
+    const ScopedTempDir dir;
+    const std::filesystem::path config = dir.path() / "config.json";
+    const auto missing = chatbot::load_config_file_values(config.string());
+    REQUIRE(missing.is_ok());
+    CHECK(missing.value().provider.empty());
+
+    write(config,
+          R"({"timeout_seconds":30,"provider":"custom","base_url":"http://localhost:8080/v1","model":7})",
+          0644);
+    const auto values = chatbot::load_config_file_values(config.string());
+    REQUIRE(values.is_ok());
+    CHECK(values.value().provider == "custom");
+    CHECK(values.value().base_url == "http://localhost:8080/v1");
+    CHECK(values.value().model.empty()); // No es cadena.
+
+    write(config, "[1, 2]", 0644);
+    const auto invalid = chatbot::load_config_file_values(config.string());
+    REQUIRE(invalid.is_error());
+    CHECK(invalid.error().kind == ErrorKind::Config);
+}

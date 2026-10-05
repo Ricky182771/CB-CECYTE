@@ -39,6 +39,7 @@ struct CalendarDay {
 struct SidebarRow {
     enum class Kind {
         New,          ///< "+ Nueva  (Ctrl+N)", siempre la primera.
+        Settings,     ///< "⚙ Configuración  (F2)", siempre la segunda.
         Header,       ///< Nombre de un grupo por fecha; no se selecciona.
         Conversation, ///< Una conversación; index es su posición en la lista.
     };
@@ -48,7 +49,8 @@ struct SidebarRow {
 };
 
 /// Modelo de la barra lateral de conversaciones: filas agrupadas por fecha,
-/// selección (la fila "+ Nueva" o una conversación), navegación con teclado
+/// selección (las filas "+ Nueva" y "⚙ Configuración" o una conversación),
+/// navegación con teclado
 /// que salta los encabezados, desplazamiento y clic. Reusa ConversationList
 /// para la selección, la confirmación de borrado, can_open e is_current. Sin
 /// FTXUI; se usa solo desde el hilo de la interfaz.
@@ -71,13 +73,15 @@ public:
 
     /// Índice en rows de la fila seleccionada.
     [[nodiscard]] std::size_t selected_row(const std::vector<SidebarRow>& rows) const;
-    [[nodiscard]] bool new_selected() const { return new_selected_; }
+    [[nodiscard]] bool new_selected() const { return pick_ == Pick::New; }
+    [[nodiscard]] bool settings_selected() const { return pick_ == Pick::Settings; }
 
     /// Procesa una tecla con la barra enfocada. ↑/↓, PgUp/PgDn y Home/End
     /// se mueven saltando encabezados (Home y End van a la primera y a la
-    /// última conversación, o a "+ Nueva" si no hay). Enter abre (Open) o
-    /// pide una nueva (New); Supr pide confirmación y 's' borra (Delete); Esc
-    /// devuelve el foco (Close). page_size: filas visibles.
+    /// última conversación; sin conversaciones, End va a "⚙ Configuración").
+    /// Enter abre (Open), pide una nueva (New) o la configuración
+    /// (Settings); Supr pide confirmación y 's' borra (Delete); Esc devuelve
+    /// el foco (Close). page_size: filas visibles.
     [[nodiscard]] ListAction handle(ListKey key, std::string_view character, std::size_t page_size);
 
     /// Primera fila visible.
@@ -89,7 +93,7 @@ public:
     /// la fila seleccionable visible más cercana.
     void scroll(int lines, const std::vector<SidebarRow>& rows, std::size_t view_height);
     /// Clic en la línea line de la zona visible (0 = la primera visible).
-    /// Selecciona la fila y devuelve New u Open; None si es un encabezado,
+    /// Selecciona la fila y devuelve New, Settings u Open; None si es un encabezado,
     /// una ilegible o no hay fila ahí.
     [[nodiscard]] ListAction click(std::size_t line, const std::vector<SidebarRow>& rows);
 
@@ -98,11 +102,15 @@ public:
     [[nodiscard]] std::optional<std::string> confirmation() const { return list_.confirmation(); }
 
 private:
-    /// Selecciona la fila row (New o Conversation).
+    /// Selecciona la fila row (New, Settings o Conversation).
     void select_row(const SidebarRow& row);
+    /// Va a la conversación index desde una fila fija.
+    void pick_conversation(std::size_t index);
 
+    /// Qué fila está seleccionada: una fija o la conversación de list_.
+    enum class Pick { New, Settings, Conversation };
     ConversationList list_;
-    bool new_selected_ = true;
+    Pick pick_ = Pick::New;
     std::size_t top_ = 0;
 };
 
