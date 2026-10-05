@@ -217,15 +217,12 @@ bool is_local_base_url(std::string_view url) {
            is_local_host(parsed->host);
 }
 
-std::optional<ChatError> validate_connection(const Config& config) {
+namespace {
+
+/// URL base y timeout: lo que se valida aunque falten la key o el modelo.
+std::optional<ChatError> validate_url_and_timeout(const Config& config) {
     if (std::optional<ChatError> error = validate_base_url(config.base_url)) {
         return error;
-    }
-    if (config.api_key.empty() && !is_local_base_url(config.base_url)) {
-        return ChatError{
-            ErrorKind::Config, 0,
-            "Falta la API key: defínela en la variable de entorno CHAT_API_KEY o guárdala en "
-            "la configuración (credentials.json; nunca en config.json).", std::nullopt};
     }
     if (config.timeout_seconds > kMaxTimeout) {
         return ChatError{ErrorKind::Config, 0,
@@ -233,6 +230,21 @@ std::optional<ChatError> validate_connection(const Config& config) {
                              "; se recibió " +
                              std::to_string(config.timeout_seconds.count()) + ".",
                          std::nullopt};
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+std::optional<ChatError> validate_connection(const Config& config) {
+    if (std::optional<ChatError> error = validate_url_and_timeout(config)) {
+        return error;
+    }
+    if (config.api_key.empty() && !is_local_base_url(config.base_url)) {
+        return ChatError{
+            ErrorKind::Config, 0,
+            "Falta la API key: defínela en la variable de entorno CHAT_API_KEY o guárdala en "
+            "la configuración (credentials.json; nunca en config.json).", std::nullopt};
     }
     return std::nullopt;
 }
@@ -330,10 +342,47 @@ Result<Config> load_config(const ConfigOptions& options) {
     }
 
     // 4) Validación final: URL, key (salvo local) y modelo (sección 7).
+    if (options.allow_missing_key_and_model) {
+        if (const std::optional<ChatError> error = validate_url_and_timeout(config)) {
+            return *error;
+        }
+        return config;
+    }
     if (const std::optional<ChatError> error = validate_config(config)) {
         return *error;
     }
     return config;
+}
+
+Result<ConfigFileValues> load_config_file_values(const std::string& path) {
+    ConfigFileValues values;
+    struct stat info {};
+    if (::stat(path.c_str(), &info) != 0) {
+        return values; // Sin archivo: todo vacío.
+    }
+    try {
+        const std::optional<std::string> content = read_file(path);
+        if (!content.has_value()) {
+            throw std::runtime_error("no se pudo leer");
+        }
+        const nlohmann::json document = nlohmann::json::parse(*content);
+        if (!document.is_object()) {
+            throw std::runtime_error("no es un objeto JSON");
+        }
+        const auto field = [&document](const char* name) {
+            const auto it = document.find(name);
+            return it != document.end() && it->is_string() ? it->get<std::string>()
+                                                           : std::string{};
+        };
+        values.provider = field("provider");
+        values.base_url = field("base_url");
+        values.model = field("model");
+    } catch (const std::exception&) {
+        return ChatError{ErrorKind::Config, 0,
+                         "Archivo de configuración inválido (" + path + "): no es un objeto "
+                         "JSON válido.", std::nullopt};
+    }
+    return values;
 }
 
 std::optional<ChatError> save_config_file(const std::string& path,

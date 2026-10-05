@@ -11,12 +11,16 @@
 #include "history_view.h"
 #include "input_style.h"
 #include "markdown.h"
+#include "models_loader.h"
+#include "provider_settings.h"
 #include "request_runner.h"
+#include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
 
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
+#include "chatbot/credentials.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
 #include "chatbot/result.h"
@@ -44,7 +48,12 @@
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
+
 namespace {
+
+/// Aviso mientras no hay una configuración completa (falta key o modelo).
+constexpr const char* kSetupNotice = "Configura un proveedor para empezar.";
 
 /// Líneas que mueve cada paso de la rueda del ratón.
 constexpr int kWheelStep = 3;
@@ -53,6 +62,13 @@ constexpr int kWheelStep = 3;
 std::optional<std::string> env_value(const char* name) {
     const char* value = std::getenv(name);
     return value != nullptr ? std::optional<std::string>{value} : std::nullopt;
+}
+
+/// Como env_value, pero una variable vacía cuenta como no definida (igual
+/// que en load_config).
+std::optional<std::string> env_non_empty(const char* name) {
+    std::optional<std::string> value = env_value(name);
+    return value.has_value() && !value->empty() ? value : std::nullopt;
 }
 
 /// Traduce una tecla de FTXUI a la de la barra de conversaciones.
@@ -151,20 +167,30 @@ private:
 
 int main() {
     // La configuración se carga antes de tocar la terminal: si falla, el
-    // error sale por stderr sin abrir la pantalla completa.
-    const chatbot::Result<chatbot::Config> config = chatbot::load_config();
-    if (config.is_error()) {
-        std::cerr << "[" << chatbot::error_kind_label(config.error().kind) << "] "
-                  << config.error().message << '\n';
+    // error sale por stderr sin abrir la pantalla completa. Si lo único que
+    // falta es la key o el modelo, la app arranca con la pantalla de
+    // configuración abierta; sin terminal (stdin o stdout redirigidos) no
+    // hay pantalla que abrir y también sale con el error.
+    chatbot::ConfigOptions load_options;
+    load_options.allow_missing_key_and_model = true;
+    const chatbot::Result<chatbot::Config> initial = chatbot::load_config(load_options);
+    const std::optional<chatbot::ChatError> incomplete =
+        initial.is_ok() ? chatbot::validate_config(initial.value()) : std::nullopt;
+    const bool has_terminal = ::isatty(STDIN_FILENO) == 1 && ::isatty(STDOUT_FILENO) == 1;
+    if (initial.is_error() || (incomplete.has_value() && !has_terminal)) {
+        const chatbot::ChatError& error = initial.is_error() ? initial.error() : *incomplete;
+        std::cerr << "[" << chatbot::error_kind_label(error.kind) << "] " << error.message
+                  << '\n';
         return 1;
     }
-    const std::string model = config.value().model;
+    chatbot::Config config = initial.value(); ///< La vigente; cambia al guardar la configuración.
+    std::string model;                       ///< Modelo del cliente; vacío sin configuración.
 
     // El orden de declaración importa: se destruyen en orden inverso. El
     // runner se destruye antes que screen y client (cancela y hace join del
-    // hilo, que usa ambos). Las tareas que queden en la cola de screen apuntan
-    // a conversation, input_text, scroll, last_dropped y store: van antes que
-    // screen.
+    // hilo, que usa ambos); igual el cargador de modelos, que une sus hilos.
+    // Las tareas que queden en la cola de screen apuntan a conversation,
+    // input_text, scroll, last_dropped y store: van antes que screen.
     const chatbot::cli::ConversationStore store{
         chatbot::cli::resolve_data_dir(env_value("CHAT_DATA_DIR"), env_value("XDG_DATA_HOME"),
                                        env_value("HOME"))
@@ -190,19 +216,42 @@ int main() {
     int split_max = chatbot::cli::kSidebarMaxWidth - 1;
     ftxui::Box sidebar_box; ///< Zona de la barra en el último cuadro (para el ratón).
     bool dragging = false;  ///< Se arrastra el divisor: el ratón es de ResizableSplit.
-    chatbot::ChatClient client(config.value(), std::make_unique<chatbot::CurlTransport>());
+    int right_tab = 0; ///< Lado derecho: 0 = conversación, 1 = configuración.
+    // Sin configuración completa no hay cliente ni runner (la caja no envía).
+    std::unique_ptr<chatbot::ChatClient> client;
     auto screen = ftxui::App::Fullscreen();
-    chatbot::cli::RequestRunner runner(
-        client, config.value().history_limit_bytes,
-        [&screen](chatbot::cli::RequestRunner::Task task) {
-            screen.Post(std::move(task));
-            // Post de una tarea no redibuja por sí solo; un evento sí.
-            screen.PostEvent(ftxui::Event::Custom);
-        });
+    const auto post = [&screen](std::function<void()> task) {
+        screen.Post(std::move(task));
+        // Post de una tarea no redibuja por sí solo; un evento sí.
+        screen.PostEvent(ftxui::Event::Custom);
+    };
+    std::unique_ptr<chatbot::cli::RequestRunner> runner;
+    chatbot::cli::ModelsLoader models_loader(
+        [] { return std::make_unique<chatbot::CurlTransport>(); }, post);
+
+    // (Re)construye el cliente y el runner con una configuración completa.
+    // Solo sin respuesta en curso: el runner viejo se destruye (join) antes
+    // que el cliente que usa.
+    const auto connect = [&](const chatbot::Config& complete) {
+        runner.reset();
+        client = std::make_unique<chatbot::ChatClient>(complete,
+                                                       std::make_unique<chatbot::CurlTransport>());
+        runner = std::make_unique<chatbot::cli::RequestRunner>(*client,
+                                                               complete.history_limit_bytes, post);
+        model = complete.model;
+    };
+    if (!incomplete.has_value()) {
+        connect(config);
+    }
+    const auto busy = [&] { return runner != nullptr && runner->busy(); };
 
     // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.
     const auto send = [&] {
-        if (runner.busy()) {
+        if (runner == nullptr) {
+            flash = kSetupNotice; // Sin configuración, la caja no envía.
+            return;
+        }
+        if (runner->busy()) {
             return; // Enter no hace nada mientras hay una respuesta en curso.
         }
         std::optional<std::vector<chatbot::Message>> messages = conversation.submit(input_text);
@@ -211,7 +260,7 @@ int main() {
         }
         input_text.clear();
         scroll.to_bottom();
-        runner.start(
+        runner->start(
             std::move(*messages),
             [&conversation](std::string delta) { conversation.append_delta(delta); },
             [&conversation, &input_text, &last_dropped, &store, &sidebar,
@@ -256,8 +305,100 @@ int main() {
         send();
         screen.PostEvent(ftxui::Event::Custom);
     };
-    const ftxui::Component input =
-        ftxui::Input(&input_text, "Escribe tu mensaje y presiona Enter", input_option);
+    // Sin configuración, el placeholder lo dice.
+    std::string placeholder;
+    const ftxui::Component input = ftxui::Input(&input_text, &placeholder, input_option);
+
+    // Pantalla de configuración. Al cerrarse, vuelve la conversación.
+    chatbot::cli::SettingsScreen settings(
+        models_loader,
+        [&](const chatbot::cli::ProviderSettings& form) -> std::optional<std::string> {
+            const std::optional<std::string> config_path = chatbot::default_config_path();
+            const std::optional<std::string> credentials_path =
+                chatbot::default_credentials_path();
+            if (!config_path.has_value() || !credentials_path.has_value()) {
+                return "No se encontró la carpeta de configuración (define HOME o "
+                       "XDG_CONFIG_HOME).";
+            }
+            // Primero la key: si falla, config.json no apunta a un proveedor sin key.
+            if (const auto update = form.credential_update()) {
+                chatbot::Result<chatbot::Credentials> saved =
+                    chatbot::load_credentials(*credentials_path);
+                if (saved.is_error()) {
+                    return saved.error().message;
+                }
+                chatbot::Credentials credentials = saved.value();
+                credentials.keys[update->first] = update->second;
+                if (const auto error = chatbot::save_credentials(*credentials_path, credentials)) {
+                    return error->message;
+                }
+            }
+            if (const auto error = chatbot::save_config_file(*config_path, form.file_values())) {
+                return error->message;
+            }
+            // Lo que quedó guardado más el entorno, validado como al arrancar.
+            const chatbot::Result<chatbot::Config> fresh = chatbot::load_config();
+            if (fresh.is_error()) {
+                return fresh.error().message;
+            }
+            config = fresh.value();
+            connect(config);
+            conversation.add_notice("Ahora se usa " + model + " de " + form.provider_label() +
+                                    ".");
+            scroll.to_bottom();
+            return std::nullopt;
+        },
+        [&] {
+            right_tab = 0;
+            input->TakeFocus();
+        });
+
+    // El foco del lado derecho: la configuración si está abierta; si no, la caja.
+    const auto focus_main = [&] {
+        if (settings.is_open()) {
+            settings.focus();
+        } else {
+            input->TakeFocus();
+        }
+    };
+
+    // Abre la configuración (F2 o "⚙ Configuración"), con un aviso opcional.
+    const auto open_settings = [&](std::string notice) {
+        if (busy()) {
+            flash = "Espera la respuesta o cancélala con Esc.";
+            return;
+        }
+        if (settings.is_open()) {
+            settings.focus();
+            return;
+        }
+        const std::optional<std::string> config_path = chatbot::default_config_path();
+        const std::optional<std::string> credentials_path = chatbot::default_credentials_path();
+        if (!config_path.has_value() || !credentials_path.has_value()) {
+            flash = "No se encontró la carpeta de configuración (define HOME o XDG_CONFIG_HOME).";
+            return;
+        }
+        const chatbot::Result<chatbot::ConfigFileValues> values =
+            chatbot::load_config_file_values(*config_path);
+        if (values.is_error()) {
+            flash = values.error().message;
+            return;
+        }
+        const chatbot::Result<chatbot::Credentials> credentials =
+            chatbot::load_credentials(*credentials_path);
+        if (credentials.is_error()) {
+            flash = credentials.error().message;
+            return;
+        }
+        chatbot::cli::SettingsEnv env;
+        env.base_url = env_non_empty("CHAT_BASE_URL");
+        env.model = env_non_empty("CHAT_MODEL");
+        env.api_key = env_non_empty("CHAT_API_KEY");
+        right_tab = 1;
+        settings.open(chatbot::cli::ProviderSettings(values.value(), credentials.value(),
+                                                     std::move(env)),
+                      config, std::move(notice));
+    };
 
     // Ejecuta lo que pidió la barra de conversaciones.
     const auto apply_sidebar_action = [&](const chatbot::cli::ListAction& action) {
@@ -266,17 +407,28 @@ int main() {
             return;
         }
         if (action.type == Type::Close) {
-            input->TakeFocus();
+            focus_main();
             return;
         }
-        if (runner.busy()) {
+        if (action.type == Type::Settings) {
+            open_settings({});
+            return;
+        }
+        if (busy()) {
             // Abrir, borrar o crear cambiaría la conversación en curso.
             flash = "Espera la respuesta o cancélala con Esc.";
+            return;
+        }
+        if ((action.type == Type::New || action.type == Type::Open) && settings.is_open() &&
+            !settings.request_close()) {
+            // Cambios sin guardar: la configuración pregunta antes de cerrarse.
+            settings.focus();
             return;
         }
         switch (action.type) {
         case Type::None:
         case Type::Close:
+        case Type::Settings:
             break;
         case Type::New:
             new_conversation();
@@ -290,7 +442,7 @@ int main() {
             }
             conversation = chatbot::cli::Conversation::from_stored(*loaded.conversation);
             const std::string used = conversation.last_model();
-            if (!used.empty() && used != model) {
+            if (!used.empty() && !model.empty() && used != model) {
                 conversation.add_notice("Esta conversación usó " + used + "; se continúa con " +
                                         model + ".");
             }
@@ -347,7 +499,7 @@ int main() {
         if (sidebar_visible && sidebar_panel->Focused()) {
             if (const std::optional<std::string> question = sidebar.confirmation()) {
                 status.push_back(ftxui::text(*question) | ftxui::bold);
-            } else if (flash.empty() && !runner.busy()) {
+            } else if (flash.empty() && !busy()) {
                 // La ayuda solo si no hay otro aviso: juntos no caben.
                 status.push_back(
                     ftxui::text("Enter abre · Supr borra · Esc vuelve a la caja") | ftxui::dim);
@@ -356,7 +508,7 @@ int main() {
         if (!flash.empty()) {
             status.push_back(ftxui::text(flash) | ftxui::bold);
         }
-        if (runner.busy()) {
+        if (busy()) {
             status.push_back(ftxui::text("Pensando… (Esc para cancelar)"));
         }
         if (scroll.has_more_below()) {
@@ -382,8 +534,10 @@ int main() {
             status_line.push_back(ftxui::text(""));
         }
 
+        placeholder = runner != nullptr ? "Escribe tu mensaje y presiona Enter"
+                                        : std::string{kSetupNotice} + " (F2)";
         const std::string title =
-            "Chatbot CECyTE — " + model + " — " +
+            "Chatbot CECyTE — " + (model.empty() ? std::string{"sin configurar"} : model) + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
                                           : chatbot::cli::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
@@ -407,7 +561,14 @@ int main() {
     // derecho de la barra y se arrastra con el ratón.
     ftxui::ResizableSplitOption split_option;
     split_option.main = sidebar_panel;
-    split_option.back = chat;
+    // A la derecha, la conversación o la configuración.
+    const ftxui::Component settings_panel = ftxui::Renderer(settings.component(), [&] {
+        ftxui::Element element = settings.component()->Render();
+        // Un espacio entre el borde de la barra y la ventana, como en la conversación.
+        return sidebar_visible ? ftxui::hbox({ftxui::text(" "), std::move(element) | ftxui::flex})
+                               : element;
+    });
+    split_option.back = ftxui::Container::Tab({chat, settings_panel}, &right_tab);
     split_option.direction = ftxui::Direction::Left;
     split_option.main_size = &split_size;
     split_option.separator_func = [&] {
@@ -417,10 +578,10 @@ int main() {
     split_option.max = &split_max;
     const ftxui::Component split = ftxui::ResizableSplit(split_option);
 
-    // Oculta la barra; si tenía el foco, pasa a la caja de entrada.
+    // Oculta la barra; si tenía el foco, pasa al lado derecho.
     const auto hide_sidebar = [&] {
         if (sidebar_panel->Focused()) {
-            input->TakeFocus();
+            focus_main();
         }
         sidebar_visible = false;
         dragging = false;
@@ -521,6 +682,14 @@ int main() {
             return handle_mouse(std::move(event));
         }
         flash.clear(); // El aviso dura hasta la siguiente tecla.
+        if (event == ftxui::Event::F2) {
+            if (settings.is_open()) {
+                (void)settings.request_close();
+            } else {
+                open_settings({});
+            }
+            return true;
+        }
         if (event == ftxui::Event::CtrlB) {
             if (sidebar_visible) {
                 hide_sidebar();
@@ -544,13 +713,19 @@ int main() {
         if (sidebar_visible && sidebar_panel->Focused()) {
             // La barra recibe todas las teclas; la caja de entrada, ninguna.
             const chatbot::cli::ListKey key = list_key(event);
-            if (key == chatbot::cli::ListKey::Delete && runner.busy()) {
+            if (key == chatbot::cli::ListKey::Delete && busy()) {
                 flash = "Espera la respuesta o cancélala con Esc.";
                 return true;
             }
             apply_sidebar_action(sidebar.handle(
                 key, event.is_character() ? event.character() : std::string{},
                 sidebar_rows_visible()));
+            return true;
+        }
+        if (settings.is_open()) {
+            // La configuración recibe todas las teclas: si alguna llegara al
+            // contenedor del split, podría mover el foco a la barra.
+            (void)settings.component()->OnEvent(event);
             return true;
         }
         // ←/→ y Tab son de la caja: si llegaran al contenedor del split,
@@ -561,7 +736,9 @@ int main() {
             return true;
         }
         if (event == ftxui::Event::Escape) {
-            runner.cancel(); // Sin petición en curso no hace nada (no borra la caja).
+            if (runner != nullptr) {
+                runner->cancel(); // Sin petición en curso no hace nada (no borra la caja).
+            }
             return true;
         }
         if (event == ftxui::Event::PageUp) {
@@ -585,10 +762,16 @@ int main() {
         return false;
     });
 
-    input->TakeFocus();
+    if (incomplete.has_value()) {
+        open_settings(kSetupNotice); // Falta la key o el modelo.
+        flash = kSetupNotice;        // Si no se pudo abrir, al menos el aviso.
+    } else {
+        input->TakeFocus();
+    }
     screen.Loop(root);
 
-    // Al regresar de Loop(), el runner se destruye antes que screen y client:
+    // Al regresar de Loop(), el runner se destruye antes que screen y client
+    // (y el cargador de modelos une sus hilos):
     // cancela la petición en curso y hace join (alrededor de 1 s como máximo,
     // aunque el modelo no esté mandando nada o haya una espera de reintento).
     return 0;

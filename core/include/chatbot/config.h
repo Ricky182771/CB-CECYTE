@@ -46,6 +46,10 @@ struct ConfigOptions {
     PathProvider path; ///< Por defecto usa default_config_path().
     /// Por defecto, credentials.json en la misma carpeta que config.json.
     PathProvider credentials_path{};
+    /// true: falta de key o de modelo no es error (el resto de la validación
+    /// sí se aplica). Lo usa la interfaz para arrancar y abrir la pantalla de
+    /// configuración; quien llama revisa después con validate_config.
+    bool allow_missing_key_and_model = false;
 };
 
 /// Devuelve la ruta del archivo de configuración del entorno real:
@@ -86,6 +90,11 @@ struct ConfigFileValues {
     std::string base_url; ///< Siempre se guarda, también para proveedores conocidos.
     std::string model;
 };
+
+/// Lee provider, base_url y model tal como están en config.json, sin el
+/// entorno ni valores por defecto (vacíos si faltan). Que el archivo no
+/// exista no es un error; si no es un objeto JSON válido, error Config.
+[[nodiscard]] Result<ConfigFileValues> load_config_file_values(const std::string& path);
 
 /// Escribe provider, base_url y model en config.json de forma atómica,
 /// conservando todas las demás llaves que ya tuviera el archivo (y su

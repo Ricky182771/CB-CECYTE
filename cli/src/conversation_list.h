@@ -16,7 +16,8 @@ enum class ListKey { Up, Down, PageUp, PageDown, Home, End, Enter, Escape, Delet
 
 /// Lo que la interfaz debe hacer después de una tecla.
 struct ListAction {
-    enum class Type { None, Open, Close, Delete, New }; ///< New: conversación nueva (barra lateral).
+    /// New: conversación nueva; Settings: abrir la configuración (barra lateral).
+    enum class Type { None, Open, Close, Delete, New, Settings };
     Type type = Type::None;
     std::string id; ///< Para Open y Delete.
 };

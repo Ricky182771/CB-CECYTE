@@ -33,6 +33,7 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 | 4 | Cancelación, scroll del historial, recorte de historial largo, prueba automatizada del hilo de trabajo (ver nota) | Hecho |
 | 5 | Persistencia de conversaciones y render de markdown | Hecho |
 | — | Mantenimiento: preset release, CI, pulido de interfaz | Hecho |
+| — | Pantalla de configuración, sección "Proveedor de IA" (núcleo, lógica, interfaz y documentación) | Hecho |
 
 **Nota para el hito 4: prueba con hilos** (sin loop de FTXUI). Implementada con `RequestRunner` (`cli/src/request_runner.*`) y `tests/test_request_runner.cpp`; el transporte que se bloquea quedó aparte, en `tests/blocking_transport.hpp`:
 
@@ -74,6 +75,10 @@ chatbot/
 │       ├── conversation_list.h/.cpp   # lógica de la lista de conversaciones (sin FTXUI)
 │       ├── sidebar.h/.cpp             # barra de conversaciones: grupos por fecha, navegación (sin FTXUI)
 │       ├── request_runner.h/.cpp      # hilo de trabajo de la petición (sin FTXUI)
+│       ├── providers.h/.cpp           # tabla de proveedores compatibles con OpenAI (sin FTXUI)
+│       ├── provider_settings.h/.cpp   # lógica del formulario "Proveedor de IA" (sin FTXUI)
+│       ├── models_loader.h/.cpp       # hilo de trabajo de GET /models (sin FTXUI)
+│       ├── settings_screen.h/.cpp     # pantalla de configuración (ejecutable chatbot, ftxui::component)
 │       ├── markdown.h/.cpp            # markdown → árbol propio con md4c, y filtrado del texto (sin FTXUI)
 │       ├── markdown_view.h/.cpp       # árbol de markdown → ftxui::Element (chatbot_cli_ui)
 │       ├── history_view.h/.cpp        # entradas de la conversación, con caché (chatbot_cli_ui)
@@ -88,7 +93,8 @@ chatbot/
 - `core/` no puede depender de FTXUI ni leer/escribir en la terminal (salvo `tools/`).
 - `chatbot_cli_lib` (biblioteca estática de `cli/`) solo depende de `chatbot::core` (y, en privado, de nlohmann/json y md4c), sin FTXUI, para poder probarla.
 - `chatbot_cli_ui` (biblioteca estática de `cli/`) dibuja sin terminal: enlaza `chatbot_cli_lib`, `ftxui::dom` y `ftxui::screen`. La usan el ejecutable `chatbot`, `tools/md_preview` y `chatbot_ui_tests`. Solo el ejecutable `chatbot` enlaza `ftxui::component`.
-- Conversaciones guardadas: una barra lateral a la izquierda (lógica en `Sidebar`, que reusa `ConversationList`; dibujo en `sidebar_view`). Ctrl+B la muestra u oculta, Ctrl+O le da el foco y Ctrl+N empieza una conversación nueva. Se muestra al arrancar con 100 columnas o más y su borde derecho es el divisor de `ResizableSplit`. Reemplaza a la lista de pantalla completa.
+- Conversaciones guardadas: una barra lateral a la izquierda (lógica en `Sidebar`, que reusa `ConversationList`; dibujo en `sidebar_view`). Ctrl+B la muestra u oculta, Ctrl+O le da el foco y Ctrl+N empieza una conversación nueva. Se muestra al arrancar con 100 columnas o más y su borde derecho es el divisor de `ResizableSplit`. Reemplaza a la lista de pantalla completa. Sus dos primeras filas son fijas: `+ Nueva` y `⚙ Configuración`.
+- Configuración: F2 o la fila `⚙ Configuración` abren `SettingsScreen` en lugar de la conversación (no con una respuesta en curso). La tabla de proveedores está solo en `providers.cpp`; el estado del formulario, en `ProviderSettings` (campos bloqueados por `CHAT_*`, key enmascarada con `mask_key`: nunca más de 4 caracteres); `GET /models` corre en `ModelsLoader` (un hilo y un `CancelToken` por petición; cerrar la pantalla o pedir otra lista cancela la anterior sin esperarla, y el destructor une los hilos). Guardar escribe `credentials.json` y `config.json`, vuelve a cargar la configuración y reconstruye `ChatClient` y `RequestRunner`. Si al arrancar solo falta la key o el modelo y hay terminal, la app abre la configuración (`ConfigOptions::allow_missing_key_and_model`) y la caja no envía; sin terminal (stdin o stdout redirigidos) sale con el error, como antes.
 - Todo texto que viene del modelo, del usuario o de un archivo pasa por `md::sanitize` antes de dibujarse (controles C0 salvo `\n`, ESC, DEL y C1 → U+FFFD; tab → 4 espacios). FTXUI descarta esos caracteres en `text()`, pero sin dejar rastro, y escribe sin filtrar la URL de `hyperlink`: por eso las URL además se codifican con `hyperlink_target`.
 
 ## 6. Diseño del núcleo
@@ -126,7 +132,7 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 - Archivo: `$XDG_CONFIG_HOME/chatbot/config.json`, o `~/.config/chatbot/config.json` si no existe esa variable. Que el archivo no exista no es un error.
 - **Sin modelo por defecto a propósito:** los modelos de NIM se retiran con el tiempo y un nombre fijo en el código acabaría roto.
 - **La key:** primero `CHAT_API_KEY`; si no está, `credentials.json` (junto a `config.json`) con la clave del `provider` del archivo de configuración; si no, ninguna. Formato: `{ "version": 1, "keys": { "nvidia": "...", "custom:https://mi-servidor/v1": "..." } }` (los extremos propios van por su `base_url` efectiva, sin `/` final). Carpeta en 0700 y archivo en 0600, con escritura atómica; si el grupo u otros tienen algún permiso, no se lee y se devuelve error `Config` ("corre chmod 600 <ruta>"). **Por qué cambió** (antes la key solo venía del entorno): la pantalla de configuración necesita guardar la key sin que el usuario edite su shell; un archivo aparte, nunca `config.json`, la deja fuera de lo que se comparte o versiona.
-- `save_config_file` escribe `provider`, `base_url` (siempre) y `model` en `config.json`, conserva las demás claves y su orden, y escribe de forma atómica; nunca escribe la key.
+- `save_config_file` escribe `provider`, `base_url` (siempre) y `model` en `config.json`, conserva las demás claves y su orden, y escribe de forma atómica; nunca escribe la key. `load_config_file_values` los lee tal cual (sin entorno) para la pantalla de configuración.
 - **Conversaciones guardadas:** un archivo `<id>.json` por conversación (esquema versión 1; `id` = `AAAAMMDD-HHMMSS-xxxxxx`), con la carpeta en 0700 y los archivos en 0600. No se guarda el mensaje de sistema (al cargar se antepone el `kSystemPrompt` actual); cada respuesta guarda su `model` y su `finish_reason`. Se guarda solo tras cada par usuario/asistente terminado, con escritura atómica (`.tmp` + `fsync` + `rename` + `fsync` del directorio). Un archivo ilegible o de una versión desconocida se lista pero nunca se sobrescribe ni se borra.
 - `CHAT_DEBUG_SSE=/ruta/archivo` (`Config::debug_sse_path`): `ChatClient` agrega al archivo, por cada intento de `complete` y de `complete_stream`, fecha y hora, modelo, número de intento, estado HTTP y el cuerpo crudo de la respuesta, más una línea separadora. Nunca escribe cabeceras, la key ni el cuerpo de la petición. Si no se puede abrir o escribir, se ignora en silencio. El archivo contiene la conversación: solo para diagnosticar.
 

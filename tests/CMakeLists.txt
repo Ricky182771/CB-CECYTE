@@ -24,6 +24,8 @@ add_executable(chatbot_tests
     test_error_mapping.cpp
     test_history.cpp
     test_markdown.cpp
+    test_models_loader.cpp
+    test_provider_settings.cpp
     test_response.cpp
     test_retries.cpp
     test_request_body.cpp
