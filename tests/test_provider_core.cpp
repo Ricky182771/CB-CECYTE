@@ -359,3 +359,55 @@ TEST_CASE("load_config_file_values lee config.json sin el entorno", "[proveedor]
     REQUIRE(invalid.is_error());
     CHECK(invalid.error().kind == ErrorKind::Config);
 }
+
+TEST_CASE("save_appearance conserva las demás llaves; load_appearance_values la lee",
+          "[apariencia][config]") {
+    const ScopedTempDir dir;
+    const std::filesystem::path config = dir.path() / "chatbot" / "config.json";
+
+    // Sin archivo: vacíos, sin error; al guardar se crea.
+    const auto missing = chatbot::load_appearance_values(config.string());
+    REQUIRE(missing.is_ok());
+    CHECK(missing.value().theme.empty());
+    CHECK(missing.value().background.empty());
+
+    write(config,
+          R"({"model": "m", "desconocida": [1, 2], "appearance": {"theme": "viejo", "extra": true}, "zeta": 3})",
+          0640);
+    REQUIRE_FALSE(
+        chatbot::save_appearance(config.string(), {"catppuccin-mocha", "terminal"}).has_value());
+    const std::string text = read(config);
+    // Las demás llaves (también las de "appearance") siguen, en su orden.
+    CHECK(text.find("\"model\": \"m\"") < text.find("\"desconocida\""));
+    CHECK(text.find("\"desconocida\"") < text.find("\"appearance\""));
+    CHECK(text.find("\"appearance\"") < text.find("\"zeta\": 3"));
+    CHECK(text.find("\"extra\": true") != std::string::npos);
+    CHECK(text.find("\"viejo\"") == std::string::npos);
+    CHECK(mode_of(config) == 0640);
+
+    const auto loaded = chatbot::load_appearance_values(config.string());
+    REQUIRE(loaded.is_ok());
+    CHECK(loaded.value().theme == "catppuccin-mocha");
+    CHECK(loaded.value().background == "terminal");
+
+    // save_config_file no toca "appearance".
+    REQUIRE_FALSE(chatbot::save_config_file(config.string(),
+                                            {"openai", "https://api.openai.com/v1", "x"})
+                      .has_value());
+    CHECK(chatbot::load_appearance_values(config.string()).value().theme == "catppuccin-mocha");
+
+    // "appearance" que no es objeto: se lee vacía y se reemplaza al guardar.
+    write(config, R"({"appearance": "rara", "otra": 1})", 0600);
+    REQUIRE(chatbot::load_appearance_values(config.string()).value().theme.empty());
+    REQUIRE_FALSE(chatbot::save_appearance(config.string(), {"terminal", "theme"}).has_value());
+    CHECK(chatbot::load_appearance_values(config.string()).value().theme == "terminal");
+    CHECK(read(config).find("\"otra\": 1") != std::string::npos);
+
+    // Archivo que no es JSON: error Config al leer y no se toca al guardar.
+    write(config, "{roto", 0600);
+    const auto invalid = chatbot::load_appearance_values(config.string());
+    REQUIRE(invalid.is_error());
+    CHECK(invalid.error().kind == chatbot::ErrorKind::Config);
+    CHECK(chatbot::save_appearance(config.string(), {"terminal", "theme"}).has_value());
+    CHECK(read(config) == "{roto");
+}
