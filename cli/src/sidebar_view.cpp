@@ -1,5 +1,6 @@
 #include "sidebar_view.h"
 
+#include "list_style.h"
 #include "markdown.h"
 
 #include <ftxui/screen/string.hpp>
@@ -36,7 +37,9 @@ std::string clean_title(const std::string& title) {
 
 /// Contenido de una fila, de content_width columnas (con relleno). Cada
 /// tramo lleva su estilo; el relleno, ninguno.
-ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int content_width) {
+ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int content_width,
+                           const Palette& palette) {
+    const ftxui::Decorator notice = palette.ink(&Theme::notice);
     ftxui::Elements parts;
     int used = 0;
     const auto add = [&](const std::string& text, const ftxui::Decorator& style) {
@@ -55,7 +58,7 @@ ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int co
         const std::string_view key = is_new ? kNewKey : kSettingsKey;
         if (ftxui::string_width(std::string{label} + std::string{key}) <= content_width) {
             add(std::string{label}, {});
-            add(std::string{key}, ftxui::dim);
+            add(std::string{key}, notice);
         } else {
             add(fit_width(label, content_width), {});
         }
@@ -66,9 +69,10 @@ ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int co
         break;
     case SidebarRow::Kind::Conversation: {
         const ConversationSummary& item = sidebar.list().items()[row.index];
-        const std::string marker = sidebar.list().is_current(row.index) ? "● " : "  ";
-        const int title_width = content_width - ftxui::string_width(marker);
-        add(marker, {});
+        const bool current = sidebar.list().is_current(row.index);
+        const int title_width = content_width - ftxui::string_width(kChosenMark);
+        used += ftxui::string_width(kChosenMark);
+        parts.push_back(chosen_mark(current, palette));
         const std::string title = clean_title(item.title);
         if (item.readable) {
             add(fit_width(title, title_width), {});
@@ -77,9 +81,9 @@ ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int co
             // mientras quepa algo del nombre.
             const int name_width = title_width - ftxui::string_width(kUnreadable);
             if (name_width >= 2) {
-                add(fit_width(title, name_width) + std::string{kUnreadable}, ftxui::dim);
+                add(fit_width(title, name_width) + std::string{kUnreadable}, notice);
             } else {
-                add(fit_width(title + std::string{kUnreadable}, title_width), ftxui::dim);
+                add(fit_width(title + std::string{kUnreadable}, title_width), notice);
             }
         }
         break;
@@ -121,7 +125,8 @@ std::string fit_width(std::string_view text, int width) {
 int sidebar_view_height(int height) { return std::max(height - 2, 1); }
 
 ftxui::Element render_sidebar(const Sidebar& sidebar, const std::vector<SidebarRow>& rows,
-                              int width, int height, bool focused) {
+                              int width, int height, bool focused, const Palette& palette) {
+    const ftxui::Decorator border = palette.ink(&Theme::border);
     width = std::max(width, 4);
     const int view = sidebar_view_height(height);
     // "│ " + contenido + " ": el borde derecho lo pone sidebar_divider().
@@ -131,9 +136,9 @@ ftxui::Element render_sidebar(const Sidebar& sidebar, const std::vector<SidebarR
     // Arriba: "┌ Conversaciones ───…".
     const std::string title = fit_width(kTitle, width - 1);
     lines.push_back(ftxui::hbox({
-        ftxui::text("┌"),
+        ftxui::text("┌") | border,
         ftxui::text(title) | ftxui::bold,
-        ftxui::text(repeat("─", width - 1 - ftxui::string_width(title))),
+        ftxui::text(repeat("─", width - 1 - ftxui::string_width(title))) | border,
     }));
 
     const std::size_t selected = sidebar.selected_row(rows);
@@ -141,31 +146,33 @@ ftxui::Element render_sidebar(const Sidebar& sidebar, const std::vector<SidebarR
         const std::size_t r = sidebar.top() + static_cast<std::size_t>(line);
         ftxui::Element content;
         if (r < rows.size()) {
-            content = row_content(sidebar, rows[r], content_width);
+            content = row_content(sidebar, rows[r], content_width, palette);
             if (focused && r == selected) {
-                content = content | ftxui::inverted; // Fila seleccionada, a todo lo ancho.
+                content = content | palette.selection(); // Cursor, a todo lo ancho.
             }
         } else if (sidebar.list().empty() && r == rows.size()) {
             const std::string empty =
                 fit_width(ConversationList::kEmptyMessage, content_width);
             content = ftxui::hbox({
-                ftxui::text(empty) | ftxui::dim,
+                ftxui::text(empty) | palette.ink(&Theme::notice),
                 ftxui::text(std::string(
                     static_cast<std::size_t>(content_width - ftxui::string_width(empty)), ' ')),
             });
         } else {
             content = ftxui::text(std::string(static_cast<std::size_t>(content_width), ' '));
         }
-        lines.push_back(ftxui::hbox({ftxui::text("│ "), std::move(content), ftxui::text(" ")}));
+        lines.push_back(
+            ftxui::hbox({ftxui::text("│ ") | border, std::move(content), ftxui::text(" ")}));
     }
 
-    lines.push_back(ftxui::text("└" + repeat("─", width - 1)));
+    lines.push_back(ftxui::text("└" + repeat("─", width - 1)) | border);
     return ftxui::vbox(std::move(lines));
 }
 
-ftxui::Element sidebar_divider() {
+ftxui::Element sidebar_divider(const Palette& palette) {
     return ftxui::vbox({ftxui::text("┐"), ftxui::separatorLight() | ftxui::yflex,
-                        ftxui::text("┘")});
+                        ftxui::text("┘")}) |
+           palette.ink(&Theme::border);
 }
 
 } // namespace chatbot::cli

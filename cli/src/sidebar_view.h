@@ -2,6 +2,7 @@
 #define CHATBOT_CLI_SIDEBAR_VIEW_H
 
 #include "sidebar.h"
+#include "theme.h"
 
 #include <ftxui/dom/elements.hpp>
 
@@ -30,14 +31,15 @@ inline constexpr int kSidebarMinTerminal = 100;
 /// Dibuja la barra lateral, sin su borde derecho: ese borde es
 /// sidebar_divider(), el divisor que se arrastra con el ratón. width son las
 /// columnas sin ese borde y height el alto total. Muestra las filas visibles
-/// desde sidebar.top(); la seleccionada se resalta solo si focused.
+/// desde sidebar.top(); la fila del cursor lleva la selección solo si
+/// focused, y la conversación abierta, "● " (list_style.h).
 [[nodiscard]] ftxui::Element render_sidebar(const Sidebar& sidebar,
                                             const std::vector<SidebarRow>& rows, int width,
-                                            int height, bool focused);
+                                            int height, bool focused, const Palette& palette);
 
 /// Borde derecho de la barra ("┐", "│"…, "┘"), que también es el divisor de
 /// ResizableSplit.
-[[nodiscard]] ftxui::Element sidebar_divider();
+[[nodiscard]] ftxui::Element sidebar_divider(const Palette& palette);
 
 } // namespace chatbot::cli
 

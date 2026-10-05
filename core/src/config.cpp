@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -385,9 +386,16 @@ Result<ConfigFileValues> load_config_file_values(const std::string& path) {
     return values;
 }
 
-std::optional<ChatError> save_config_file(const std::string& path,
-                                          const ConfigFileValues& values) {
-    using ordered = nlohmann::ordered_json;
+namespace {
+
+using ordered = nlohmann::ordered_json;
+
+/// Lee config.json (o un objeto vacío si no existe), deja que change lo
+/// modifique y lo escribe de forma atómica, conservando las demás llaves, su
+/// orden y los permisos del archivo. Si existe pero no es un objeto JSON
+/// válido, no lo toca y devuelve el error Config.
+std::optional<ChatError> update_config_file(const std::string& path,
+                                            const std::function<void(ordered&)>& change) {
     ordered document = ordered::object();
     mode_t mode = 0644; // config.json no lleva secretos.
     struct stat info {};
@@ -409,9 +417,7 @@ std::optional<ChatError> save_config_file(const std::string& path,
                              std::nullopt};
         }
     }
-    document["provider"] = values.provider;
-    document["base_url"] = values.base_url;
-    document["model"] = values.model;
+    change(document);
     const std::string text =
         document.dump(4, ' ', false, ordered::error_handler_t::replace) + "\n";
     if (const std::optional<std::string> error = write_file_atomic(path, text, mode, 0700)) {
@@ -419,6 +425,63 @@ std::optional<ChatError> save_config_file(const std::string& path,
                          std::nullopt};
     }
     return std::nullopt;
+}
+
+} // namespace
+
+std::optional<ChatError> save_config_file(const std::string& path,
+                                          const ConfigFileValues& values) {
+    return update_config_file(path, [&values](ordered& document) {
+        document["provider"] = values.provider;
+        document["base_url"] = values.base_url;
+        document["model"] = values.model;
+    });
+}
+
+Result<AppearanceValues> load_appearance_values(const std::string& path) {
+    AppearanceValues values;
+    struct stat info {};
+    if (::stat(path.c_str(), &info) != 0) {
+        return values; // Sin archivo: todo vacío.
+    }
+    try {
+        const std::optional<std::string> content = read_file(path);
+        if (!content.has_value()) {
+            throw std::runtime_error("no se pudo leer");
+        }
+        const nlohmann::json document = nlohmann::json::parse(*content);
+        if (!document.is_object()) {
+            throw std::runtime_error("no es un objeto JSON");
+        }
+        const auto appearance = document.find("appearance");
+        if (appearance == document.end() || !appearance->is_object()) {
+            return values;
+        }
+        const auto field = [&appearance](const char* name) {
+            const auto it = appearance->find(name);
+            return it != appearance->end() && it->is_string() ? it->get<std::string>()
+                                                              : std::string{};
+        };
+        values.theme = field("theme");
+        values.background = field("background");
+    } catch (const std::exception&) {
+        return ChatError{ErrorKind::Config, 0,
+                         "Archivo de configuración inválido (" + path + "): no es un objeto "
+                         "JSON válido.", std::nullopt};
+    }
+    return values;
+}
+
+std::optional<ChatError> save_appearance(const std::string& path,
+                                         const AppearanceValues& values) {
+    return update_config_file(path, [&values](ordered& document) {
+        ordered& appearance = document["appearance"];
+        if (!appearance.is_object()) {
+            appearance = ordered::object();
+        }
+        appearance["theme"] = values.theme;
+        appearance["background"] = values.background;
+    });
 }
 
 } // namespace chatbot

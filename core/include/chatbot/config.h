@@ -103,6 +103,25 @@ struct ConfigFileValues {
 [[nodiscard]] std::optional<ChatError> save_config_file(const std::string& path,
                                                         const ConfigFileValues& values);
 
+/// "appearance" de config.json: {"theme": "<id>", "background": "theme" |
+/// "terminal"}. El núcleo solo la lee y la escribe; la interpreta cli/.
+struct AppearanceValues {
+    std::string theme;
+    std::string background;
+};
+
+/// Lee "appearance" tal como está en config.json (vacíos si falta o no es
+/// un objeto). Que el archivo no exista no es un error; si no es un objeto
+/// JSON válido, error Config.
+[[nodiscard]] Result<AppearanceValues> load_appearance_values(const std::string& path);
+
+/// Escribe theme y background en "appearance" de forma atómica, conservando
+/// las demás llaves del archivo (y las de "appearance"). Si el archivo
+/// existe pero no es un objeto JSON válido, no lo toca y devuelve el error
+/// Config.
+[[nodiscard]] std::optional<ChatError> save_appearance(const std::string& path,
+                                                       const AppearanceValues& values);
+
 } // namespace chatbot
 
 #endif // CHATBOT_CONFIG_H

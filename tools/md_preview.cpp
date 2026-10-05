@@ -1,9 +1,12 @@
 // md_preview: dibuja un archivo markdown como lo muestra el chatbot, para
-// revisar el render sin la API. Uso: md_preview [--width N] archivo.md
-// Con colores si la salida es una terminal; si no, texto plano.
+// revisar el render sin la API.
+// Uso: md_preview [--width N] [--theme ID] [--background theme|terminal] archivo.md
+// Con colores si la salida es una terminal; si no, texto plano. Sin --theme,
+// el tema por defecto del chatbot.
 
 #include "markdown.h"
 #include "markdown_view.h"
+#include "theme.h"
 
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/dom/node.hpp>
@@ -23,7 +26,10 @@ namespace {
 
 constexpr int kMaxWidth = 1000;
 
-void usage() { std::cerr << "Uso: md_preview [--width N] archivo.md\n"; }
+void usage() {
+    std::cerr << "Uso: md_preview [--width N] [--theme ID] [--background theme|terminal] "
+                 "archivo.md\n";
+}
 
 /// Texto plano de la pantalla, sin estilos (como Screen::ToString).
 std::string plain_text(const ftxui::Screen& screen) {
@@ -49,6 +55,8 @@ std::string plain_text(const ftxui::Screen& screen) {
 int main(int argc, char** argv) {
     int width = 80;
     std::string path;
+    const chatbot::cli::Theme* theme = &chatbot::cli::default_theme();
+    chatbot::cli::BackgroundMode background = chatbot::cli::BackgroundMode::FromTheme;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if (arg == "--width" && i + 1 < argc) {
@@ -60,6 +68,23 @@ int main(int argc, char** argv) {
                           << ".\n";
                 return 2;
             }
+        } else if (arg == "--theme" && i + 1 < argc) {
+            theme = chatbot::cli::find_theme(argv[++i]);
+            if (theme == nullptr) {
+                std::cerr << "md_preview: tema desconocido. Temas:";
+                for (const chatbot::cli::Theme& known : chatbot::cli::themes()) {
+                    std::cerr << " " << known.id;
+                }
+                std::cerr << ".\n";
+                return 2;
+            }
+        } else if (arg == "--background" && i + 1 < argc) {
+            const auto mode = chatbot::cli::parse_background(argv[++i]);
+            if (!mode.has_value()) {
+                std::cerr << "md_preview: --background debe ser theme o terminal.\n";
+                return 2;
+            }
+            background = *mode;
         } else if (path.empty() && !arg.empty() && arg.front() != '-') {
             path = arg;
         } else {
@@ -79,7 +104,10 @@ int main(int argc, char** argv) {
     std::ostringstream content;
     content << file.rdbuf();
 
-    ftxui::Element element = chatbot::cli::md::render(chatbot::cli::md::parse(content.str()), width);
+    const chatbot::cli::Palette palette(*theme, background);
+    ftxui::Element element =
+        chatbot::cli::md::render(chatbot::cli::md::parse(content.str()), width, palette) |
+        palette.base();
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                                  ftxui::Dimension::Fit(element, true));
     ftxui::Render(screen, element);

@@ -3,6 +3,7 @@
 
 #include "models_loader.h"
 #include "provider_settings.h"
+#include "theme.h"
 
 #include "chatbot/config.h"
 
@@ -16,24 +17,33 @@
 
 namespace chatbot::cli {
 
-/// Pantalla de configuración (FTXUI): secciones a la izquierda (por ahora
-/// solo "Proveedor") y el formulario a la derecha. La lógica está en
-/// ProviderSettings; la lista de modelos se pide con ModelsLoader, en su
-/// hilo. Se usa solo desde el hilo de la interfaz.
+/// Pantalla de configuración (FTXUI): categorías a la izquierda
+/// ("Proveedor" y "Colores y Accesibilidad") y el formulario de la elegida a
+/// la derecha. La lógica del proveedor está en ProviderSettings; la lista de
+/// modelos se pide con ModelsLoader, en su hilo. Se dibuja con la paleta
+/// vigente (la de main.cpp, que cambia al guardar). Se usa solo desde el
+/// hilo de la interfaz.
 class SettingsScreen {
 public:
     /// Guarda lo del formulario (config.json, credentials.json) y reconstruye
     /// el cliente. Devuelve el error para mostrar, o nullopt si se guardó.
     using OnSave = std::function<std::optional<std::string>(const ProviderSettings&)>;
+    /// Guarda el tema y el fondo en config.json y los aplica. Devuelve el
+    /// error para mostrar, o nullopt si se guardó.
+    using OnSaveAppearance = std::function<std::optional<std::string>(const Appearance&)>;
     /// La pantalla se cerró (guardada o descartada).
     using OnClose = std::function<void()>;
 
-    SettingsScreen(ModelsLoader& loader, OnSave on_save, OnClose on_close);
+    /// palette debe vivir más que la pantalla.
+    SettingsScreen(ModelsLoader& loader, const Palette& palette, OnSave on_save,
+                   OnSaveAppearance on_save_appearance, OnClose on_close);
 
     /// Abre con un formulario nuevo. base: la configuración actual (timeout,
-    /// volcado) para pedir los modelos. notice: aviso inicial, si hay. Pide
-    /// la lista de modelos si ya hay URL y key.
-    void open(ProviderSettings settings, Config base, std::string notice = {});
+    /// volcado) para pedir los modelos. appearance: el tema y el fondo
+    /// vigentes. notice: aviso inicial, si hay. Pide la lista de modelos si
+    /// ya hay URL y key.
+    void open(ProviderSettings settings, Config base, Appearance appearance,
+              std::string notice = {});
     /// Esc, Cancelar o F2: cierra si no hay cambios; si los hay, pregunta
     /// "¿Descartar los cambios? (s/n)". Devuelve true si se cerró.
     bool request_close();
@@ -47,6 +57,9 @@ public:
     void focus();
 
 private:
+    /// Categorías del menú de la izquierda.
+    enum Category : int { kProvider = 0, kAppearance = 1 };
+
     void request_models();
     void save();
     /// Copia al formulario lo que cambió en settings_ (tras cambiar de proveedor).
@@ -56,16 +69,32 @@ private:
     bool handle_event(const ftxui::Event& event);
     [[nodiscard]] ftxui::Element render() const;
     [[nodiscard]] ftxui::Element render_models() const;
+    [[nodiscard]] ftxui::Element render_provider() const;
+    [[nodiscard]] ftxui::Element render_appearance() const;
+    /// Tema y fondo elegidos en el formulario.
+    [[nodiscard]] Appearance chosen_appearance() const;
+    [[nodiscard]] bool appearance_dirty() const;
+    /// El fondo se puede elegir (el tema elegido tiene fondo propio).
+    [[nodiscard]] bool background_enabled() const;
 
     ModelsLoader& loader_;
+    const Palette& palette_;
     OnSave on_save_;
+    OnSaveAppearance on_save_appearance_;
     OnClose on_close_;
     std::optional<ProviderSettings> settings_;
     Config base_;
+    Appearance saved_appearance_; ///< El vigente al abrir (o al guardar).
     std::string status_;          ///< Aviso o error bajo el formulario.
     bool confirm_discard_ = false; ///< Se preguntó "¿Descartar los cambios?".
 
     // Lo que editan los componentes.
+    std::vector<std::string> category_names_;
+    int category_ = kProvider;
+    std::vector<std::string> theme_names_;
+    int theme_selected_ = 0;
+    std::vector<std::string> background_names_;
+    int background_selected_ = 0;
     std::vector<std::string> provider_names_;
     int provider_selected_ = 0;
     bool dropdown_open_ = false;
@@ -74,6 +103,9 @@ private:
     std::string filter_text_;
     std::string model_text_;
 
+    ftxui::Component categories_;
+    ftxui::Component theme_list_;
+    ftxui::Component background_list_;
     ftxui::Component dropdown_;
     ftxui::Component url_input_;
     ftxui::Component key_input_;

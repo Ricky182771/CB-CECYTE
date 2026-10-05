@@ -43,8 +43,9 @@ std::vector<ConversationSummary> sample() {
 ftxui::Screen draw(const Sidebar& sidebar, int width, int height, bool focused) {
     const auto rows = sidebar.rows(kToday);
     ftxui::Element element = ftxui::hbox(
-        {chatbot::cli::render_sidebar(sidebar, rows, width, height, focused),
-         chatbot::cli::sidebar_divider()});
+        {chatbot::cli::render_sidebar(sidebar, rows, width, height, focused,
+                                     chatbot::cli::terminal_palette()),
+         chatbot::cli::sidebar_divider(chatbot::cli::terminal_palette())});
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width + 1),
                                                  ftxui::Dimension::Fixed(height));
     ftxui::Render(screen, element);

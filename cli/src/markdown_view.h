@@ -2,6 +2,7 @@
 #define CHATBOT_CLI_MARKDOWN_VIEW_H
 
 #include "markdown.h"
+#include "theme.h"
 
 #include <ftxui/dom/elements.hpp>
 
@@ -14,11 +15,14 @@ namespace chatbot::cli::md {
 /// Dibuja el documento para un ancho de width columnas. El ajuste de líneas
 /// se calcula aquí (no en FTXUI), así que el alto del resultado depende solo
 /// del documento y del ancho. Nunca pierde texto: lo que no cabe se parte.
-[[nodiscard]] ftxui::Element render(const Document& document, int width);
+/// Los colores salen de palette; el fondo y el color del texto normal no:
+/// los pone quien llama (Palette::base) sobre todo lo que dibuja.
+[[nodiscard]] ftxui::Element render(const Document& document, int width,
+                                    const Palette& palette);
 
 /// Texto plano (sin markdown) filtrado con sanitize() y ajustado a width
 /// columnas con las mismas reglas; conserva los espacios repetidos. style
-/// (por ejemplo, ftxui::dim) se aplica solo al texto de cada línea, no al
+/// (por ejemplo, Palette::ink) se aplica solo al texto de cada línea, no al
 /// relleno hasta el borde.
 [[nodiscard]] ftxui::Element render_plain(std::string_view text, int width,
                                           const ftxui::Decorator& style = {});

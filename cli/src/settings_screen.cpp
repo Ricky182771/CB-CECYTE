@@ -1,6 +1,7 @@
 #include "settings_screen.h"
 
 #include "input_style.h"
+#include "list_style.h"
 #include "markdown.h"
 
 #include "chatbot/error.h"
@@ -18,13 +19,15 @@ namespace {
 
 /// Ancho de la columna de etiquetas del formulario.
 constexpr int kLabelWidth = 12;
-/// Ancho de la columna de secciones.
-constexpr int kSectionsWidth = 16;
+/// Ancho de la columna de categorías ("● Colores y Accesibilidad" y un espacio).
+constexpr int kSectionsWidth = 26;
 /// Ancho del campo de la key.
 constexpr int kKeyWidth = 24;
 
-ftxui::Element label(const char* text) {
-    return ftxui::text(text) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kLabelWidth);
+/// Etiqueta de un campo en su columna; con el foco, con la selección.
+ftxui::Element label(const char* text, bool focused, const Palette& palette) {
+    return ftxui::hbox({field_label(text, focused, palette)}) |
+           ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kLabelWidth);
 }
 
 /// Texto de una línea, sin controles de terminal.
@@ -34,37 +37,72 @@ std::string clean(std::string_view text) {
     return out;
 }
 
-ftxui::InputOption field_option(std::function<void()> on_change,
+ftxui::InputOption field_option(const Palette& palette, std::function<void()> on_change,
                                 std::function<void()> on_enter = [] {}) {
     ftxui::InputOption option;
     option.multiline = false;
     // Sin fondo invertido, igual que la caja de la conversación.
-    option.transform = [](ftxui::InputState state) {
+    option.transform = [&palette](ftxui::InputState state) {
         return input_transform(std::move(state.element), state.hovered, state.focused,
-                               state.is_placeholder);
+                               state.is_placeholder, palette);
     };
     option.on_change = std::move(on_change);
     option.on_enter = std::move(on_enter);
     return option;
 }
 
-/// Botón "[ Guardar ]": con el foco, en negritas y subrayado (sin invertir).
-ftxui::ButtonOption button_option() {
+/// Botón "[ Guardar ]": con el foco, con la selección.
+ftxui::ButtonOption button_option(const Palette& palette) {
     ftxui::ButtonOption option;
-    option.transform = [](const ftxui::EntryState& state) {
-        ftxui::Element element = ftxui::text("[ " + state.label + " ]");
-        return state.focused ? element | ftxui::bold | ftxui::underlined : element;
+    option.transform = [&palette](const ftxui::EntryState& state) {
+        return button_label(state.label, state.focused, palette);
     };
     return option;
 }
 
+/// Filas de una lista de FTXUI (Menu, Radiobox): cursor y elegido como en
+/// list_style.h. elegido: state.active en un Menu, state.state en un Radiobox.
+std::function<ftxui::Element(const ftxui::EntryState&)> row_transform(const Palette& palette,
+                                                                      bool chosen_is_state) {
+    return [&palette, chosen_is_state](const ftxui::EntryState& state) {
+        return list_row(clean(state.label), state.focused,
+                        chosen_is_state ? state.state : state.active, palette);
+    };
+}
+
 } // namespace
 
-SettingsScreen::SettingsScreen(ModelsLoader& loader, OnSave on_save, OnClose on_close)
-    : loader_(loader), on_save_(std::move(on_save)), on_close_(std::move(on_close)) {
+SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnSave on_save,
+                               OnSaveAppearance on_save_appearance, OnClose on_close)
+    : loader_(loader), palette_(palette), on_save_(std::move(on_save)),
+      on_save_appearance_(std::move(on_save_appearance)), on_close_(std::move(on_close)) {
+    category_names_ = {"Proveedor", "Colores y Accesibilidad"};
+    for (const Theme& theme : themes()) {
+        theme_names_.emplace_back(theme.name);
+    }
+    background_names_ = {"Del tema", "Transparente"};
     for (const ProviderInfo& provider : providers()) {
         provider_names_.emplace_back(provider.name);
     }
+
+    // Categorías: el cursor y la elegida se mueven juntos (Menu).
+    ftxui::MenuOption categories = ftxui::MenuOption::Vertical();
+    categories.entries = &category_names_;
+    categories.selected = &category_;
+    categories.entries_option.transform = row_transform(palette_, false);
+    categories_ = ftxui::Menu(categories);
+
+    ftxui::RadioboxOption theme_list;
+    theme_list.entries = &theme_names_;
+    theme_list.selected = &theme_selected_;
+    theme_list.transform = row_transform(palette_, true);
+    theme_list_ = ftxui::Radiobox(theme_list);
+
+    ftxui::RadioboxOption background_list;
+    background_list.entries = &background_names_;
+    background_list.selected = &background_selected_;
+    background_list.transform = row_transform(palette_, true);
+    background_list_ = ftxui::Radiobox(background_list);
 
     ftxui::DropdownOption dropdown;
     dropdown.open = &dropdown_open_;
@@ -79,28 +117,25 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, OnSave on_save, OnClose on_
         sync_fields();
         status_.clear();
     };
-    dropdown.radiobox.transform = [](const ftxui::EntryState& state) {
-        ftxui::Element element =
-            ftxui::text((state.focused ? "▸ " : "  ") + state.label);
-        return state.state ? element | ftxui::bold : element;
-    };
+    dropdown.radiobox.transform = row_transform(palette_, true);
     dropdown.checkbox.transform = [](const ftxui::EntryState& state) {
         ftxui::Element element = ftxui::hbox({ftxui::text("[ "), ftxui::text(state.label) | ftxui::flex,
                                               ftxui::text(state.state ? " ▴]" : " ▾]")});
         return state.focused ? element | ftxui::bold : element;
     };
-    dropdown.transform = [](bool open, ftxui::Element checkbox, ftxui::Element radiobox) {
+    dropdown.transform = [this](bool open, ftxui::Element checkbox, ftxui::Element radiobox) {
         if (!open) {
             return checkbox;
         }
         return ftxui::vbox({std::move(checkbox),
-                            std::move(radiobox) | ftxui::vscroll_indicator | ftxui::frame |
+                            palette_.vscroll(std::move(radiobox)) | ftxui::frame |
                                 ftxui::size(ftxui::HEIGHT, ftxui::LESS_THAN, 10)});
     };
     dropdown_ = ftxui::Dropdown(dropdown);
 
     url_input_ = ftxui::Input(&url_text_, "https://mi-servidor/v1",
                               field_option(
+                                  palette_,
                                   [this] {
                                       if (settings_ && settings_->set_base_url(url_text_)) {
                                           loader_.cancel(); // La lista era de otra URL.
@@ -108,6 +143,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, OnSave on_save, OnClose on_
                                   },
                                   [this] { request_models(); }));
     ftxui::InputOption key_option = field_option(
+        palette_,
         [this] {
             if (settings_) {
                 (void)settings_->set_key(key_text_);
@@ -117,6 +153,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, OnSave on_save, OnClose on_
     key_option.password = true; // Nunca se dibuja la key en claro.
     key_input_ = ftxui::Input(&key_text_, "escribe la API key", key_option);
     filter_input_ = ftxui::Input(&filter_text_, "", field_option(
+                                                        palette_,
                                                         [this] {
                                                             if (settings_) {
                                                                 settings_->set_filter(filter_text_);
@@ -128,30 +165,53 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, OnSave on_save, OnClose on_
                                                                 model_text_ = settings_->model();
                                                             }
                                                         }));
-    refresh_button_ = ftxui::Button("Actualizar", [this] { request_models(); }, button_option());
-    model_input_ = ftxui::Input(&model_text_, "escribe el modelo", field_option([this] {
+    refresh_button_ =
+        ftxui::Button("Actualizar", [this] { request_models(); }, button_option(palette_));
+    model_input_ = ftxui::Input(&model_text_, "escribe el modelo", field_option(palette_, [this] {
                                     if (settings_) {
                                         (void)settings_->set_model(model_text_);
                                     }
                                 }));
-    save_button_ = ftxui::Button("Guardar", [this] { save(); }, button_option());
-    cancel_button_ = ftxui::Button("Cancelar", [this] { (void)request_close(); }, button_option());
+    save_button_ = ftxui::Button("Guardar", [this] { save(); }, button_option(palette_));
+    cancel_button_ =
+        ftxui::Button("Cancelar", [this] { (void)request_close(); }, button_option(palette_));
 
-    const ftxui::Component form = ftxui::Container::Vertical({
+    const ftxui::Component provider_form = ftxui::Container::Vertical({
         dropdown_,
         ftxui::Maybe(url_input_, [this] { return settings_ && settings_->base_url_editable(); }),
         ftxui::Maybe(key_input_, [this] { return settings_ && !settings_->key_locked(); }),
         ftxui::Container::Horizontal({filter_input_, refresh_button_}),
         ftxui::Maybe(model_input_, [this] { return settings_ && !settings_->model_locked(); }),
+    });
+    const ftxui::Component appearance_form = ftxui::Container::Vertical({
+        theme_list_,
+        // Con un tema sin fondo propio, el fondo no aplica: no toma el foco.
+        ftxui::Maybe(background_list_, [this] { return background_enabled(); }),
+    });
+    const ftxui::Component form = ftxui::Container::Vertical({
+        ftxui::Container::Tab({provider_form, appearance_form}, &category_),
         ftxui::Container::Horizontal({save_button_, cancel_button_}),
     });
-    root_ = ftxui::CatchEvent(ftxui::Renderer(form, [this] { return render(); }),
-                              [this](const ftxui::Event& event) { return handle_event(event); });
+    root_ = ftxui::CatchEvent(
+        ftxui::Renderer(ftxui::Container::Horizontal({categories_, form}),
+                        [this] { return render(); }),
+        [this](const ftxui::Event& event) { return handle_event(event); });
 }
 
-void SettingsScreen::open(ProviderSettings settings, Config base, std::string notice) {
+void SettingsScreen::open(ProviderSettings settings, Config base, Appearance appearance,
+                          std::string notice) {
     settings_ = std::move(settings);
     base_ = std::move(base);
+    saved_appearance_ = appearance;
+    category_ = kProvider;
+    theme_selected_ = 0;
+    const std::span<const Theme> all = themes();
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        if (&all[i] == appearance.theme) {
+            theme_selected_ = static_cast<int>(i);
+        }
+    }
+    background_selected_ = appearance.background == BackgroundMode::Transparent ? 1 : 0;
     provider_selected_ = static_cast<int>(settings_->provider());
     dropdown_open_ = false;
     confirm_discard_ = false;
@@ -163,10 +223,28 @@ void SettingsScreen::open(ProviderSettings settings, Config base, std::string no
     }
 }
 
-void SettingsScreen::focus() { dropdown_->TakeFocus(); }
+void SettingsScreen::focus() { categories_->TakeFocus(); }
+
+Appearance SettingsScreen::chosen_appearance() const {
+    Appearance appearance;
+    appearance.theme = &themes()[static_cast<std::size_t>(theme_selected_)];
+    appearance.background =
+        background_selected_ == 1 ? BackgroundMode::Transparent : BackgroundMode::FromTheme;
+    return appearance;
+}
+
+bool SettingsScreen::appearance_dirty() const {
+    const Appearance chosen = chosen_appearance();
+    return chosen.theme != saved_appearance_.theme ||
+           chosen.background != saved_appearance_.background;
+}
+
+bool SettingsScreen::background_enabled() const {
+    return has_own_background(themes()[static_cast<std::size_t>(theme_selected_)]);
+}
 
 bool SettingsScreen::request_close() {
-    if (settings_ && settings_->dirty()) {
+    if (settings_ && (settings_->dirty() || appearance_dirty())) {
         confirm_discard_ = true;
         return false;
     }
@@ -220,35 +298,55 @@ void SettingsScreen::save() {
     if (!settings_) {
         return;
     }
-    if (const std::optional<std::string> error = settings_->validate()) {
-        status_ = *error;
-        return;
+    const bool appearance_changed = appearance_dirty();
+    // Si solo cambió la apariencia, el proveedor no se guarda (ni se
+    // reconstruye el cliente); si no cambió nada, se guarda como siempre.
+    if (settings_->dirty() || !appearance_changed) {
+        if (const std::optional<std::string> error = settings_->validate()) {
+            status_ = *error;
+            return;
+        }
+        if (const std::optional<std::string> error = on_save_(*settings_)) {
+            status_ = *error;
+            return;
+        }
+        settings_->mark_saved();
     }
-    if (const std::optional<std::string> error = on_save_(*settings_)) {
-        status_ = *error;
-        return;
+    if (appearance_changed) {
+        const Appearance chosen = chosen_appearance();
+        if (const std::optional<std::string> error = on_save_appearance_(chosen)) {
+            status_ = *error;
+            return;
+        }
+        saved_appearance_ = chosen;
     }
-    settings_->mark_saved();
     close();
 }
 
 void SettingsScreen::move_focus(int step) {
-    const std::vector<ftxui::Component> order = {
-        dropdown_,    url_input_,     key_input_,   filter_input_,
-        refresh_button_, model_input_, save_button_, cancel_button_,
-    };
-    const auto visible = [this](std::size_t i) {
-        switch (i) {
-        case 1:
-            return settings_->base_url_editable();
-        case 2:
-            return !settings_->key_locked();
-        case 5:
-            return !settings_->model_locked();
-        default:
-            return true;
+    // Las categorías, los campos de la categoría elegida y los botones.
+    std::vector<ftxui::Component> order{categories_};
+    if (category_ == kAppearance) {
+        order.push_back(theme_list_);
+        if (background_enabled()) {
+            order.push_back(background_list_);
         }
-    };
+    } else {
+        order.push_back(dropdown_);
+        if (settings_->base_url_editable()) {
+            order.push_back(url_input_);
+        }
+        if (!settings_->key_locked()) {
+            order.push_back(key_input_);
+        }
+        order.push_back(filter_input_);
+        order.push_back(refresh_button_);
+        if (!settings_->model_locked()) {
+            order.push_back(model_input_);
+        }
+    }
+    order.push_back(save_button_);
+    order.push_back(cancel_button_);
     const auto count = static_cast<long long>(order.size());
     long long current = 0;
     for (long long i = 0; i < count; ++i) {
@@ -257,13 +355,8 @@ void SettingsScreen::move_focus(int step) {
             break;
         }
     }
-    for (long long tries = 0; tries < count; ++tries) {
-        current = ((current + step) % count + count) % count;
-        if (visible(static_cast<std::size_t>(current))) {
-            order[static_cast<std::size_t>(current)]->TakeFocus();
-            return;
-        }
-    }
+    current = ((current + step) % count + count) % count;
+    order[static_cast<std::size_t>(current)]->TakeFocus();
 }
 
 bool SettingsScreen::handle_event(const ftxui::Event& event) {
@@ -295,7 +388,7 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
         move_focus(event == ftxui::Event::Tab ? 1 : -1);
         return true;
     }
-    if (filter_input_->Focused()) {
+    if (category_ == kProvider && filter_input_->Focused()) {
         // Con el filtro, ↑/↓ (y PgUp/PgDn) mueven el resaltado de la lista.
         const std::pair<const ftxui::Event*, int> moves[] = {
             {&ftxui::Event::ArrowUp, -1},
@@ -315,12 +408,13 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
 
 ftxui::Element SettingsScreen::render_models() const {
     const ProviderSettings& s = *settings_;
+    const ftxui::Decorator notice = palette_.ink(&Theme::notice);
     switch (s.models_state()) {
     case ModelsState::Idle:
         return ftxui::text(s.can_request_models()
                                ? "Pulsa Actualizar para pedir la lista."
                                : "Escribe la URL base y la API key, y pulsa Actualizar.") |
-               ftxui::dim;
+               notice;
     case ModelsState::Loading:
         return ftxui::text("Cargando modelos…");
     case ModelsState::Failed:
@@ -328,7 +422,7 @@ ftxui::Element SettingsScreen::render_models() const {
             ftxui::paragraph(clean(s.models_error())) | ftxui::bold,
             ftxui::text(s.model_locked() ? "El modelo lo define CHAT_MODEL."
                                          : "Puedes escribir el modelo a mano en «Modelo».") |
-                ftxui::dim,
+                notice,
         });
     case ModelsState::Loaded:
         break;
@@ -337,29 +431,24 @@ ftxui::Element SettingsScreen::render_models() const {
     if (models.empty()) {
         return ftxui::text(s.filter().empty() ? "El servidor no devolvió modelos."
                                               : "Ningún modelo coincide con el filtro.") |
-               ftxui::dim;
+               notice;
     }
-    const bool filtering = filter_input_->Focused();
-    ftxui::Elements lines;
+    std::vector<std::string> labels;
+    std::optional<std::size_t> chosen;
+    labels.reserve(models.size());
     for (std::size_t i = 0; i < models.size(); ++i) {
-        const bool chosen = models[i] == s.effective_model();
-        ftxui::Element line = ftxui::text((chosen ? "● " : "  ") + clean(models[i]));
-        if (i == s.highlighted()) {
-            line = line | ftxui::bold | ftxui::focus;
-            if (filtering) {
-                line = line | ftxui::underlined;
-            }
+        labels.push_back(clean(models[i]));
+        if (models[i] == s.effective_model()) {
+            chosen = i;
         }
-        lines.push_back(std::move(line));
     }
-    return ftxui::vbox(std::move(lines)) | ftxui::vscroll_indicator | ftxui::frame;
+    // La lista tiene el foco mientras lo tiene el filtro: ↑/↓ mueven el cursor.
+    return choice_list(labels, s.highlighted(), chosen, filter_input_->Focused(), palette_);
 }
 
-ftxui::Element SettingsScreen::render() const {
-    if (!settings_) {
-        return ftxui::emptyElement();
-    }
+ftxui::Element SettingsScreen::render_provider() const {
     const ProviderSettings& s = *settings_;
+    const ftxui::Decorator notice = palette_.ink(&Theme::notice);
 
     ftxui::Element url;
     if (s.base_url_editable()) {
@@ -367,7 +456,7 @@ ftxui::Element SettingsScreen::render() const {
     } else {
         url = ftxui::hbox({
             ftxui::text(clean(s.effective_base_url())) | ftxui::flex_shrink,
-            s.base_url_locked() ? ftxui::text("  (definido por CHAT_BASE_URL)") | ftxui::dim
+            s.base_url_locked() ? ftxui::text("  (definido por CHAT_BASE_URL)") | notice
                                 : ftxui::emptyElement(),
         });
     }
@@ -375,56 +464,101 @@ ftxui::Element SettingsScreen::render() const {
     // La key nunca se dibuja: el campo muestra "•" y el estado, enmascarado.
     ftxui::Element key;
     if (s.key_locked()) {
-        key = ftxui::text(s.key_status()) | ftxui::dim;
+        key = ftxui::text(s.key_status()) | notice;
     } else {
         key = ftxui::hbox({
             key_input_->Render() | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kKeyWidth),
-            ftxui::text("  " + s.key_status()) | ftxui::dim,
+            ftxui::text("  " + s.key_status()) | notice,
         });
     }
 
     ftxui::Element model;
     if (s.model_locked()) {
         model = ftxui::hbox({ftxui::text(clean(s.effective_model())),
-                             ftxui::text("  (definido por CHAT_MODEL)") | ftxui::dim});
+                             ftxui::text("  (definido por CHAT_MODEL)") | notice});
     } else {
         model = model_input_->Render() | ftxui::flex;
     }
 
+    return ftxui::vbox({
+        ftxui::text("Proveedor de IA") | ftxui::bold,
+        ftxui::text(""),
+        ftxui::hbox({label("Proveedor", dropdown_->Focused(), palette_),
+                     dropdown_->Render() | ftxui::flex}),
+        ftxui::hbox({label("URL base", url_input_->Focused(), palette_), std::move(url)}),
+        ftxui::hbox({label("API key", key_input_->Focused(), palette_), std::move(key)}),
+        ftxui::text(""),
+        ftxui::hbox({label("Modelos", false, palette_),
+                     field_label("Filtrar:", filter_input_->Focused(), palette_),
+                     ftxui::text(" "), filter_input_->Render() | ftxui::flex, ftxui::text(" "),
+                     refresh_button_->Render()}),
+        render_models() | ftxui::flex,
+        ftxui::hbox({label("Modelo", model_input_->Focused(), palette_), std::move(model)}),
+    });
+}
+
+ftxui::Element SettingsScreen::render_appearance() const {
+    const ftxui::Decorator notice = palette_.ink(&Theme::notice);
+    ftxui::Element background;
+    if (background_enabled()) {
+        background = background_list_->Render();
+    } else {
+        // No aplica: las opciones, sin cursor ni elegido, en texto secundario.
+        ftxui::Elements rows;
+        for (const std::string& name : background_names_) {
+            rows.push_back(ftxui::text(std::string{kNotChosenMark} + name) | notice);
+        }
+        rows.push_back(ftxui::text("No aplica: este tema usa el fondo de la terminal.") | notice);
+        background = ftxui::vbox(std::move(rows));
+    }
+    return ftxui::vbox({
+        ftxui::text("Colores y Accesibilidad") | ftxui::bold,
+        ftxui::text(""),
+        ftxui::hbox({label("Tema", theme_list_->Focused(), palette_),
+                     theme_list_->Render() | ftxui::flex}),
+        ftxui::text(""),
+        ftxui::hbox({label("Fondo", background_list_->Focused(), palette_),
+                     std::move(background) | ftxui::flex}),
+        ftxui::text(""),
+        ftxui::text("Se aplica al guardar.") | notice,
+        ftxui::filler(),
+    });
+}
+
+ftxui::Element SettingsScreen::render() const {
+    if (!settings_) {
+        return ftxui::emptyElement();
+    }
     ftxui::Element status;
     if (confirm_discard_) {
         status = ftxui::text("¿Descartar los cambios? (s/n)") | ftxui::bold;
     } else if (!status_.empty()) {
         status = ftxui::paragraph(clean(status_)) | ftxui::bold;
+    } else if (category_ == kAppearance) {
+        status = ftxui::text("Tab: campo · ↑/↓: mover · Enter: elegir · Esc: cerrar") |
+                 palette_.ink(&Theme::notice);
     } else {
         status = ftxui::text("Tab: campo · ↑/↓ y Enter: modelo · Esc: cerrar") |
-                 ftxui::dim;
+                 palette_.ink(&Theme::notice);
     }
 
     ftxui::Element form = ftxui::vbox({
-        ftxui::text("Proveedor de IA") | ftxui::bold,
-        ftxui::text(""),
-        ftxui::hbox({label("Proveedor"), dropdown_->Render() | ftxui::flex}),
-        ftxui::hbox({label("URL base"), std::move(url)}),
-        ftxui::hbox({label("API key"), std::move(key)}),
-        ftxui::text(""),
-        ftxui::hbox({label("Modelos"), ftxui::text("Filtrar: "), filter_input_->Render() | ftxui::flex,
-                     ftxui::text(" "), refresh_button_->Render()}),
-        render_models() | ftxui::flex,
-        ftxui::hbox({label("Modelo"), std::move(model)}),
+        (category_ == kAppearance ? render_appearance() : render_provider()) | ftxui::flex,
         ftxui::text(""),
         ftxui::hbox({ftxui::filler(), save_button_->Render(), ftxui::text("  "),
                      cancel_button_->Render()}),
         std::move(status),
     });
     ftxui::Element sections =
-        ftxui::vbox({ftxui::text("Proveedor") | ftxui::bold}) |
-        ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kSectionsWidth);
-    return ftxui::window(ftxui::text(" Configuración ") | ftxui::bold,
-                         ftxui::hbox({std::move(sections), ftxui::separator(),
-                                      ftxui::text(" "), std::move(form) | ftxui::flex}),
-                         ftxui::LIGHT) |
-           ftxui::flex;
+        categories_->Render() | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kSectionsWidth);
+    // El borde y los separadores en el color border; lo de adentro, no.
+    ftxui::Element body = ftxui::hbox({std::move(sections),
+                                       ftxui::separator() | palette_.ink(&Theme::border),
+                                       ftxui::text(" "), std::move(form) | ftxui::flex}) |
+                          palette_.inside_border();
+    return ftxui::window(ftxui::text(" Configuración ") | ftxui::bold | palette_.inside_border(),
+                         std::move(body), ftxui::LIGHT) |
+           palette_.ink(&Theme::border) | ftxui::flex;
 }
 
 } // namespace chatbot::cli

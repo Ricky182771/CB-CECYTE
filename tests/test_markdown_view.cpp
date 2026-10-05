@@ -23,7 +23,7 @@ namespace md = chatbot::cli::md;
 
 /// Dibuja el markdown con el ancho dado y el alto que necesite.
 ftxui::Screen draw(std::string_view markdown, int width) {
-    ftxui::Element element = md::render(md::parse(markdown), width);
+    ftxui::Element element = md::render(md::parse(markdown), width, chatbot::cli::terminal_palette());
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                                  ftxui::Dimension::Fit(element, true));
     ftxui::Render(screen, element);
@@ -565,7 +565,7 @@ TEST_CASE("vista: tiempo del reparto de ancho de tablas", "[vista][tabla][desemp
         });
     };
     const auto dibujo = [&](const md::Document& document, int width) {
-        return best_of_three([&] { (void)md::render(document, width); });
+        return best_of_three([&] { (void)md::render(document, width, chatbot::cli::terminal_palette()); });
     };
     const double small_ms = reparto(small, 117);
     const double large_120 = reparto(large, 120);
