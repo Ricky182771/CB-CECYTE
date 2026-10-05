@@ -1,0 +1,96 @@
+[1m[4mMuestra de markdown[22m[24m                                                             
+                                                                                
+Párrafo con [1mnegritas[22m, [3mcursivas[23m, [1m[3mambas[22m[23m, [9mtachado[29m, [30m[43mresaltado[39m[49m, [36m[49mcódigo en línea[39m[49m y un 
+]8;;https://example.com/docs\[4menlace]8;;\[2m[24m ]8;;https://example.com/docs\(https://example.com/docs)]8;;\[22m. Autolink: ]8;;https://example.org\[4mhttps://example.org]8;;\[24m. Con salto duro
+al final                                                                        
+de esta línea. Entidades: © — € é &desconocida;                                 
+                                                                                
+[1mListas[22m                                                                          
+                                                                                
+• Elemento con un texto lo bastante largo para que se ajuste en varias líneas.  
+  ◦ Anidado                                                                     
+    ▪ Tercer nivel                                                              
+☐ Tarea pendiente                                                               
+☑ Tarea hecha                                                                   
+                                                                                
+3. Empieza en tres                                                              
+4. Sigue en cuatro                                                              
+                                                                                
+[1m[36m[49m▍ Citas y alertas[22m[39m[49m                                                               
+                                                                                
+[2m│[22m Una cita.                                                                     
+[2m│[22m                                                                               
+[2m│[22m [2m│[22m Una cita dentro de otra.                                                    
+                                                                                
+[2m│[22m [1mNota[22m                                                                          
+[2m│[22m Una nota.                                                                     
+                                                                                
+[2m│[22m [1mConsejo[22m                                                                       
+[2m│[22m Un consejo.                                                                   
+                                                                                
+[2m│[22m [1mImportante[22m                                                                    
+[2m│[22m Algo importante.                                                              
+                                                                                
+[2m│[22m [1mAdvertencia[22m                                                                   
+[2m│[22m Una advertencia.                                                              
+                                                                                
+[2m│[22m [1mPrecaución[22m                                                                    
+[2m│[22m Precaución.                                                                   
+                                                                                
+[1m[36m[49m▍ Código[22m[39m[49m                                                                        
+                                                                                
+╭[2m cpp [22m─────────────────────────────────────────────────────────────────────────╮
+│ #include <iostream>                                                          │
+│                                                                              │
+│ int main() {                                                                 │
+│     std::cout << "Una línea de código bastante larga que no cabe en cuarenta │
+│  columnas" << '\n';                                                          │
+│     return 0;                                                                │
+│ }                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ sin lenguaje                                                                 │
+│     con tabulador                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+                                                                                
+[1m[36m[49m▍ Tablas[22m[39m[49m                                                                        
+                                                                                
+[2m┌────────┬──────┬────────┐[22m                                                      
+[2m│[22m [1mNombre[22m [2m│[22m [1mEdad[22m [2m│[22m [1mCiudad[22m [2m│[22m                                                      
+[2m├────────┼──────┼────────┤[22m                                                      
+[2m│[22m Ana    [2m│[22m   30 [2m│[22m  León  [2m│[22m                                                      
+[2m│[22m Bo     [2m│[22m    5 [2m│[22m  Lima  [2m│[22m                                                      
+[2m└────────┴──────┴────────┘[22m                                                      
+                                                                                
+[2m┌─────────┬────────────────────────────────────────┬─────────┬────────┬────────┐[22m
+[2m│[22m [1mColumna[22m [2m│[22m [1mDescripción larga[22m                      [2m│[22m [1mOtra[22m    [2m│[22m [1mUna[22m    [2m│[22m [1mY otra[22m [2m│[22m
+[2m│[22m         [2m│[22m                                        [2m│[22m [1mcolumna[22m [2m│[22m [1mmás[22m    [2m│[22m        [2m│[22m
+[2m├─────────┼────────────────────────────────────────┼─────────┼────────┼────────┤[22m
+[2m│[22m uno     [2m│[22m Un texto bastante largo que tendrá que [2m│[22m dos     [2m│[22m tres   [2m│[22m cuatro [2m│[22m
+[2m│[22m         [2m│[22m ajustarse dentro de la celda           [2m│[22m         [2m│[22m        [2m│[22m        [2m│[22m
+[2m└─────────┴────────────────────────────────────────┴─────────┴────────┴────────┘[22m
+                                                                                
+[1m[36m[49m▍ Unicode y control[22m[39m[49m                                                             
+                                                                                
+Emoji 😀🎉 y CJK: 漢字かな交じり文 ここに長い日本語の文章があります。           
+                                                                                
+[2m┌──────┬──────┬────┐[22m                                                            
+[2m│[22m [1m名前[22m [2m│[22m [1m都市[22m [2m│[22m [1m😀[22m [2m│[22m                                                            
+[2m├──────┼──────┼────┤[22m                                                            
+[2m│[22m 山田 [2m│[22m 東京 [2m│[22m sí [2m│[22m                                                            
+[2m└──────┴──────┴────┘[22m                                                            
+                                                                                
+Secuencia ESC: �[31mesto no debe salir en rojo�[0m y campana �.                 
+                                                                                
+Imagen: [imagen: logo del proyecto][2m ]8;;https://example.com/logo.png\(https://example.com/logo.png)]8;;\[22m              
+                                                                                
+Matemáticas: [36m[49mE = mc^2[39m[49m y [36m[49m\int_0^1 x\,dx[39m[49m                                          
+                                                                                
+Una nota al pie[1] y otra[2].                                                   
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+[1] Texto de la primera nota.                                                   
+[2] Una nota más larga que también tiene que ajustarse al ancho disponible.     
