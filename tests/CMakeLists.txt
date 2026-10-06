@@ -32,7 +32,8 @@ add_executable(chatbot_tests
     test_request_runner.cpp
     test_sidebar.cpp
     test_sse.cpp
-    test_streaming.cpp)
+    test_streaming.cpp
+    test_system_prompt.cpp)
 
 target_compile_features(chatbot_tests PRIVATE cxx_std_20)
 target_include_directories(chatbot_tests PRIVATE

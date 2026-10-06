@@ -38,8 +38,25 @@ std::string finish_note(std::string_view finish_reason) {
 
 } // namespace
 
-Conversation::Conversation() {
-    history_.push_back(Message{Role::System, std::string{kSystemPrompt}});
+Conversation::Conversation(std::string_view system_prompt) {
+    (void)set_system_prompt(system_prompt);
+}
+
+bool Conversation::set_system_prompt(std::string_view system_prompt) {
+    if (busy_) {
+        return false;
+    }
+    const bool has_system = !history_.empty() && history_.front().role == Role::System;
+    if (system_prompt.empty()) {
+        if (has_system) {
+            history_.erase(history_.begin());
+        }
+    } else if (has_system) {
+        history_.front().content = std::string{system_prompt};
+    } else {
+        history_.insert(history_.begin(), Message{Role::System, std::string{system_prompt}});
+    }
+    return true;
 }
 
 std::optional<std::vector<Message>> Conversation::submit(std::string_view text) {
@@ -124,8 +141,9 @@ StoredConversation Conversation::to_stored(std::string updated_at) const {
     return StoredConversation{id_, title_, created_at_, std::move(updated_at), turns_};
 }
 
-Conversation Conversation::from_stored(const StoredConversation& stored) {
-    Conversation conversation; // Ya trae el kSystemPrompt actual.
+Conversation Conversation::from_stored(const StoredConversation& stored,
+                                       std::string_view system_prompt) {
+    Conversation conversation{system_prompt}; // El historial guardado no lo trae.
     conversation.id_ = stored.id;
     conversation.created_at_ = stored.created_at;
     conversation.title_ = stored.title;

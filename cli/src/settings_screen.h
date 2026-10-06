@@ -18,7 +18,8 @@
 namespace chatbot::cli {
 
 /// Pantalla de configuración (FTXUI): categorías a la izquierda
-/// ("Proveedor" y "Colores y Accesibilidad") y el formulario de la elegida a
+/// ("Proveedor", "Colores y Accesibilidad" e "Instrucciones del sistema") y
+/// el formulario de la elegida a
 /// la derecha. La lógica del proveedor está en ProviderSettings; la lista de
 /// modelos se pide con ModelsLoader, en su hilo. Se dibuja con la paleta
 /// vigente (la de main.cpp, que cambia al guardar). Se usa solo desde el
@@ -31,19 +32,26 @@ public:
     /// Guarda el tema y el fondo en config.json y los aplica. Devuelve el
     /// error para mostrar, o nullopt si se guardó.
     using OnSaveAppearance = std::function<std::optional<std::string>(const Appearance&)>;
+    /// Guarda las instrucciones de sistema en config.json (nullopt: borrar la
+    /// llave, se usan las predeterminadas) y las aplica. Devuelve el error
+    /// para mostrar, o nullopt si se guardó.
+    using OnSaveSystemPrompt =
+        std::function<std::optional<std::string>(const std::optional<std::string>&)>;
     /// La pantalla se cerró (guardada o descartada).
     using OnClose = std::function<void()>;
 
     /// palette debe vivir más que la pantalla.
     SettingsScreen(ModelsLoader& loader, const Palette& palette, OnSave on_save,
-                   OnSaveAppearance on_save_appearance, OnClose on_close);
+                   OnSaveAppearance on_save_appearance,
+                   OnSaveSystemPrompt on_save_system_prompt, OnClose on_close);
 
     /// Abre con un formulario nuevo. base: la configuración actual (timeout,
-    /// volcado) para pedir los modelos. appearance: el tema y el fondo
-    /// vigentes. notice: aviso inicial, si hay. Pide la lista de modelos si
-    /// ya hay URL y key.
+    /// volcado, límite del historial) para pedir los modelos. appearance: el
+    /// tema y el fondo vigentes. system_prompt: las instrucciones vigentes
+    /// (vacías: ninguna). notice: aviso inicial, si hay. Pide la lista de
+    /// modelos si ya hay URL y key.
     void open(ProviderSettings settings, Config base, Appearance appearance,
-              std::string notice = {});
+              std::string system_prompt, std::string notice = {});
     /// Esc, Cancelar o F2: cierra si no hay cambios; si los hay, pregunta
     /// "¿Descartar los cambios? (s/n)". Devuelve true si se cerró.
     bool request_close();
@@ -58,7 +66,7 @@ public:
 
 private:
     /// Categorías del menú de la izquierda.
-    enum Category : int { kProvider = 0, kAppearance = 1 };
+    enum Category : int { kProvider = 0, kAppearance = 1, kSystemPrompt = 2 };
 
     void request_models();
     void save();
@@ -71,9 +79,11 @@ private:
     [[nodiscard]] ftxui::Element render_models() const;
     [[nodiscard]] ftxui::Element render_provider() const;
     [[nodiscard]] ftxui::Element render_appearance() const;
+    [[nodiscard]] ftxui::Element render_system_prompt() const;
     /// Tema y fondo elegidos en el formulario.
     [[nodiscard]] Appearance chosen_appearance() const;
     [[nodiscard]] bool appearance_dirty() const;
+    [[nodiscard]] bool system_prompt_dirty() const { return prompt_text_ != saved_prompt_; }
     /// El fondo se puede elegir (el tema elegido tiene fondo propio).
     [[nodiscard]] bool background_enabled() const;
 
@@ -81,10 +91,12 @@ private:
     const Palette& palette_;
     OnSave on_save_;
     OnSaveAppearance on_save_appearance_;
+    OnSaveSystemPrompt on_save_system_prompt_;
     OnClose on_close_;
     std::optional<ProviderSettings> settings_;
     Config base_;
     Appearance saved_appearance_; ///< El vigente al abrir (o al guardar).
+    std::string saved_prompt_;    ///< Las instrucciones vigentes al abrir (o al guardar).
     std::string status_;          ///< Aviso o error bajo el formulario.
     bool confirm_discard_ = false; ///< Se preguntó "¿Descartar los cambios?".
     bool no_color_ = false;
@@ -103,6 +115,7 @@ private:
     std::string key_text_;
     std::string filter_text_;
     std::string model_text_;
+    std::string prompt_text_;
     mutable std::vector<ftxui::Box> model_row_boxes_;
     mutable ftxui::Box models_box_{0, -1, 0, -1};
 
@@ -115,6 +128,8 @@ private:
     ftxui::Component filter_input_;
     ftxui::Component refresh_button_;
     ftxui::Component model_input_;
+    ftxui::Component prompt_input_;
+    ftxui::Component restore_button_;
     ftxui::Component save_button_;
     ftxui::Component cancel_button_;
     ftxui::Component root_;

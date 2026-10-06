@@ -17,6 +17,7 @@
 #include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
+#include "system_prompt.h"
 #include "theme.h"
 #include "title_bar.h"
 
@@ -205,6 +206,20 @@ int main() {
     /// Con lo que se dibuja todo; cambia al guardar la apariencia.
     chatbot::cli::Palette palette{appearance};
 
+    // Instrucciones de sistema de config.json ("system_prompt"). Una llave
+    // que no es cadena usa las predeterminadas y deja un aviso.
+    std::string startup_warning = appearance_warning;
+    /// Las vigentes (vacías: sin mensaje de sistema); cambian al guardarlas.
+    std::string system_prompt{chatbot::cli::kDefaultSystemPrompt};
+    if (const std::optional<std::string> path = chatbot::default_config_path()) {
+        chatbot::cli::ResolvedSystemPrompt resolved =
+            chatbot::cli::resolve_system_prompt(chatbot::load_system_prompt_value(*path));
+        system_prompt = std::move(resolved.text);
+        if (!resolved.warning.empty()) {
+            startup_warning += (startup_warning.empty() ? "" : " ") + resolved.warning;
+        }
+    }
+
     // El orden de declaración importa: se destruyen en orden inverso. El
     // runner se destruye antes que screen y client (cancela y hace join del
     // hilo, que usa ambos); igual el cargador de modelos, que une sus hilos.
@@ -214,14 +229,14 @@ int main() {
         chatbot::cli::resolve_data_dir(env_value("CHAT_DATA_DIR"), env_value("XDG_DATA_HOME"),
                                        env_value("HOME"))
             .value_or("")};
-    chatbot::cli::Conversation conversation;
+    chatbot::cli::Conversation conversation{system_prompt};
     std::string input_text;
     Scroll scroll;
     chatbot::cli::HistoryView history;
     std::size_t last_dropped = 0;
     chatbot::cli::Sidebar sidebar;
     sidebar.open(store.list(), conversation.id());
-    std::string flash = appearance_warning; ///< Aviso de la línea de estado hasta la siguiente tecla.
+    std::string flash = startup_warning; ///< Aviso de la línea de estado hasta la siguiente tecla.
     // Barra lateral: visible al arrancar si la terminal es ancha. Si el ancho
     // la ocultó, el ancho la vuelve a mostrar; si la ocultó Ctrl+B, no.
     bool last_wide = ftxui::Terminal::Size().dimx >= chatbot::cli::kSidebarMinTerminal;
@@ -307,7 +322,7 @@ int main() {
 
     // Empieza una conversación nueva (la actual ya quedó guardada si tenía pares).
     const auto new_conversation = [&] {
-        conversation = chatbot::cli::Conversation{};
+        conversation = chatbot::cli::Conversation{system_prompt};
         last_dropped = 0;
         scroll.to_bottom();
         refresh_sidebar();
@@ -385,6 +400,33 @@ int main() {
             palette = chatbot::cli::Palette{appearance};
             return std::nullopt;
         },
+        [&](const std::optional<std::string>& stored) -> std::optional<std::string> {
+            const std::optional<std::string> config_path = chatbot::default_config_path();
+            if (!config_path.has_value()) {
+                return "No se encontró la carpeta de configuración (define HOME o "
+                       "XDG_CONFIG_HOME).";
+            }
+            if (const auto error = chatbot::save_system_prompt(*config_path, stored)) {
+                return error->message;
+            }
+            // Se aplica sin reiniciar y sin perder la conversación: valen
+            // desde el siguiente mensaje (la pantalla no se abre con una
+            // respuesta en curso).
+            system_prompt = stored.value_or(std::string{chatbot::cli::kDefaultSystemPrompt});
+            (void)conversation.set_system_prompt(system_prompt);
+            conversation.add_notice(system_prompt.empty()
+                                        ? "Sin instrucciones del sistema desde el siguiente "
+                                          "mensaje."
+                                        : "Instrucciones del sistema actualizadas: valen desde "
+                                          "el siguiente mensaje.");
+            if (const std::optional<std::string> warning =
+                    chatbot::cli::system_prompt_limit_warning(system_prompt,
+                                                              config.history_limit_bytes)) {
+                conversation.add_notice(*warning);
+            }
+            scroll.to_bottom();
+            return std::nullopt;
+        },
         [&] {
             right_tab = 0;
             input->TakeFocus();
@@ -434,7 +476,7 @@ int main() {
         right_tab = 1;
         settings.open(chatbot::cli::ProviderSettings(values.value(), credentials.value(),
                                                      std::move(env)),
-                      config, appearance, std::move(notice));
+                      config, appearance, system_prompt, std::move(notice));
     };
 
     // Ejecuta lo que pidió la barra de conversaciones.
@@ -477,7 +519,8 @@ int main() {
                 flash = loaded.error;
                 break;
             }
-            conversation = chatbot::cli::Conversation::from_stored(*loaded.conversation);
+            conversation =
+                chatbot::cli::Conversation::from_stored(*loaded.conversation, system_prompt);
             const std::string used = conversation.last_model();
             if (!used.empty() && !model.empty() && used != model) {
                 conversation.add_notice("Esta conversación usó " + used + "; se continúa con " +
@@ -806,10 +849,11 @@ int main() {
     });
 
     if (incomplete.has_value()) {
-        // Falta la key o el modelo. El aviso del tema, si hay, va también.
-        const std::string notice = appearance_warning.empty()
+        // Falta la key o el modelo. Los avisos del tema y de las
+        // instrucciones, si hay, van también.
+        const std::string notice = startup_warning.empty()
                                        ? std::string{kSetupNotice}
-                                       : std::string{kSetupNotice} + " " + appearance_warning;
+                                       : std::string{kSetupNotice} + " " + startup_warning;
         open_settings(notice);
         flash = notice; // Si no se pudo abrir, al menos el aviso.
     } else {

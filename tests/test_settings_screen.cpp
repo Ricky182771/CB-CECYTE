@@ -1,4 +1,5 @@
 #include "settings_screen.h"
+#include "system_prompt.h"
 
 #include "blocking_transport.hpp"
 #include "fake_transport.hpp"
@@ -43,6 +44,10 @@ struct Harness {
     chatbot::cli::Palette palette{chatbot::cli::resolve_appearance("", "")};
     std::optional<std::string> saved_model;
     int appearance_saves = 0;
+    int prompt_saves = 0;
+    std::optional<std::string> saved_prompt; ///< Lo que recibió el último guardado.
+    std::optional<std::string> prompt_error; ///< Error que devuelve el guardado.
+    int closes = 0;
     chatbot::cli::ModelsLoader loader{
         [] {
             auto transport = std::make_unique<chatbot_test::FakeTransport>();
@@ -70,17 +75,26 @@ struct Harness {
             ++appearance_saves;
             return std::nullopt;
         },
-        [] {}};
+        [this](const std::optional<std::string>& prompt) -> std::optional<std::string> {
+            ++prompt_saves;
+            saved_prompt = prompt;
+            return prompt_error;
+        },
+        [this] { ++closes; }};
 
-    void open(std::string model, std::string key = {}) {
+    void open(std::string model, std::string key = {},
+              std::string system_prompt = std::string{chatbot::cli::kDefaultSystemPrompt},
+              std::size_t history_limit = 32000) {
         chatbot::Config config;
         config.base_url = "http://localhost:8080/v1";
         config.model = model;
+        config.history_limit_bytes = history_limit;
         chatbot::cli::ProviderSettings provider({"custom", config.base_url, std::move(model)},
                                                  {}, {});
         (void)provider.set_key(std::move(key));
         settings.open(std::move(provider), config,
-                      chatbot::cli::resolve_appearance("catppuccin-mocha", "theme"));
+                      chatbot::cli::resolve_appearance("catppuccin-mocha", "theme"),
+                      std::move(system_prompt));
         REQUIRE(queue.run_until([this] { return !loader.busy(); }));
     }
 
@@ -106,6 +120,16 @@ struct Harness {
         const Position button = find(screen, "[ Guardar ]");
         REQUIRE(button.x >= 0);
         REQUIRE(mouse(button, ftxui::Mouse::Left));
+    }
+
+    bool key(const ftxui::Event& event) { return settings.component()->OnEvent(event); }
+
+    /// Elige "Instrucciones del sistema" y pasa al campo de texto con Tab.
+    void go_to_prompt() {
+        REQUIRE(key(ftxui::Event::ArrowDown));
+        REQUIRE(key(ftxui::Event::ArrowDown));
+        REQUIRE(find(draw(), "● Instrucciones del sistema").x >= 0);
+        REQUIRE(key(ftxui::Event::Tab));
     }
 };
 
@@ -195,4 +219,186 @@ TEST_CASE("configuración: Guardar acepta una key sintética completa", "[ajuste
     h.save();
     CHECK(h.saved_model == "modelo-0");
     CHECK_FALSE(h.settings.is_open());
+}
+
+TEST_CASE("configuración: escribir instrucciones y guardarlas", "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "");
+    h.go_to_prompt();
+    auto screen = h.draw();
+    CHECK(find(screen, "0 / 8000 bytes").x >= 0);
+    CHECK(find(screen, "Vacío: sin instrucciones de sistema").x >= 0);
+    CHECK(find(screen, "[ Restaurar predeterminado ]").x >= 0);
+
+    REQUIRE(h.key(ftxui::Event::Character("Responde solo")));
+    REQUIRE(h.key(ftxui::Event::Return)); // Enter: salto de línea, no guarda.
+    REQUIRE(h.key(ftxui::Event::Character("con PIÑA")));
+    CHECK(h.prompt_saves == 0);
+    CHECK(h.settings.is_open());
+    screen = h.draw();
+    const Position first = find(screen, "Responde solo");
+    const Position second = find(screen, "con PIÑA");
+    REQUIRE(first.x >= 0);
+    REQUIRE(second.x >= 0);
+    CHECK(second.y == first.y + 1);
+    // "Responde solo\ncon PIÑA": 13 + 1 + 9 bytes (la Ñ son dos).
+    CHECK(find(screen, "23 / 8000 bytes").x >= 0);
+
+    h.save();
+    CHECK(h.prompt_saves == 1);
+    CHECK(h.saved_prompt == std::string{"Responde solo\ncon PIÑA"});
+    CHECK_FALSE(h.saved_model.has_value()); // Solo cambiaron las instrucciones.
+    CHECK(h.appearance_saves == 0);
+    CHECK_FALSE(h.settings.is_open());
+}
+
+TEST_CASE("configuración: vaciar las instrucciones guarda la cadena vacía",
+          "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "abc");
+    h.go_to_prompt();
+    REQUIRE(h.key(ftxui::Event::End));
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE(h.key(ftxui::Event::Backspace));
+    }
+    h.save();
+    CHECK(h.prompt_saves == 1);
+    CHECK(h.saved_prompt == std::string{});
+    CHECK_FALSE(h.settings.is_open());
+}
+
+TEST_CASE("configuración: Restaurar predeterminado borra la llave al guardar",
+          "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "Mis instrucciones");
+    h.go_to_prompt();
+    CHECK(find(h.draw(), "Mis instrucciones").x >= 0);
+    REQUIRE(h.key(ftxui::Event::Tab)); // Al botón.
+    REQUIRE(h.key(ftxui::Event::Return));
+    const auto screen = h.draw();
+    CHECK(find(screen, "Mis instrucciones").x < 0);
+    CHECK(find(screen, "Eres un asistente útil.").x >= 0);
+    h.save();
+    CHECK(h.prompt_saves == 1);
+    CHECK_FALSE(h.saved_prompt.has_value()); // nullopt: se borra la llave.
+    CHECK_FALSE(h.settings.is_open());
+}
+
+TEST_CASE("configuración: sin cambios en las instrucciones no se guardan",
+          "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0");
+    h.go_to_prompt();
+    REQUIRE(h.key(ftxui::Event::Tab));
+    REQUIRE(h.key(ftxui::Event::Return)); // Restaurar con el predeterminado ya puesto.
+    h.save();
+    CHECK(h.prompt_saves == 0);
+    CHECK_FALSE(h.settings.is_open());
+}
+
+TEST_CASE("configuración: descartar cambios de las instrucciones", "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "Original");
+    h.go_to_prompt();
+    REQUIRE(h.key(ftxui::Event::Character("x")));
+    REQUIRE(h.key(ftxui::Event::Escape));
+    CHECK(find(h.draw(), "¿Descartar los cambios? (s/n)").x >= 0);
+    REQUIRE(h.key(ftxui::Event::Character("n")));
+    CHECK(h.settings.is_open());
+    CHECK(find(h.draw(), "¿Descartar los cambios? (s/n)").x < 0);
+    CHECK(find(h.draw(), "xOriginal").x >= 0); // El cambio sigue ahí.
+
+    REQUIRE(h.key(ftxui::Event::Escape));
+    REQUIRE(h.key(ftxui::Event::Character("s")));
+    CHECK_FALSE(h.settings.is_open());
+    CHECK(h.prompt_saves == 0);
+    CHECK(h.closes == 1);
+
+    // Al abrir de nuevo, el campo tiene las vigentes.
+    h.open("modelo-0", {}, "Original");
+    h.go_to_prompt();
+    const auto screen = h.draw();
+    CHECK(find(screen, "Original").x >= 0);
+    CHECK(find(screen, "xOriginal").x < 0);
+}
+
+TEST_CASE("configuración: Tab y Shift+Tab recorren las instrucciones", "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "");
+    h.go_to_prompt();
+    REQUIRE(h.key(ftxui::Event::Character("a"))); // El campo tiene el foco.
+    REQUIRE(h.key(ftxui::Event::Tab));             // Restaurar.
+    REQUIRE(h.key(ftxui::Event::Tab));             // Guardar.
+    auto screen = h.draw();
+    Position save = find(screen, "[ Guardar ]");
+    REQUIRE(save.x >= 0);
+    CHECK(screen.CellAt(save.x, save.y).background_color ==
+          chatbot::cli::to_ftxui(h.palette.theme().selection_bg));
+    REQUIRE(h.key(ftxui::Event::TabReverse)); // Restaurar.
+    REQUIRE(h.key(ftxui::Event::TabReverse)); // El campo.
+    REQUIRE(h.key(ftxui::Event::Character("b")));
+    CHECK(find(h.draw(), "ab").x >= 0);
+}
+
+TEST_CASE("configuración: instrucciones inválidas no se guardan y el error se ve",
+          "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    SECTION("control") {
+        // Así pudo quedar en config.json editado a mano.
+        h.open("modelo-0", {}, "uno\x1b[31mdos");
+        h.go_to_prompt();
+        // El aviso aparece antes de guardar: el campo no dibuja el control.
+        CHECK(find(h.draw(), "carácter de control no permitido").x >= 0);
+        REQUIRE(h.key(ftxui::Event::Character("a")));
+    }
+    SECTION("largo") {
+        h.open("modelo-0", {}, std::string(chatbot::cli::kMaxSystemPromptBytes, 'a'));
+        h.go_to_prompt();
+        CHECK(find(h.draw(), "8000 / 8000 bytes").x >= 0);
+        REQUIRE(h.key(ftxui::Event::Character("a")));
+        CHECK(find(h.draw(), "8001 / 8000 bytes").x >= 0);
+        CHECK(find(h.draw(), "el máximo es 8000").x >= 0);
+    }
+    h.save();
+    CHECK(h.prompt_saves == 0);
+    CHECK(h.settings.is_open());
+    CHECK_FALSE(h.saved_model.has_value()); // Nada se guarda a medias.
+    const auto screen = h.draw();
+    CHECK((find(screen, "carácter de control no permitido").x >= 0 ||
+           find(screen, "el máximo es 8000").x >= 0));
+}
+
+TEST_CASE("configuración: aviso si las instrucciones llenan el límite del historial",
+          "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "", 10);
+    h.go_to_prompt();
+    CHECK(find(h.draw(), "límite del historial").x < 0);
+    REQUIRE(h.key(ftxui::Event::Character("0123456789")));
+    CHECK(find(h.draw(), "límite del historial").x >= 0);
+    h.save(); // Se guarda igual.
+    CHECK(h.prompt_saves == 1);
+    CHECK(h.saved_prompt == std::string{"0123456789"});
+}
+
+TEST_CASE("configuración: el error del guardado de instrucciones se muestra",
+          "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.prompt_error = "No se guardó la configuración: disco lleno";
+    h.open("modelo-0", {}, "");
+    h.go_to_prompt();
+    REQUIRE(h.key(ftxui::Event::Character("hola")));
+    h.save();
+    CHECK(h.prompt_saves == 1);
+    CHECK(h.settings.is_open());
+    CHECK(find(h.draw(), "disco lleno").x >= 0);
 }
