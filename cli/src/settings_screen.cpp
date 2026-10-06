@@ -3,6 +3,7 @@
 #include "input_style.h"
 #include "list_style.h"
 #include "markdown.h"
+#include "system_prompt.h"
 
 #include "chatbot/error.h"
 
@@ -19,8 +20,8 @@ namespace {
 
 /// Ancho de la columna de etiquetas del formulario.
 constexpr int kLabelWidth = 12;
-/// Ancho de la columna de categorías ("● Colores y Accesibilidad" y un espacio).
-constexpr int kSectionsWidth = 26;
+/// Ancho de la columna de categorías ("● Instrucciones del sistema" y un espacio).
+constexpr int kSectionsWidth = 28;
 /// Ancho del campo de la key.
 constexpr int kKeyWidth = 24;
 
@@ -73,10 +74,12 @@ std::function<ftxui::Element(const ftxui::EntryState&)> row_transform(const Pale
 } // namespace
 
 SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnSave on_save,
-                               OnSaveAppearance on_save_appearance, OnClose on_close)
+                               OnSaveAppearance on_save_appearance,
+                               OnSaveSystemPrompt on_save_system_prompt, OnClose on_close)
     : loader_(loader), palette_(palette), on_save_(std::move(on_save)),
-      on_save_appearance_(std::move(on_save_appearance)), on_close_(std::move(on_close)) {
-    category_names_ = {"Proveedor", "Colores y Accesibilidad"};
+      on_save_appearance_(std::move(on_save_appearance)),
+      on_save_system_prompt_(std::move(on_save_system_prompt)), on_close_(std::move(on_close)) {
+    category_names_ = {"Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema"};
     for (const Theme& theme : themes()) {
         theme_names_.emplace_back(theme.name);
     }
@@ -172,6 +175,17 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
                                         (void)settings_->set_model(model_text_);
                                     }
                                 }));
+    // Varias líneas: Enter agrega un salto de línea (InputOption::multiline).
+    ftxui::InputOption prompt_option = field_option(palette_, [] {});
+    prompt_option.multiline = true;
+    prompt_input_ = ftxui::Input(&prompt_text_, "escribe las instrucciones", prompt_option);
+    restore_button_ = ftxui::Button(
+        "Restaurar predeterminado",
+        [this] {
+            prompt_text_ = std::string{kDefaultSystemPrompt};
+            status_.clear();
+        },
+        button_option(palette_));
     save_button_ = ftxui::Button("Guardar", [this] { save(); }, button_option(palette_));
     cancel_button_ =
         ftxui::Button("Cancelar", [this] { (void)request_close(); }, button_option(palette_));
@@ -188,8 +202,10 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         // Con un tema sin fondo propio, el fondo no aplica: no toma el foco.
         ftxui::Maybe(background_list_, [this] { return background_enabled(); }),
     });
+    const ftxui::Component prompt_form =
+        ftxui::Container::Vertical({prompt_input_, restore_button_});
     const ftxui::Component form = ftxui::Container::Vertical({
-        ftxui::Container::Tab({provider_form, appearance_form}, &category_),
+        ftxui::Container::Tab({provider_form, appearance_form, prompt_form}, &category_),
         ftxui::Container::Horizontal({save_button_, cancel_button_}),
     });
     root_ = ftxui::CatchEvent(
@@ -199,7 +215,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
 }
 
 void SettingsScreen::open(ProviderSettings settings, Config base, Appearance appearance,
-                          std::string notice) {
+                          std::string system_prompt, std::string notice) {
     settings_ = std::move(settings);
     base_ = std::move(base);
     no_color_ = no_color_enabled();
@@ -216,6 +232,8 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
         }
     }
     background_selected_ = appearance.background == BackgroundMode::Transparent ? 1 : 0;
+    saved_prompt_ = system_prompt;
+    prompt_text_ = std::move(system_prompt);
     provider_selected_ = static_cast<int>(settings_->provider());
     dropdown_open_ = false;
     confirm_discard_ = false;
@@ -251,7 +269,7 @@ bool SettingsScreen::background_enabled() const {
 }
 
 bool SettingsScreen::request_close() {
-    if (settings_ && (settings_->dirty() || appearance_dirty())) {
+    if (settings_ && (settings_->dirty() || appearance_dirty() || system_prompt_dirty())) {
         confirm_discard_ = true;
         return false;
     }
@@ -306,9 +324,19 @@ void SettingsScreen::save() {
         return;
     }
     const bool appearance_changed = appearance_dirty();
-    // Si solo cambió la apariencia, el proveedor no se guarda (ni se
-    // reconstruye el cliente); si no cambió nada, se guarda como siempre.
-    if (settings_->dirty() || !appearance_changed) {
+    const bool prompt_changed = system_prompt_dirty();
+    // Las instrucciones se revisan antes de guardar nada: un error no deja
+    // guardada solo una parte.
+    if (prompt_changed) {
+        if (const std::optional<std::string> error = validate_system_prompt(prompt_text_)) {
+            status_ = *error;
+            return;
+        }
+    }
+    // Si solo cambió la apariencia o las instrucciones, el proveedor no se
+    // guarda (ni se reconstruye el cliente); si no cambió nada, se guarda
+    // como siempre.
+    if (settings_->dirty() || (!appearance_changed && !prompt_changed)) {
         if (const std::optional<std::string> error = settings_->validate()) {
             status_ = *error;
             return;
@@ -327,6 +355,14 @@ void SettingsScreen::save() {
         }
         saved_appearance_ = chosen;
     }
+    if (prompt_changed) {
+        if (const std::optional<std::string> error =
+                on_save_system_prompt_(system_prompt_to_store(prompt_text_))) {
+            status_ = *error;
+            return;
+        }
+        saved_prompt_ = prompt_text_;
+    }
     close();
 }
 
@@ -340,6 +376,9 @@ void SettingsScreen::move_focus(int step) {
         if (background_enabled()) {
             order.push_back(background_list_);
         }
+    } else if (category_ == kSystemPrompt) {
+        order.push_back(prompt_input_);
+        order.push_back(restore_button_);
     } else {
         order.push_back(dropdown_);
         if (settings_->base_url_editable()) {
@@ -571,6 +610,41 @@ ftxui::Element SettingsScreen::render_appearance() const {
     });
 }
 
+ftxui::Element SettingsScreen::render_system_prompt() const {
+    const ftxui::Decorator notice = palette_.ink(&Theme::notice);
+    const std::size_t bytes = prompt_text_.size();
+    ftxui::Element counter = ftxui::text(std::to_string(bytes) + " / " +
+                                         std::to_string(kMaxSystemPromptBytes) + " bytes");
+    counter = bytes > kMaxSystemPromptBytes ? counter | ftxui::bold : counter | notice;
+
+    // Lo que impediría guardar o merece un aviso, sin esperar a Guardar. El
+    // campo lo dibuja FTXUI, que omite los controles sin dejar rastro: aquí
+    // se avisa de ellos. Un error que ya está en la línea de estado no se
+    // repite.
+    ftxui::Elements checks;
+    if (const std::optional<std::string> error = validate_system_prompt(prompt_text_);
+        error.has_value() && *error != status_) {
+        checks.push_back(ftxui::paragraph(clean(*error)) | ftxui::bold);
+    }
+    if (const std::optional<std::string> warning =
+            system_prompt_limit_warning(prompt_text_, base_.history_limit_bytes)) {
+        checks.push_back(ftxui::paragraph(clean(*warning)) | notice);
+    }
+
+    return ftxui::vbox({
+        ftxui::text("Instrucciones del sistema") | ftxui::bold,
+        ftxui::text(""),
+        ftxui::hbox({label("Texto", prompt_input_->Focused(), palette_),
+                     prompt_input_->Render() | ftxui::flex}) |
+            ftxui::flex,
+        ftxui::hbox({label("", false, palette_), std::move(counter)}),
+        ftxui::hbox({label("", false, palette_),
+                     ftxui::text("Vacío: sin instrucciones de sistema") | notice}),
+        ftxui::hbox({label("", false, palette_), ftxui::vbox(std::move(checks)) | ftxui::flex}),
+        ftxui::hbox({label("", false, palette_), restore_button_->Render()}),
+    });
+}
+
 ftxui::Element SettingsScreen::render() const {
     if (!settings_) {
         return ftxui::emptyElement();
@@ -583,13 +657,28 @@ ftxui::Element SettingsScreen::render() const {
     } else if (category_ == kAppearance) {
         status = ftxui::text("Tab: campo · ↑/↓: mover · Enter: elegir · Esc: cerrar") |
                  palette_.ink(&Theme::notice);
+    } else if (category_ == kSystemPrompt) {
+        status = ftxui::text("Tab: campo · Enter: nueva línea · Esc: cerrar") |
+                 palette_.ink(&Theme::notice);
     } else {
         status = ftxui::text("Tab: campo · ↑/↓ y Enter: modelo · Esc: cerrar") |
                  palette_.ink(&Theme::notice);
     }
 
+    ftxui::Element page;
+    switch (category_) {
+    case kAppearance:
+        page = render_appearance();
+        break;
+    case kSystemPrompt:
+        page = render_system_prompt();
+        break;
+    default:
+        page = render_provider();
+        break;
+    }
     ftxui::Element form = ftxui::vbox({
-        (category_ == kAppearance ? render_appearance() : render_provider()) | ftxui::flex,
+        std::move(page) | ftxui::flex,
         ftxui::text(""),
         ftxui::hbox({ftxui::filler(), save_button_->Render(), ftxui::text("  "),
                      cancel_button_->Render()}),

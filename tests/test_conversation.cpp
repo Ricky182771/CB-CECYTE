@@ -1,4 +1,5 @@
 #include "conversation.h"
+#include "system_prompt.h"
 
 #include "temp_dir.hpp"
 
@@ -19,6 +20,7 @@ using chatbot::Role;
 using chatbot::cli::Conversation;
 using chatbot::cli::Entry;
 using chatbot::cli::EntryKind;
+using chatbot::cli::kDefaultSystemPrompt;
 
 chatbot::ChatError sample_error() {
     return chatbot::ChatError{chatbot::ErrorKind::ModelNotFound, 404,
@@ -35,16 +37,16 @@ void check_no_empty_messages(const Conversation& conversation) {
 } // namespace
 
 TEST_CASE("Conversation: empieza con el prompt de sistema", "[conversacion]") {
-    const Conversation conversation;
+    const Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.history().size() == 1);
     CHECK(conversation.history()[0].role == Role::System);
-    CHECK(conversation.history()[0].content == chatbot::cli::kSystemPrompt);
+    CHECK(conversation.history()[0].content == kDefaultSystemPrompt);
     CHECK(conversation.entries().empty());
     CHECK_FALSE(conversation.busy());
 }
 
 TEST_CASE("Conversation: submit vacío o de solo espacios no hace nada", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     CHECK_FALSE(conversation.submit("").has_value());
     CHECK_FALSE(conversation.submit("   \t  ").has_value());
     CHECK(conversation.entries().empty());
@@ -54,7 +56,7 @@ TEST_CASE("Conversation: submit vacío o de solo espacios no hace nada", "[conve
 
 TEST_CASE("Conversation: submit recorta espacios y devuelve una copia del historial",
           "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     const std::optional<std::vector<chatbot::Message>> to_send =
         conversation.submit("  Hola  ");
     REQUIRE(to_send.has_value());
@@ -68,7 +70,7 @@ TEST_CASE("Conversation: submit recorta espacios y devuelve una copia del histor
 }
 
 TEST_CASE("Conversation: submit mientras está ocupado no hace nada", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Primero").has_value());
     CHECK_FALSE(conversation.submit("Segundo").has_value());
     CHECK(conversation.entries().size() == 1);
@@ -76,7 +78,7 @@ TEST_CASE("Conversation: submit mientras está ocupado no hace nada", "[conversa
 }
 
 TEST_CASE("Conversation: flujo exitoso con varios deltas", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
     conversation.append_delta("Hola, ");
     REQUIRE(conversation.entries().size() == 2);
@@ -97,7 +99,7 @@ TEST_CASE("Conversation: flujo exitoso con varios deltas", "[conversacion]") {
 }
 
 TEST_CASE("Conversation: éxito sin texto se trata como error", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
 
     const std::optional<std::string> restored = conversation.finish_success();
@@ -115,7 +117,7 @@ TEST_CASE("Conversation: éxito sin texto se trata como error", "[conversacion]"
 }
 
 TEST_CASE("Conversation: error sin texto parcial", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
 
     (void)conversation.finish_error(sample_error());
@@ -129,7 +131,7 @@ TEST_CASE("Conversation: error sin texto parcial", "[conversacion]") {
 
 TEST_CASE("Conversation: error con texto parcial lo marca incompleto y fuera del historial",
           "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
     conversation.append_delta("Respuesta a me");
 
@@ -147,13 +149,13 @@ TEST_CASE("Conversation: error con texto parcial lo marca incompleto y fuera del
 }
 
 TEST_CASE("Conversation: finish_error devuelve el texto del usuario", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("  ¿Qué hora es?  ").has_value());
     CHECK(conversation.finish_error(sample_error()) == "¿Qué hora es?");
 }
 
 TEST_CASE("Conversation: tras un error se puede reenviar", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
     const std::string restored = conversation.finish_error(sample_error());
 
@@ -166,7 +168,7 @@ TEST_CASE("Conversation: tras un error se puede reenviar", "[conversacion]") {
 }
 
 TEST_CASE("Conversation: orden y roles del historial tras varias vueltas", "[conversacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
 
     REQUIRE(conversation.submit("Uno").has_value());
     conversation.append_delta("Respuesta uno");
@@ -214,7 +216,7 @@ chatbot::ChatError cancelled_error() {
 
 TEST_CASE("Conversation: cancelada con texto parcial la marca (cancelada)",
           "[conversacion][cancelacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
     conversation.append_delta("Respuesta a me");
 
@@ -231,7 +233,7 @@ TEST_CASE("Conversation: cancelada con texto parcial la marca (cancelada)",
 }
 
 TEST_CASE("Conversation: cancelada sin texto agrega un aviso", "[conversacion][cancelacion]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
 
     CHECK(conversation.finish_error(cancelled_error()) == "Hola");
@@ -248,7 +250,7 @@ TEST_CASE("Conversation: cancelada sin texto agrega un aviso", "[conversacion][c
 namespace {
 /// Una vuelta con texto que termina con el finish_reason dado.
 Conversation finished_with(std::string_view finish_reason) {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
     conversation.append_delta("Texto real");
     CHECK_FALSE(conversation.finish_success(finish_reason).has_value());
@@ -289,7 +291,7 @@ TEST_CASE("Conversation: otro finish_reason muestra el valor", "[conversacion][f
 }
 
 TEST_CASE("Conversation: finish_reason sin texto sigue siendo error", "[conversacion][finish]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
     const std::optional<std::string> restored = conversation.finish_success("length");
     REQUIRE(restored.has_value());
@@ -301,7 +303,7 @@ TEST_CASE("Conversation: finish_reason sin texto sigue siendo error", "[conversa
 }
 
 TEST_CASE("Conversation: ida y vuelta a la forma guardable", "[conversacion][persistencia]") {
-    Conversation original;
+    Conversation original{kDefaultSystemPrompt};
     REQUIRE(original.submit("  Primera\n  pregunta  ").has_value());
     original.append_delta("Respuesta **uno**");
     REQUIRE_FALSE(original.finish_success("stop", "modelo/a").has_value());
@@ -322,7 +324,7 @@ TEST_CASE("Conversation: ida y vuelta a la forma guardable", "[conversacion][per
     CHECK(stored.messages[3].model == "modelo/b");
     CHECK(stored.messages[3].finish_reason == "length");
 
-    const Conversation rebuilt = Conversation::from_stored(stored);
+    const Conversation rebuilt = Conversation::from_stored(stored, kDefaultSystemPrompt);
     CHECK(rebuilt.id() == original.id());
     CHECK(rebuilt.title() == original.title());
     CHECK(rebuilt.created_at() == original.created_at());
@@ -343,21 +345,21 @@ TEST_CASE("Conversation: ida y vuelta a la forma guardable", "[conversacion][per
     CHECK(rebuilt.entries()[3].note == "(cortada por límite de tokens)");
 }
 
-TEST_CASE("Conversation: al reconstruir se usa el kSystemPrompt actual",
+TEST_CASE("Conversation: al reconstruir se usa el prompt dado",
           "[conversacion][persistencia]") {
     chatbot::cli::StoredConversation stored;
     stored.id = "20261002-235800-a1b2c3";
     stored.title = "Hola";
     stored.messages = {{Role::User, "Hola", "", ""}, {Role::Assistant, "Qué tal", "m", "stop"}};
-    const Conversation rebuilt = Conversation::from_stored(stored);
+    const Conversation rebuilt = Conversation::from_stored(stored, kDefaultSystemPrompt);
     REQUIRE(rebuilt.history().size() == 3);
     CHECK(rebuilt.history()[0].role == Role::System);
-    CHECK(rebuilt.history()[0].content == chatbot::cli::kSystemPrompt);
+    CHECK(rebuilt.history()[0].content == kDefaultSystemPrompt);
 }
 
 TEST_CASE("Conversation: errores y cancelaciones no entran a lo guardable",
           "[conversacion][persistencia]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Uno").has_value());
     conversation.append_delta("Bien");
     REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
@@ -381,7 +383,7 @@ TEST_CASE("Conversation: errores y cancelaciones no entran a lo guardable",
 
 TEST_CASE("Conversation: sin pares terminados no hay nada que guardar ni título",
           "[conversacion][persistencia]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     CHECK_FALSE(conversation.has_turns());
     CHECK(conversation.title().empty());
     REQUIRE(conversation.submit("Hola").has_value());
@@ -392,7 +394,7 @@ TEST_CASE("Conversation: sin pares terminados no hay nada que guardar ni título
 }
 
 TEST_CASE("Conversation: add_error y add_notice agregan entradas", "[conversacion][persistencia]") {
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     conversation.add_error("No se pudo guardar la conversación: disco lleno");
     conversation.add_notice("Esta conversación usó a; se continúa con b.");
     REQUIRE(conversation.entries().size() == 2);
@@ -405,7 +407,7 @@ TEST_CASE("save_conversation: sin pares no crea archivo; con un par lo crea",
           "[conversacion][persistencia]") {
     const chatbot_test::ScopedTempDir temp;
     const chatbot::cli::ConversationStore store{temp.string()};
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
 
     chatbot::cli::save_conversation(conversation, store);
     CHECK(store.list().empty());
@@ -441,7 +443,7 @@ TEST_CASE("save_conversation: si falla agrega un error y el chat sigue",
     const auto not_a_dir = temp.path() / "archivo";
     { std::ofstream{not_a_dir} << "x"; }
     const chatbot::cli::ConversationStore store{not_a_dir.string()};
-    Conversation conversation;
+    Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("Hola").has_value());
     conversation.append_delta("Qué tal");
     REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
@@ -452,4 +454,128 @@ TEST_CASE("save_conversation: si falla agrega un error y el chat sigue",
     CHECK(conversation.entries()[2].text.rfind("No se pudo guardar la conversación: ", 0) == 0);
     // Se puede seguir conversando.
     CHECK(conversation.submit("Sigo").has_value());
+}
+
+namespace {
+/// Conversación con un par terminado y las instrucciones dadas.
+Conversation with_one_turn(std::string_view system_prompt) {
+    Conversation conversation{system_prompt};
+    REQUIRE(conversation.submit("Hola").has_value());
+    conversation.append_delta("Qué tal");
+    REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
+    return conversation;
+}
+
+/// Mismos mensajes guardables (el mensaje de sistema nunca está ahí).
+void check_same_stored(const Conversation& a, const Conversation& b) {
+    const auto left = a.to_stored("t").messages;
+    const auto right = b.to_stored("t").messages;
+    REQUIRE(left.size() == right.size());
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        CHECK(left[i].role == right[i].role);
+        CHECK(left[i].content == right[i].content);
+        CHECK(left[i].model == right[i].model);
+        CHECK(left[i].finish_reason == right[i].finish_reason);
+    }
+}
+} // namespace
+
+TEST_CASE("Conversation: instrucciones de sistema personalizadas", "[conversacion][sistema]") {
+    const std::string prompt = "Responde solo con la palabra PIÑA.\nNunca expliques.";
+    Conversation conversation{prompt};
+    REQUIRE(conversation.history().size() == 1);
+    CHECK(conversation.history()[0].role == Role::System);
+    CHECK(conversation.history()[0].content == prompt);
+    const auto sent = conversation.submit("Hola");
+    REQUIRE(sent.has_value());
+    REQUIRE(sent->size() == 2);
+    CHECK((*sent)[0].content == prompt);
+}
+
+TEST_CASE("Conversation: sin instrucciones el primer mensaje es del usuario",
+          "[conversacion][sistema]") {
+    Conversation conversation{""};
+    CHECK(conversation.history().empty());
+    const auto sent = conversation.submit("Hola");
+    REQUIRE(sent.has_value());
+    REQUIRE(sent->size() == 1);
+    CHECK((*sent)[0].role == Role::User);
+    check_no_empty_messages(conversation);
+}
+
+TEST_CASE("Conversation: from_stored usa las instrucciones dadas", "[conversacion][sistema]") {
+    chatbot::cli::StoredConversation stored;
+    stored.id = "20261002-235800-a1b2c3";
+    stored.messages = {{Role::User, "Hola", "", ""}, {Role::Assistant, "Qué tal", "m", "stop"}};
+
+    const Conversation custom = Conversation::from_stored(stored, "Sé breve.");
+    REQUIRE(custom.history().size() == 3);
+    CHECK(custom.history()[0].role == Role::System);
+    CHECK(custom.history()[0].content == "Sé breve.");
+
+    const Conversation none = Conversation::from_stored(stored, "");
+    REQUIRE(none.history().size() == 2);
+    CHECK(none.history()[0].role == Role::User);
+    CHECK(none.history()[1].role == Role::Assistant);
+}
+
+TEST_CASE("Conversation: set_system_prompt reemplaza, quita y agrega",
+          "[conversacion][sistema]") {
+    Conversation conversation = with_one_turn(kDefaultSystemPrompt);
+    const Conversation before = with_one_turn(kDefaultSystemPrompt);
+    const std::size_t entries = conversation.entries().size();
+
+    SECTION("reemplazar") {
+        REQUIRE(conversation.set_system_prompt("Nuevo"));
+        REQUIRE(conversation.history().size() == 3);
+        CHECK(conversation.history()[0].role == Role::System);
+        CHECK(conversation.history()[0].content == "Nuevo");
+    }
+    SECTION("quitar") {
+        REQUIRE(conversation.set_system_prompt(""));
+        REQUIRE(conversation.history().size() == 2);
+        CHECK(conversation.history()[0].role == Role::User);
+        // Quitarlo dos veces no quita el mensaje del usuario.
+        REQUIRE(conversation.set_system_prompt(""));
+        CHECK(conversation.history().size() == 2);
+    }
+    SECTION("agregar") {
+        REQUIRE(conversation.set_system_prompt(""));
+        REQUIRE(conversation.set_system_prompt("Otra vez"));
+        REQUIRE(conversation.history().size() == 3);
+        CHECK(conversation.history()[0].role == Role::System);
+        CHECK(conversation.history()[0].content == "Otra vez");
+        CHECK(conversation.history()[1].content == "Hola");
+    }
+    CHECK(conversation.entries().size() == entries);
+    CHECK(conversation.history().back().content == "Qué tal");
+    check_same_stored(conversation, before);
+}
+
+TEST_CASE("Conversation: el envío siguiente lleva las instrucciones nuevas",
+          "[conversacion][sistema]") {
+    Conversation conversation = with_one_turn("Viejo");
+    REQUIRE(conversation.set_system_prompt("Responde solo con la palabra PIÑA"));
+    const auto sent = conversation.submit("Otra");
+    REQUIRE(sent.has_value());
+    REQUIRE(sent->size() == 4);
+    CHECK(sent->front().role == Role::System);
+    CHECK(sent->front().content == "Responde solo con la palabra PIÑA");
+    CHECK(sent->back().content == "Otra");
+}
+
+TEST_CASE("Conversation: set_system_prompt no hace nada con una respuesta en curso",
+          "[conversacion][sistema]") {
+    Conversation conversation{"Original"};
+    REQUIRE(conversation.submit("Hola").has_value());
+    conversation.append_delta("Parcial");
+    REQUIRE(conversation.busy());
+    CHECK_FALSE(conversation.set_system_prompt("Nuevo"));
+    CHECK_FALSE(conversation.set_system_prompt(""));
+    REQUIRE(conversation.history().size() == 2);
+    CHECK(conversation.history()[0].content == "Original");
+    CHECK(conversation.history()[1].content == "Hola");
+    CHECK(conversation.entries().size() == 2);
+    REQUIRE_FALSE(conversation.finish_success("stop").has_value());
+    CHECK(conversation.history()[0].content == "Original");
 }

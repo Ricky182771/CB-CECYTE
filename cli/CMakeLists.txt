@@ -50,7 +50,8 @@ add_library(chatbot_cli_lib STATIC
     src/provider_settings.cpp
     src/providers.cpp
     src/request_runner.cpp
-    src/sidebar.cpp)
+    src/sidebar.cpp
+    src/system_prompt.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 find_package(nlohmann_json 3.9 REQUIRED)

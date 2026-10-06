@@ -122,6 +122,19 @@ struct AppearanceValues {
 [[nodiscard]] std::optional<ChatError> save_appearance(const std::string& path,
                                                        const AppearanceValues& values);
 
+/// Lee "system_prompt" de config.json tal cual, sin validarlo ni
+/// interpretarlo (lo hace cli/). Nullopt si la llave falta; que el archivo
+/// no exista no es un error. Si la llave no es una cadena, o el archivo no es
+/// un objeto JSON válido, error Config.
+[[nodiscard]] Result<std::optional<std::string>> load_system_prompt_value(
+    const std::string& path);
+
+/// Escribe "system_prompt" en config.json de forma atómica, conservando las
+/// demás llaves y su orden; con nullopt borra la llave. Si el archivo existe
+/// pero no es un objeto JSON válido, no lo toca y devuelve el error Config.
+[[nodiscard]] std::optional<ChatError> save_system_prompt(
+    const std::string& path, const std::optional<std::string>& prompt);
+
 } // namespace chatbot
 
 #endif // CHATBOT_CONFIG_H

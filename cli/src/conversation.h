@@ -13,11 +13,6 @@
 
 namespace chatbot::cli {
 
-/// Prompt de sistema con el que empieza toda conversación. Hacerlo
-/// configurable queda fuera del hito 3.
-inline constexpr std::string_view kSystemPrompt =
-    "Eres un asistente útil. Responde en español, de forma clara y concisa.";
-
 /// Tipo de una entrada de la pantalla.
 enum class EntryKind {
     User,
@@ -41,8 +36,15 @@ struct Entry {
 /// sabe nada de FTXUI ni de hilos.
 class Conversation {
 public:
-    /// El historial empieza con el mensaje de sistema (kSystemPrompt).
-    Conversation();
+    /// El historial empieza con un mensaje de sistema con system_prompt (las
+    /// instrucciones vigentes); si está vacío, sin mensaje de sistema.
+    explicit Conversation(std::string_view system_prompt);
+
+    /// Cambia las instrucciones de sistema: reemplaza, agrega o quita (si
+    /// está vacío) el mensaje System inicial del historial. Las entradas, los
+    /// pares guardados y lo demás del historial no cambian. Con una petición
+    /// en curso no hace nada y devuelve false.
+    bool set_system_prompt(std::string_view system_prompt);
 
     /// Recorta espacios en los extremos. Si el texto queda vacío o hay una
     /// petición en curso, no hace nada y devuelve nullopt. Si no, agrega la
@@ -92,9 +94,11 @@ public:
     /// Forma guardable: solo los pares terminados, sin el mensaje de sistema,
     /// con model y finish_reason de cada respuesta.
     [[nodiscard]] StoredConversation to_stored(std::string updated_at) const;
-    /// Reconstruye historial (con el kSystemPrompt actual al inicio) y
-    /// entradas de pantalla, incluidas las notas por finish_reason.
-    [[nodiscard]] static Conversation from_stored(const StoredConversation& stored);
+    /// Reconstruye historial (con system_prompt, las instrucciones vigentes,
+    /// al inicio; ninguna si está vacío) y entradas de pantalla, incluidas
+    /// las notas por finish_reason.
+    [[nodiscard]] static Conversation from_stored(const StoredConversation& stored,
+                                                  std::string_view system_prompt);
 
     [[nodiscard]] bool busy() const { return busy_; }
     [[nodiscard]] const std::vector<Entry>& entries() const { return entries_; }

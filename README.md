@@ -99,7 +99,8 @@ Lo que guarda la pantalla va a `~/.config/chatbot/config.json` (o `$XDG_CONFIG_H
     "model": "nvidia/nemotron-3-super-120b-a12b",
     "timeout_seconds": 120,
     "history_limit": 32000,
-    "appearance": { "theme": "catppuccin-mocha", "background": "theme" }
+    "appearance": { "theme": "catppuccin-mocha", "background": "theme" },
+    "system_prompt": "Eres un asistente útil. Responde en español, de forma clara y concisa."
 }
 ```
 
@@ -119,6 +120,25 @@ Si `config.json` nombra un tema que no existe, se usa el de por defecto y la lí
 En todas las listas, la fila del cursor se marca con el color de selección (o invertida con `De la terminal`) solo mientras la lista tiene el foco, y `●` marca lo elegido. El campo o botón con el foco lleva su etiqueta con el color de selección.
 
 Si tu terminal no muestra colores de 24 bits, se aproximan a 256 o 16. Con `NO_COLOR` definida y no vacía se usa automáticamente `De la terminal`, con fondo transparente y cursor invertido. Tema y fondo aparecen deshabilitados con la nota `Desactivado por NO_COLOR`; la configuración guardada se conserva.
+
+#### Instrucciones del sistema
+
+En la configuración, la categoría **Instrucciones del sistema** edita el mensaje de sistema que se manda al principio de cada conversación (también de las que abres desde la barra). Enter agrega un salto de línea; Tab y Shift+Tab cambian de campo. **Restaurar predeterminado** vuelve a poner las instrucciones de fábrica. Al guardar se aplican sin reiniciar y sin perder la conversación abierta: valen desde el siguiente mensaje.
+
+Se guardan en `config.json` como `"system_prompt"`:
+
+```json
+{
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "system_prompt": "Eres un tutor de matemáticas.\nExplica paso a paso y en español."
+}
+```
+
+- **Sin la llave** (o tras «Restaurar predeterminado» y Guardar, que la borra): se usan las predeterminadas, `Eres un asistente útil. Responde en español, de forma clara y concisa.`
+- **Cadena vacía (`""`)**: no se manda ningún mensaje de sistema. Sirve con modelos locales que rechazan el rol `system`.
+- Si la llave no es una cadena, se usan las predeterminadas y la línea de estado lo avisa.
+
+Al guardar, las instrucciones pueden medir como máximo 8000 bytes (el contador `N / 8000 bytes` está bajo el campo), deben ser UTF-8 válido y no pueden tener caracteres de control salvo saltos de línea y tabuladores; si no cumplen, no se guardan y la pantalla dice por qué. El recorte del historial nunca quita las instrucciones: si miden lo mismo que `history_limit` o más, se guardan igual, pero la pantalla avisa que dejarían poco o nada de espacio para la conversación. No hay variable de entorno para las instrucciones. Las conversaciones guardadas no las incluyen.
 
 #### Conversaciones guardadas
 

@@ -35,6 +35,7 @@ Un chatbot tipo asistente general que corre en la terminal (pantalla completa, e
 | — | Mantenimiento: preset release, CI, pulido de interfaz | Hecho |
 | — | Pantalla de configuración, sección "Proveedor de IA" (núcleo, lógica, interfaz y documentación) | Hecho |
 | — | Temas de color (`Theme`, `Palette`), selección y foco visibles, sección "Colores y Accesibilidad" | Hecho |
+| — | Instrucciones del sistema configurables (`system_prompt` en `config.json`, sección "Instrucciones del sistema") | Hecho |
 
 **Nota para el hito 4: prueba con hilos** (sin loop de FTXUI). Implementada con `RequestRunner` (`cli/src/request_runner.*`) y `tests/test_request_runner.cpp`; el transporte que se bloquea quedó aparte, en `tests/blocking_transport.hpp`:
 
@@ -79,6 +80,7 @@ chatbot/
 │       ├── providers.h/.cpp           # tabla de proveedores compatibles con OpenAI (sin FTXUI)
 │       ├── provider_settings.h/.cpp   # lógica del formulario "Proveedor de IA" (sin FTXUI)
 │       ├── models_loader.h/.cpp       # hilo de trabajo de GET /models (sin FTXUI)
+│       ├── system_prompt.h/.cpp       # instrucciones de sistema: predeterminadas, validación y resolución (sin FTXUI)
 │       ├── settings_screen.h/.cpp     # pantalla de configuración (ejecutable chatbot, ftxui::component)
 │       ├── markdown.h/.cpp            # markdown → árbol propio con md4c, y filtrado del texto (sin FTXUI)
 │       ├── markdown_view.h/.cpp       # árbol de markdown → ftxui::Element (chatbot_cli_ui)
@@ -130,6 +132,7 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 | Modelo | `CHAT_MODEL` | `model` | **ninguno** (error `Config` con mensaje claro si falta) |
 | Timeout (s): total en `complete`, por inactividad en `complete_stream` | `CHAT_TIMEOUT` | `timeout_seconds` | 120 |
 | Límite del historial que se envía, en bytes UTF-8 de los `content` (aproximadamente caracteres); `0` = sin límite | `CHAT_HISTORY_LIMIT` | `history_limit` | 32000 |
+| Instrucciones de sistema (`""` = sin mensaje de sistema) | — | `system_prompt` | `kDefaultSystemPrompt` (`cli/src/system_prompt.h`) |
 | Archivo de volcado de depuración | `CHAT_DEBUG_SSE` | **nunca** | ninguno (sin volcado) |
 | Carpeta de conversaciones guardadas (la lee `cli/`, no `Config`) | `CHAT_DATA_DIR` | **nunca** | `$XDG_DATA_HOME/chatbot/conversations` si `XDG_DATA_HOME` es ruta absoluta; si no, `~/.local/share/chatbot/conversations` |
 
@@ -138,7 +141,8 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 - **La key:** primero `CHAT_API_KEY`; si no está, `credentials.json` (junto a `config.json`) con la clave del `provider` del archivo de configuración; si no, ninguna. Formato: `{ "version": 1, "keys": { "nvidia": "...", "custom:https://mi-servidor/v1": "..." } }` (los extremos propios van por su `base_url` efectiva, sin `/` final). Carpeta en 0700 y archivo en 0600, con escritura atómica; si el grupo u otros tienen algún permiso, no se lee y se devuelve error `Config` ("corre chmod 600 <ruta>"). **Por qué cambió** (antes la key solo venía del entorno): la pantalla de configuración necesita guardar la key sin que el usuario edite su shell; un archivo aparte, nunca `config.json`, la deja fuera de lo que se comparte o versiona.
 - `save_config_file` escribe `provider`, `base_url` (siempre) y `model` en `config.json`, conserva las demás claves y su orden, y escribe de forma atómica; nunca escribe la key. `load_config_file_values` los lee tal cual (sin entorno) para la pantalla de configuración.
 - **Apariencia:** `"appearance": {"theme": "<id>", "background": "theme" | "terminal"}` en `config.json` (sin variable de entorno). `load_appearance_values`/`save_appearance` del núcleo solo leen y escriben las cadenas (conservando las demás llaves); `cli/` las interpreta con `resolve_appearance`: un id o fondo desconocido usa el valor por defecto con un aviso en la línea de estado.
-- **Conversaciones guardadas:** un archivo `<id>.json` por conversación (esquema versión 1; `id` = `AAAAMMDD-HHMMSS-xxxxxx`), con la carpeta en 0700 y los archivos en 0600. No se guarda el mensaje de sistema (al cargar se antepone el `kSystemPrompt` actual); cada respuesta guarda su `model` y su `finish_reason`. Se guarda solo tras cada par usuario/asistente terminado, con escritura atómica (`.tmp` + `fsync` + `rename` + `fsync` del directorio). Un archivo ilegible o de una versión desconocida se lista pero nunca se sobrescribe ni se borra.
+- **Instrucciones de sistema:** `"system_prompt"` de `config.json`, una cadena y global (todas las conversaciones, también las que se cargan; no se guarda por conversación). Llave ausente: `kDefaultSystemPrompt`; `""`: sin mensaje de sistema; otro tipo: el predeterminado con un aviso en la línea de estado. `load_system_prompt_value`/`save_system_prompt` del núcleo solo leen y escriben la cadena (otro tipo → error `Config`; `nullopt` borra la llave, conservando las demás); `cli/` la interpreta y la valida al guardar (`system_prompt.h`: máximo 8000 bytes, UTF-8 válido, sin controles salvo `\n` y `\t`; aviso si mide `history_limit` o más). Al guardar se aplica a la conversación abierta con `Conversation::set_system_prompt` (desde el siguiente mensaje). Sin variable de entorno.
+- **Conversaciones guardadas:** un archivo `<id>.json` por conversación (esquema versión 1; `id` = `AAAAMMDD-HHMMSS-xxxxxx`), con la carpeta en 0700 y los archivos en 0600. No se guarda el mensaje de sistema (al cargar se anteponen las instrucciones de sistema vigentes, salvo que estén vacías); cada respuesta guarda su `model` y su `finish_reason`. Se guarda solo tras cada par usuario/asistente terminado, con escritura atómica (`.tmp` + `fsync` + `rename` + `fsync` del directorio). Un archivo ilegible o de una versión desconocida se lista pero nunca se sobrescribe ni se borra.
 - `CHAT_DEBUG_SSE=/ruta/archivo` (`Config::debug_sse_path`): `ChatClient` agrega al archivo, por cada intento de `complete` y de `complete_stream`, fecha y hora, modelo, número de intento, estado HTTP y el cuerpo crudo de la respuesta, más una línea separadora. Nunca escribe cabeceras, la key ni el cuerpo de la petición. Si no se puede abrir o escribir, se ignora en silencio. El archivo contiene la conversación: solo para diagnosticar.
 
 ## 8. HTTP y API

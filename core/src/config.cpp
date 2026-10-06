@@ -484,4 +484,47 @@ std::optional<ChatError> save_appearance(const std::string& path,
     });
 }
 
+Result<std::optional<std::string>> load_system_prompt_value(const std::string& path) {
+    struct stat info {};
+    if (::stat(path.c_str(), &info) != 0) {
+        return std::optional<std::string>{}; // Sin archivo: la llave falta.
+    }
+    nlohmann::json document;
+    try {
+        const std::optional<std::string> content = read_file(path);
+        if (!content.has_value()) {
+            throw std::runtime_error("no se pudo leer");
+        }
+        document = nlohmann::json::parse(*content);
+        if (!document.is_object()) {
+            throw std::runtime_error("no es un objeto JSON");
+        }
+    } catch (const std::exception&) {
+        return ChatError{ErrorKind::Config, 0,
+                         "Archivo de configuración inválido (" + path + "): no es un objeto "
+                         "JSON válido.", std::nullopt};
+    }
+    const auto prompt = document.find("system_prompt");
+    if (prompt == document.end()) {
+        return std::optional<std::string>{};
+    }
+    if (!prompt->is_string()) {
+        return ChatError{ErrorKind::Config, 0,
+                         "\"system_prompt\" de " + path + " debe ser una cadena.",
+                         std::nullopt};
+    }
+    return std::optional<std::string>{prompt->get<std::string>()};
+}
+
+std::optional<ChatError> save_system_prompt(const std::string& path,
+                                            const std::optional<std::string>& prompt) {
+    return update_config_file(path, [&prompt](ordered& document) {
+        if (prompt.has_value()) {
+            document["system_prompt"] = *prompt;
+        } else {
+            document.erase("system_prompt");
+        }
+    });
+}
+
 } // namespace chatbot

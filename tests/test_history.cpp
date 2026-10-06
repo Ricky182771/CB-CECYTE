@@ -128,3 +128,15 @@ TEST_CASE("trim_history: historial vacío o solo un mensaje", "[historial]") {
     CHECK(single.messages.size() == 1);
     CHECK(single.dropped == 0);
 }
+
+TEST_CASE("trim_history: sin mensaje de sistema, lo primero sigue siendo User",
+          "[historial][sistema]") {
+    std::vector<Message> messages = long_conversation();
+    messages.erase(messages.begin()); // Instrucciones vacías: no hay System.
+    const TrimResult result = trim_history(messages, 260);
+    REQUIRE(result.dropped > 0);
+    REQUIRE_FALSE(result.messages.empty());
+    CHECK(result.messages.front().role == Role::User);
+    CHECK(result.messages.back().content == messages.back().content);
+    CHECK(total_bytes(result.messages) <= 260);
+}
