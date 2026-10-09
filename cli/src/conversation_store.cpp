@@ -1,5 +1,7 @@
 #include "conversation_store.h"
 
+#include "chatbot/web_search.h"
+
 #include <nlohmann/json.hpp>
 
 #include <fcntl.h>
@@ -104,7 +106,11 @@ std::optional<std::string> parse_search(const json& item, std::optional<StoredSe
             !optional_string(result, "published_date", parsed.published_date, error)) {
             return error;
         }
-        stored.response.results.push_back(std::move(parsed));
+        // Igual que TavilySearch: un archivo editado no puede meter otra URL
+        // ("javascript:", "file:"...). El resultado se descarta, no el archivo.
+        if (is_web_url(parsed.url)) {
+            stored.response.results.push_back(std::move(parsed));
+        }
     }
     out = std::move(stored);
     return std::nullopt;

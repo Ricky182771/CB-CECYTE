@@ -36,6 +36,13 @@ public:
         const CancelToken* cancel = nullptr) = 0;
 };
 
+/// Indica si la URL es de la web: empieza con "http://" o "https://" y tiene
+/// algo después. El esquema no distingue mayúsculas ("HTTPS://" pasa), como
+/// manda RFC 3986 §3.1; nada más se acepta (ni espacios antes, ni
+/// "javascript:", "file:", "data:"...). Solo esas URL se guardan y se dibujan
+/// como enlace.
+[[nodiscard]] bool is_web_url(std::string_view url);
+
 /// Máximo de bytes de content por resultado en el bloque de contexto.
 inline constexpr std::size_t kSearchContentMaxBytes = 1200;
 /// Máximo de bytes de content, sumando todos los resultados.

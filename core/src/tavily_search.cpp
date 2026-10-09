@@ -75,12 +75,6 @@ std::string extract_error_message(const std::string& body, int status) {
     return "Error HTTP " + std::to_string(status);
 }
 
-/// Valida que una URL sea http:// o https://.
-bool is_valid_url(std::string_view url) {
-    return url.size() >= 8 &&
-           (url.substr(0, 8) == "https://" || url.substr(0, 7) == "http://");
-}
-
 }  // namespace
 
 class TavilySearch::Impl {
@@ -166,7 +160,7 @@ public:
                 continue;
             }
             result.url = item["url"].get<std::string>();
-            if (!is_valid_url(result.url)) {
+            if (!is_web_url(result.url)) {
                 continue;  // Descartar URLs no HTTP/HTTPS.
             }
 

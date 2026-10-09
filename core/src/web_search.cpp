@@ -84,7 +84,33 @@ std::string escape_closing_tag(std::string content, std::string_view nonce) {
     return content;
 }
 
+/// Indica si text empieza con prefix, sin distinguir mayúsculas ASCII.
+bool starts_with_ignoring_case(std::string_view text, std::string_view prefix) {
+    if (text.size() < prefix.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        char c = text[i];
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+        if (c != prefix[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
+
+bool is_web_url(std::string_view url) {
+    for (const std::string_view scheme : {std::string_view{"https://"}, std::string_view{"http://"}}) {
+        if (starts_with_ignoring_case(url, scheme)) {
+            return url.size() > scheme.size();
+        }
+    }
+    return false;
+}
 
 SearchResponse trim_search_response(const SearchResponse& response) {
     SearchResponse trimmed;

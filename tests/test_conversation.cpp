@@ -757,3 +757,19 @@ TEST_CASE("Conversation: attach_search sin petición en curso no hace nada",
     CHECK_FALSE(conversation.attach_search(sample_search(), "2026-10-08", "bloque"));
     CHECK(conversation.history().size() == 1);
 }
+
+TEST_CASE("Conversation: una búsqueda guardada sin resultados no deja fuentes vacías",
+          "[conversacion][busqueda][persistencia]") {
+    // Pasa si el lector descartó todos los resultados (URL que no es web).
+    chatbot::SearchResponse empty;
+    empty.query = "algo";
+    chatbot::cli::StoredConversation stored;
+    stored.id = "20261002-235800-a1b2c3";
+    stored.messages = {{Role::User, "/buscar algo", "", "",
+                        chatbot::cli::StoredSearch{"2026-10-02", empty}},
+                       {Role::Assistant, "Respuesta", "m", "stop", std::nullopt}};
+    const Conversation rebuilt = Conversation::from_stored(stored, "", [] { return "n"; });
+    REQUIRE(rebuilt.entries().size() == 2);
+    CHECK(rebuilt.entries()[0].kind == EntryKind::User);
+    CHECK(rebuilt.entries()[1].kind == EntryKind::Assistant);
+}

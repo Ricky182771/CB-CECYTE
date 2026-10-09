@@ -422,3 +422,20 @@ TEST_CASE("format_search_context conserva letras acentuadas y signos", "[web_sea
     REQUIRE(trimmed.results.size() == 1);
     CHECK(trimmed.results[0].content == text);
 }
+
+TEST_CASE("is_web_url acepta solo http:// y https://", "[web_search]") {
+    CHECK(is_web_url("https://ejemplo.com"));
+    CHECK(is_web_url("http://localhost/2"));
+    // El esquema no distingue mayúsculas (RFC 3986 §3.1).
+    CHECK(is_web_url("HTTPS://EJEMPLO.COM/A"));
+    CHECK(is_web_url("Http://ejemplo.com"));
+
+    for (const std::string url :
+         {"", "https://", "http://", "javascript:alert(1)", "JAVASCRIPT:alert(1)",
+          "file:///etc/passwd", "data:text/html,hola", "ftp://ejemplo.com", "https:/ejemplo.com",
+          "https:ejemplo.com", " https://ejemplo.com", "//ejemplo.com", "ejemplo.com",
+          "httpss://ejemplo.com"}) {
+        INFO(url);
+        CHECK_FALSE(is_web_url(url));
+    }
+}

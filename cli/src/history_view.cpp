@@ -2,6 +2,8 @@
 
 #include "markdown_view.h"
 
+#include "chatbot/web_search.h"
+
 #include <ftxui/dom/node.hpp>
 #include <ftxui/dom/requirement.hpp>
 #include <ftxui/screen/box.hpp>
@@ -47,7 +49,9 @@ std::string one_line(std::string_view text) {
 /// parsear: un título no puede meter markdown): "[n] título — fecha (url)",
 /// una fuente por línea (sin fecha si no hay), con el título, la fecha y la
 /// URL como enlace. Sin título: "[n] url — fecha". md::render codifica la URL
-/// con hyperlink_target.
+/// con hyperlink_target. Segunda defensa (TavilySearch y el lector de
+/// archivos ya las descartan): una URL que no pasa is_web_url se dibuja como
+/// texto plano, sin enlace.
 md::Document sources_document(const std::vector<SearchResult>& sources) {
     md::Block paragraph;
     paragraph.kind = md::Block::Kind::Paragraph;
@@ -63,6 +67,18 @@ md::Document sources_document(const std::vector<SearchResult>& sources) {
         md::Run number;
         number.text = "[" + std::to_string(i + 1) + "] ";
         paragraph.runs.push_back(std::move(number));
+        if (!is_web_url(sources[i].url)) {
+            md::Run plain;
+            plain.text = title.empty() ? url : title;
+            if (!date.empty()) {
+                plain.text += " — " + date;
+            }
+            if (!title.empty()) {
+                plain.text += " (" + url + ")";
+            }
+            paragraph.runs.push_back(std::move(plain));
+            continue;
+        }
         md::Run link;
         link.text = title.empty() ? url : title;
         link.link = static_cast<int>(paragraph.links.size());

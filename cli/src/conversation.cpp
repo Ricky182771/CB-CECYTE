@@ -195,7 +195,9 @@ Conversation Conversation::from_stored(const StoredConversation& stored,
                 message.search->date.empty() ? stored.created_at : message.search->date;
             content = format_search_context(message.search->response, spanish_date(date),
                                             make_nonce());
-            sources = message.search->response.results;
+            if (!message.search->response.results.empty()) {
+                sources = message.search->response.results;
+            }
         }
         conversation.history_.push_back(Message{message.role, std::move(content)});
         conversation.entries_.push_back(

@@ -398,6 +398,32 @@ TEST_CASE("ConversationStore: un archivo sin \"search\" y con llaves desconocida
     CHECK(loaded.conversation->messages[0].content == "Hola");
 }
 
+TEST_CASE("ConversationStore: un resultado guardado con URL que no es web se descarta",
+          "[almacen][busqueda]") {
+    const ScopedTempDir temp;
+    const ConversationStore store{temp.string()};
+    const std::string id = "20261001-100000-000001";
+    for (const std::string bad_url : {"javascript:alert(1)", "file:///etc/passwd"}) {
+        INFO(bad_url);
+        write_file(temp.path() / (id + ".json"),
+                   R"({"version": 1, "id": ")" + id +
+                       R"(", "messages": [{"role": "user", "content": "/buscar q",
+                       "search": {"query": "q", "date": "2026-10-01", "results": [
+                         {"title": "Bueno", "url": "https://ejemplo.com/1", "content": "a"},
+                         {"title": "Malo", "url": ")" + bad_url + R"(", "content": "b"},
+                         {"title": "Mayúsculas", "url": "HTTPS://EJEMPLO.COM/2", "content": "c"}
+                       ]}}]})");
+        const LoadResult loaded = store.load(id);
+        REQUIRE(loaded.conversation.has_value());
+        REQUIRE(loaded.conversation->messages[0].search.has_value());
+        const auto& results = loaded.conversation->messages[0].search->response.results;
+        // HTTPS:// en mayúsculas se acepta (is_web_url no distingue mayúsculas).
+        REQUIRE(results.size() == 2);
+        CHECK(results[0].url == "https://ejemplo.com/1");
+        CHECK(results[1].url == "HTTPS://EJEMPLO.COM/2");
+    }
+}
+
 TEST_CASE("ConversationStore: una búsqueda mal formada hace ilegible el archivo",
           "[almacen][busqueda]") {
     const ScopedTempDir temp;
