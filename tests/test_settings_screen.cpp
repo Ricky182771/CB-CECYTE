@@ -47,6 +47,8 @@ struct Harness {
     int prompt_saves = 0;
     std::optional<std::string> saved_prompt; ///< Lo que recibió el último guardado.
     std::optional<std::string> prompt_error; ///< Error que devuelve el guardado.
+    int search_key_saves = 0;
+    std::string saved_search_key; ///< Lo que recibió el último guardado de la key de búsqueda.
     int closes = 0;
     chatbot::cli::ModelsLoader loader{
         [] {
@@ -80,11 +82,17 @@ struct Harness {
             saved_prompt = prompt;
             return prompt_error;
         },
+        [this](const std::string& key) -> std::optional<std::string> {
+            ++search_key_saves;
+            saved_search_key = key;
+            return std::nullopt;
+        },
         [this] { ++closes; }};
 
     void open(std::string model, std::string key = {},
               std::string system_prompt = std::string{chatbot::cli::kDefaultSystemPrompt},
-              std::size_t history_limit = 32000) {
+              std::size_t history_limit = 32000,
+              chatbot::cli::SearchSettings search = {}) {
         chatbot::Config config;
         config.base_url = "http://localhost:8080/v1";
         config.model = model;
@@ -94,7 +102,7 @@ struct Harness {
         (void)provider.set_key(std::move(key));
         settings.open(std::move(provider), config,
                       chatbot::cli::resolve_appearance("catppuccin-mocha", "theme"),
-                      std::move(system_prompt));
+                      std::move(system_prompt), std::move(search));
         REQUIRE(queue.run_until([this] { return !loader.busy(); }));
     }
 
@@ -130,6 +138,14 @@ struct Harness {
         REQUIRE(key(ftxui::Event::ArrowDown));
         REQUIRE(find(draw(), "● Instrucciones del sistema").x >= 0);
         REQUIRE(key(ftxui::Event::Tab));
+    }
+
+    /// Elige "Búsqueda web" (sin pasar al campo).
+    void go_to_search() {
+        for (int i = 0; i < 3; ++i) {
+            REQUIRE(key(ftxui::Event::ArrowDown));
+        }
+        REQUIRE(find(draw(), "● Búsqueda web").x >= 0);
     }
 };
 
@@ -401,4 +417,102 @@ TEST_CASE("configuración: el error del guardado de instrucciones se muestra",
     CHECK(h.prompt_saves == 1);
     CHECK(h.settings.is_open());
     CHECK(find(h.draw(), "disco lleno").x >= 0);
+}
+
+TEST_CASE("configuración: guardar la key de búsqueda", "[ajustes][busqueda]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+           chatbot::cli::SearchSettings{"", std::nullopt});
+    h.go_to_search();
+    auto screen = h.draw();
+    CHECK(find(screen, "Búsqueda web").x >= 0);
+    CHECK(find(screen, "sin configurar").x >= 0);
+    CHECK(find(screen, "Tavily: 1,000 búsquedas gratis al mes.").x >= 0);
+    CHECK(find(screen, "nunca la conversación.").x >= 0);
+
+    REQUIRE(h.key(ftxui::Event::Tab)); // El campo de la key.
+    const std::string key = "tvly-clave-ficticia-de-prueba-WXYZ";
+    REQUIRE(h.key(ftxui::Event::Character(key)));
+    screen = h.draw();
+    CHECK(find(screen, "tvly").x < 0); // Nunca en claro.
+
+    h.save();
+    CHECK(h.search_key_saves == 1);
+    CHECK(h.saved_search_key == key);
+    CHECK_FALSE(h.saved_model.has_value()); // Solo cambió la key de búsqueda.
+    CHECK(h.prompt_saves == 0);
+    CHECK(h.appearance_saves == 0);
+    CHECK_FALSE(h.settings.is_open());
+}
+
+TEST_CASE("configuración: key de búsqueda guardada se ve enmascarada", "[ajustes][busqueda]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+           chatbot::cli::SearchSettings{"tvly-guardada-secreta-0123456789abcd", std::nullopt});
+    h.go_to_search();
+    const auto screen = h.draw();
+    CHECK(find(screen, "guardada: …abcd").x >= 0);
+    CHECK(find(screen, "secreta").x < 0);
+    CHECK(find(screen, "0123456789").x < 0);
+}
+
+TEST_CASE("configuración: CHAT_SEARCH_API_KEY bloquea el campo de búsqueda",
+          "[ajustes][busqueda]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+           chatbot::cli::SearchSettings{"tvly-guardada-0000000000000000",
+                                        std::string{"tvly-del-entorno-0000000000009876"}});
+    h.go_to_search();
+    auto screen = h.draw();
+    CHECK(find(screen, "(definido por CHAT_SEARCH_API_KEY) …9876").x >= 0);
+    CHECK(find(screen, "escribe la API key de Tavily").x < 0); // Sin campo.
+    // Tab pasa de las categorías directo a Guardar.
+    REQUIRE(h.key(ftxui::Event::Tab));
+    screen = h.draw();
+    const Position save = find(screen, "[ Guardar ]");
+    REQUIRE(save.x >= 0);
+    CHECK(screen.CellAt(save.x, save.y).background_color ==
+          chatbot::cli::to_ftxui(h.palette.theme().selection_bg));
+    // Escribir no cambia nada: no hay cambios que guardar ni que descartar.
+    (void)h.key(ftxui::Event::Character("x"));
+    REQUIRE(h.key(ftxui::Event::Escape));
+    CHECK_FALSE(h.settings.is_open());
+    CHECK(h.search_key_saves == 0);
+}
+
+TEST_CASE("configuración: key de búsqueda incompleta no se guarda", "[ajustes][busqueda]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+           chatbot::cli::SearchSettings{"", std::nullopt});
+    h.go_to_search();
+    REQUIRE(h.key(ftxui::Event::Tab));
+    REQUIRE(h.key(ftxui::Event::Character("$TAVILY_KEY")));
+    h.save();
+    CHECK(h.search_key_saves == 0);
+    CHECK_FALSE(h.saved_model.has_value());
+    CHECK(h.settings.is_open());
+    const auto screen = h.draw();
+    CHECK(find(screen, "key de búsqueda incompleta").x >= 0);
+    CHECK(find(screen, "$TAVILY_KEY").x < 0);
+}
+
+TEST_CASE("configuración: descartar una key de búsqueda escrita pregunta",
+          "[ajustes][busqueda]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+           chatbot::cli::SearchSettings{"", std::nullopt});
+    h.go_to_search();
+    REQUIRE(h.key(ftxui::Event::Tab));
+    REQUIRE(h.key(ftxui::Event::Character("tvly-clave-ficticia-de-prueba-0000")));
+    REQUIRE(h.key(ftxui::Event::Escape));
+    CHECK(h.settings.is_open());
+    CHECK(find(h.draw(), "¿Descartar los cambios? (s/n)").x >= 0);
+    REQUIRE(h.key(ftxui::Event::Character("s")));
+    CHECK_FALSE(h.settings.is_open());
+    CHECK(h.search_key_saves == 0);
 }

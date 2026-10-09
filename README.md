@@ -140,6 +140,22 @@ Se guardan en `config.json` como `"system_prompt"`:
 
 Al guardar, las instrucciones pueden medir como máximo 8000 bytes (el contador `N / 8000 bytes` está bajo el campo), deben ser UTF-8 válido y no pueden tener caracteres de control salvo saltos de línea y tabuladores; si no cumplen, no se guardan y la pantalla dice por qué. El recorte del historial nunca quita las instrucciones: si miden lo mismo que `history_limit` o más, se guardan igual, pero la pantalla avisa que dejarían poco o nada de espacio para la conversación. No hay variable de entorno para las instrucciones. Las conversaciones guardadas no las incluyen.
 
+#### Búsqueda web
+
+Escribe `/buscar` seguido de tu pregunta (por ejemplo, `/buscar quién ganó el último partido del América`). El chatbot consulta [Tavily](https://tavily.com), le pasa al modelo los resultados como datos y el modelo responde citando cada dato con `[n]`. Debajo de la respuesta aparece el bloque **Fuentes** con `[n] título (URL)`; ese bloque sale de la búsqueda, no del texto del modelo (que podría inventar direcciones), y Shift+clic sobre un enlace lo abre. Funciona con cualquier modelo.
+
+- Solo `/buscar` en minúsculas, seguido de un espacio y una consulta. `/buscar` solo muestra cómo se usa; cualquier otro texto que empiece con `/` se envía como un mensaje normal.
+- Mientras busca, la línea de estado dice `Buscando en la web…`. Esc cancela igual durante la búsqueda que durante la respuesta.
+- Si la búsqueda falla o no trae resultados, no se pregunta al modelo: aparece el error (o el aviso `La búsqueda no encontró resultados.`) y el texto regresa a la caja.
+- Se buscan 5 resultados en español de México con búsqueda segura (`safe_search`) siempre activa; no se puede desactivar.
+- Las conversaciones guardadas conservan los resultados: al abrirlas de nuevo, las fuentes siguen ahí y el modelo vuelve a recibir los mismos datos.
+
+**Cómo sacar la key:** entra a [app.tavily.com](https://app.tavily.com), crea una cuenta (no pide tarjeta) y copia la API key de tu panel. Pégala en la configuración (F2), categoría **Búsqueda web**, y guarda. Se guarda en `credentials.json` con la llave `"search:tavily"`, junto a las demás keys y con los mismos permisos; nunca en `config.json`. También puedes usar la variable `CHAT_SEARCH_API_KEY`, que tiene prioridad y bloquea el campo. Sin key, `/buscar` no se envía y la línea de estado dice `Configura la key de búsqueda en Configuración (F2) → Búsqueda web`.
+
+**Límites del plan gratuito:** 1,000 créditos al mes; cada `/buscar` gasta 1 (búsqueda básica). Al agotarlos aparece `Se agotaron las búsquedas del plan de Tavily`. No hay reintentos automáticos: vuelve a enviar con Enter cuando quieras.
+
+**Privacidad:** a Tavily solo se envía la consulta que escribes después de `/buscar`, nunca la conversación. Lo que llega de las páginas se le pasa al modelo marcado como datos, con la instrucción de ignorar cualquier orden que venga dentro.
+
 #### Conversaciones guardadas
 
 Cada conversación se guarda sola después de cada respuesta completa, en un archivo `.json` por conversación dentro de:

@@ -75,11 +75,14 @@ std::function<ftxui::Element(const ftxui::EntryState&)> row_transform(const Pale
 
 SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnSave on_save,
                                OnSaveAppearance on_save_appearance,
-                               OnSaveSystemPrompt on_save_system_prompt, OnClose on_close)
+                               OnSaveSystemPrompt on_save_system_prompt,
+                               OnSaveSearchKey on_save_search_key, OnClose on_close)
     : loader_(loader), palette_(palette), on_save_(std::move(on_save)),
       on_save_appearance_(std::move(on_save_appearance)),
-      on_save_system_prompt_(std::move(on_save_system_prompt)), on_close_(std::move(on_close)) {
-    category_names_ = {"Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema"};
+      on_save_system_prompt_(std::move(on_save_system_prompt)),
+      on_save_search_key_(std::move(on_save_search_key)), on_close_(std::move(on_close)) {
+    category_names_ = {"Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema",
+                       "Búsqueda web"};
     for (const Theme& theme : themes()) {
         theme_names_.emplace_back(theme.name);
     }
@@ -186,6 +189,11 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
             status_.clear();
         },
         button_option(palette_));
+    ftxui::InputOption search_key_option =
+        field_option(palette_, [this] { (void)search_.set_key(search_key_text_); });
+    search_key_option.password = true; // Nunca se dibuja la key en claro.
+    search_key_input_ =
+        ftxui::Input(&search_key_text_, "escribe la API key de Tavily", search_key_option);
     save_button_ = ftxui::Button("Guardar", [this] { save(); }, button_option(palette_));
     cancel_button_ =
         ftxui::Button("Cancelar", [this] { (void)request_close(); }, button_option(palette_));
@@ -204,8 +212,12 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
     });
     const ftxui::Component prompt_form =
         ftxui::Container::Vertical({prompt_input_, restore_button_});
+    const ftxui::Component search_form = ftxui::Container::Vertical({
+        ftxui::Maybe(search_key_input_, [this] { return !search_.key_locked(); }),
+    });
     const ftxui::Component form = ftxui::Container::Vertical({
-        ftxui::Container::Tab({provider_form, appearance_form, prompt_form}, &category_),
+        ftxui::Container::Tab({provider_form, appearance_form, prompt_form, search_form},
+                              &category_),
         ftxui::Container::Horizontal({save_button_, cancel_button_}),
     });
     root_ = ftxui::CatchEvent(
@@ -215,7 +227,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
 }
 
 void SettingsScreen::open(ProviderSettings settings, Config base, Appearance appearance,
-                          std::string system_prompt, std::string notice) {
+                          std::string system_prompt, SearchSettings search, std::string notice) {
     settings_ = std::move(settings);
     base_ = std::move(base);
     no_color_ = no_color_enabled();
@@ -234,6 +246,8 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
     background_selected_ = appearance.background == BackgroundMode::Transparent ? 1 : 0;
     saved_prompt_ = system_prompt;
     prompt_text_ = std::move(system_prompt);
+    search_ = std::move(search);
+    search_key_text_.clear();
     provider_selected_ = static_cast<int>(settings_->provider());
     dropdown_open_ = false;
     confirm_discard_ = false;
@@ -269,7 +283,8 @@ bool SettingsScreen::background_enabled() const {
 }
 
 bool SettingsScreen::request_close() {
-    if (settings_ && (settings_->dirty() || appearance_dirty() || system_prompt_dirty())) {
+    if (settings_ &&
+        (settings_->dirty() || appearance_dirty() || system_prompt_dirty() || search_.dirty())) {
         confirm_discard_ = true;
         return false;
     }
@@ -281,6 +296,8 @@ void SettingsScreen::close() {
     loader_.cancel();
     settings_.reset();
     key_text_.clear();
+    search_ = SearchSettings{};
+    search_key_text_.clear();
     confirm_discard_ = false;
     dropdown_open_ = false;
     status_.clear();
@@ -325,18 +342,23 @@ void SettingsScreen::save() {
     }
     const bool appearance_changed = appearance_dirty();
     const bool prompt_changed = system_prompt_dirty();
-    // Las instrucciones se revisan antes de guardar nada: un error no deja
-    // guardada solo una parte.
+    const bool search_changed = search_.dirty();
+    // Las instrucciones y la key de búsqueda se revisan antes de guardar
+    // nada: un error no deja guardada solo una parte.
     if (prompt_changed) {
         if (const std::optional<std::string> error = validate_system_prompt(prompt_text_)) {
             status_ = *error;
             return;
         }
     }
-    // Si solo cambió la apariencia o las instrucciones, el proveedor no se
-    // guarda (ni se reconstruye el cliente); si no cambió nada, se guarda
-    // como siempre.
-    if (settings_->dirty() || (!appearance_changed && !prompt_changed)) {
+    if (const std::optional<std::string> error = search_.validate()) {
+        status_ = *error;
+        return;
+    }
+    // Si solo cambió la apariencia, las instrucciones o la key de búsqueda,
+    // el proveedor no se guarda (ni se reconstruye el cliente); si no cambió
+    // nada, se guarda como siempre.
+    if (settings_->dirty() || (!appearance_changed && !prompt_changed && !search_changed)) {
         if (const std::optional<std::string> error = settings_->validate()) {
             status_ = *error;
             return;
@@ -363,6 +385,14 @@ void SettingsScreen::save() {
         }
         saved_prompt_ = prompt_text_;
     }
+    if (const auto update = search_.credential_update()) {
+        if (const std::optional<std::string> error = on_save_search_key_(update->second)) {
+            status_ = *error;
+            return;
+        }
+        search_.mark_saved();
+        search_key_text_.clear();
+    }
     close();
 }
 
@@ -379,6 +409,10 @@ void SettingsScreen::move_focus(int step) {
     } else if (category_ == kSystemPrompt) {
         order.push_back(prompt_input_);
         order.push_back(restore_button_);
+    } else if (category_ == kSearch) {
+        if (!search_.key_locked()) {
+            order.push_back(search_key_input_);
+        }
     } else {
         order.push_back(dropdown_);
         if (settings_->base_url_editable()) {
@@ -645,6 +679,32 @@ ftxui::Element SettingsScreen::render_system_prompt() const {
     });
 }
 
+ftxui::Element SettingsScreen::render_search() const {
+    const ftxui::Decorator notice = palette_.ink(&Theme::notice);
+    // La key nunca se dibuja: el campo muestra "•" y el estado, enmascarado.
+    ftxui::Element key;
+    if (search_.key_locked()) {
+        key = ftxui::text(search_.key_status()) | notice;
+    } else {
+        key = ftxui::hbox({
+            search_key_input_->Render() | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kKeyWidth),
+            ftxui::text("  " + search_.key_status()) | notice,
+        });
+    }
+    return ftxui::vbox({
+        ftxui::text("Búsqueda web") | ftxui::bold,
+        ftxui::text(""),
+        ftxui::hbox({label("API key", search_key_input_->Focused(), palette_), std::move(key)}),
+        ftxui::text(""),
+        ftxui::hbox({label("", false, palette_),
+                     ftxui::paragraph("Tavily: 1,000 búsquedas gratis al mes. Solo se envía la "
+                                      "consulta escrita después de /buscar, nunca la "
+                                      "conversación.") |
+                         notice | ftxui::flex}),
+        ftxui::filler(),
+    });
+}
+
 ftxui::Element SettingsScreen::render() const {
     if (!settings_) {
         return ftxui::emptyElement();
@@ -660,6 +720,8 @@ ftxui::Element SettingsScreen::render() const {
     } else if (category_ == kSystemPrompt) {
         status = ftxui::text("Tab: campo · Enter: nueva línea · Esc: cerrar") |
                  palette_.ink(&Theme::notice);
+    } else if (category_ == kSearch) {
+        status = ftxui::text("Tab: campo · Esc: cerrar") | palette_.ink(&Theme::notice);
     } else {
         status = ftxui::text("Tab: campo · ↑/↓ y Enter: modelo · Esc: cerrar") |
                  palette_.ink(&Theme::notice);
@@ -672,6 +734,9 @@ ftxui::Element SettingsScreen::render() const {
         break;
     case kSystemPrompt:
         page = render_system_prompt();
+        break;
+    case kSearch:
+        page = render_search();
         break;
     default:
         page = render_provider();

@@ -2,10 +2,13 @@
 #define CHATBOT_CLI_CONVERSATION_H
 
 #include "conversation_store.h"
+#include "search_context.h"
 
 #include "chatbot/error.h"
 #include "chatbot/types.h"
+#include "chatbot/web_search.h"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +22,7 @@ enum class EntryKind {
     Assistant,
     Error,
     Notice, ///< Texto informativo, no es un error (p. ej. "Respuesta cancelada.").
+    Sources, ///< Fuentes de una búsqueda web, después de la respuesta (en sources).
 };
 
 /// Una entrada de la pantalla. Es independiente del historial para la API:
@@ -30,6 +34,10 @@ struct Entry {
     bool incomplete = false;  ///< Respuesta cortada por un error.
     bool cancelled = false;   ///< Respuesta cortada porque el usuario canceló.
     std::string note;         ///< Nota de cómo terminó (finish_reason), o vacía.
+    /// Solo Sources: los resultados que recibió el modelo, numerados desde 1
+    /// en el mismo orden que en el bloque. Salen de la búsqueda, no del texto
+    /// del modelo (que podría inventar URLs).
+    std::vector<SearchResult> sources;
 };
 
 /// Estado de la conversación. Se usa solo desde el hilo de la interfaz y no
@@ -52,6 +60,14 @@ public:
     /// devuelve una copia del historial para enviarla.
     [[nodiscard]] std::optional<std::vector<Message>> submit(std::string_view text);
 
+    /// La búsqueda de /buscar terminó con resultados (hilo de la interfaz):
+    /// el content del último mensaje User del historial pasa a ser block (el
+    /// bloque que se envió), y la búsqueda se guarda con el par si la
+    /// respuesta termina bien; las fuentes se muestran después de ella. date:
+    /// "AAAA-MM-DD" con la que se armó el bloque. Sin petición en curso no
+    /// hace nada y devuelve false.
+    bool attach_search(SearchResponse response, std::string date, std::string block);
+
     /// Agrega texto a la respuesta en curso; la crea con el primer delta.
     /// Sin petición en curso o con texto vacío, no hace nada.
     void append_delta(std::string_view text);
@@ -71,6 +87,8 @@ public:
     /// lo regrese a la caja de entrada.
     /// Con ErrorKind::Cancelled no hay entrada de error: la respuesta parcial
     /// se marca cancelada o, si no hubo texto, se agrega un aviso (Notice).
+    /// Una búsqueda sin resultados (BadResponse con kNoSearchResults) también
+    /// es un aviso, no un error. La búsqueda adjunta, si había, se descarta.
     [[nodiscard]] std::string finish_error(const ChatError& error);
 
     /// Agrega una entrada de error en rojo (p. ej. al no poder guardar).
@@ -96,9 +114,13 @@ public:
     [[nodiscard]] StoredConversation to_stored(std::string updated_at) const;
     /// Reconstruye historial (con system_prompt, las instrucciones vigentes,
     /// al inicio; ninguna si está vacío) y entradas de pantalla, incluidas
-    /// las notas por finish_reason.
-    [[nodiscard]] static Conversation from_stored(const StoredConversation& stored,
-                                                  std::string_view system_prompt);
+    /// las notas por finish_reason. Un mensaje con búsqueda se muestra como
+    /// se escribió y se envía con el bloque de format_search_context, armado
+    /// con su fecha (o la de created_at, si no la tiene) y un nonce nuevo de
+    /// make_nonce; sus fuentes van después de la respuesta.
+    [[nodiscard]] static Conversation from_stored(
+        const StoredConversation& stored, std::string_view system_prompt,
+        const std::function<std::string()>& make_nonce = generate_search_nonce);
 
     [[nodiscard]] bool busy() const { return busy_; }
     [[nodiscard]] const std::vector<Entry>& entries() const { return entries_; }
@@ -112,6 +134,7 @@ private:
     std::vector<Entry> entries_;   ///< Lo que se muestra en pantalla.
     std::vector<StoredMessage> turns_; ///< Pares terminados, lo que se guarda.
     std::string pending_user_text_;
+    std::optional<StoredSearch> pending_search_; ///< Búsqueda del par en curso.
     bool busy_ = false;
     std::string id_;
     std::string created_at_;

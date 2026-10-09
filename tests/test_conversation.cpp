@@ -1,13 +1,16 @@
 #include "conversation.h"
+#include "search_context.h"
 #include "system_prompt.h"
 
 #include "temp_dir.hpp"
 
 #include "chatbot/error.h"
 #include "chatbot/types.h"
+#include "chatbot/web_search.h"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -350,7 +353,8 @@ TEST_CASE("Conversation: al reconstruir se usa el prompt dado",
     chatbot::cli::StoredConversation stored;
     stored.id = "20261002-235800-a1b2c3";
     stored.title = "Hola";
-    stored.messages = {{Role::User, "Hola", "", ""}, {Role::Assistant, "Qué tal", "m", "stop"}};
+    stored.messages = {{Role::User, "Hola", "", "", std::nullopt},
+                       {Role::Assistant, "Qué tal", "m", "stop", std::nullopt}};
     const Conversation rebuilt = Conversation::from_stored(stored, kDefaultSystemPrompt);
     REQUIRE(rebuilt.history().size() == 3);
     CHECK(rebuilt.history()[0].role == Role::System);
@@ -506,7 +510,8 @@ TEST_CASE("Conversation: sin instrucciones el primer mensaje es del usuario",
 TEST_CASE("Conversation: from_stored usa las instrucciones dadas", "[conversacion][sistema]") {
     chatbot::cli::StoredConversation stored;
     stored.id = "20261002-235800-a1b2c3";
-    stored.messages = {{Role::User, "Hola", "", ""}, {Role::Assistant, "Qué tal", "m", "stop"}};
+    stored.messages = {{Role::User, "Hola", "", "", std::nullopt},
+                       {Role::Assistant, "Qué tal", "m", "stop", std::nullopt}};
 
     const Conversation custom = Conversation::from_stored(stored, "Sé breve.");
     REQUIRE(custom.history().size() == 3);
@@ -578,4 +583,177 @@ TEST_CASE("Conversation: set_system_prompt no hace nada con una respuesta en cur
     CHECK(conversation.entries().size() == 2);
     REQUIRE_FALSE(conversation.finish_success("stop").has_value());
     CHECK(conversation.history()[0].content == "Original");
+}
+
+// Búsqueda web (/buscar).
+
+namespace {
+
+chatbot::SearchResponse sample_search() {
+    chatbot::SearchResponse response;
+    response.query = "quién ganó el último partido";
+    response.results = {
+        {"Crónica del partido", "https://ejemplo.com/cronica", "Ganó el equipo local 2-1.",
+         "2026-10-07"},
+        {"Resumen", "https://ejemplo.com/resumen", "Marcador final: 2-1.", ""},
+    };
+    return chatbot::trim_search_response(response);
+}
+
+/// Conversación con un /buscar terminado, como la deja main.cpp.
+Conversation searched_conversation(const std::string& nonce) {
+    Conversation conversation{kDefaultSystemPrompt};
+    REQUIRE(conversation.submit("/buscar quién ganó el último partido").has_value());
+    const std::string block = chatbot::format_search_context(
+        sample_search(), chatbot::cli::spanish_date("2026-10-08"), nonce);
+    REQUIRE(conversation.attach_search(sample_search(), "2026-10-08", block));
+    conversation.append_delta("Ganó el local [1].");
+    REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
+    return conversation;
+}
+
+} // namespace
+
+TEST_CASE("Conversation: /buscar se ve como se escribió y se envía con el bloque",
+          "[conversacion][busqueda]") {
+    const Conversation conversation = searched_conversation("nonce-1");
+
+    // Historial: System, User(bloque), Assistant.
+    REQUIRE(conversation.history().size() == 3);
+    CHECK(conversation.history()[1].role == Role::User);
+    CHECK(conversation.history()[1].content.find("Fecha de hoy: 8 de octubre de 2026.") == 0);
+    CHECK(conversation.history()[1].content.find("<resultados id=\"nonce-1\">") !=
+          std::string::npos);
+
+    // Pantalla: Tú (lo escrito), Asistente y Fuentes después.
+    REQUIRE(conversation.entries().size() == 3);
+    CHECK(conversation.entries()[0].kind == EntryKind::User);
+    CHECK(conversation.entries()[0].text == "/buscar quién ganó el último partido");
+    CHECK(conversation.entries()[1].kind == EntryKind::Assistant);
+    REQUIRE(conversation.entries()[2].kind == EntryKind::Sources);
+    REQUIRE(conversation.entries()[2].sources.size() == 2);
+    CHECK(conversation.entries()[2].sources[0].url == "https://ejemplo.com/cronica");
+
+    // Guardado: el texto escrito y la búsqueda.
+    const chatbot::cli::StoredConversation stored = conversation.to_stored("x");
+    REQUIRE(stored.messages.size() == 2);
+    CHECK(stored.messages[0].content == "/buscar quién ganó el último partido");
+    REQUIRE(stored.messages[0].search.has_value());
+    CHECK(stored.messages[0].search->date == "2026-10-08");
+    CHECK(stored.messages[0].search->response.query == "quién ganó el último partido");
+    CHECK(stored.messages[0].search->response.results.size() == 2);
+    CHECK_FALSE(stored.messages[1].search.has_value());
+}
+
+TEST_CASE("Conversation: to_stored → from_stored con search reconstruye bloque y fuentes",
+          "[conversacion][busqueda][persistencia]") {
+    const Conversation original = searched_conversation("nonce-fijo");
+    const Conversation rebuilt = Conversation::from_stored(
+        original.to_stored("2026-10-08T12:00:00-06:00"), kDefaultSystemPrompt,
+        [] { return std::string{"nonce-fijo"}; });
+
+    REQUIRE(rebuilt.history().size() == original.history().size());
+    for (std::size_t i = 0; i < original.history().size(); ++i) {
+        CHECK(rebuilt.history()[i].role == original.history()[i].role);
+        CHECK(rebuilt.history()[i].content == original.history()[i].content);
+    }
+    REQUIRE(rebuilt.entries().size() == original.entries().size());
+    for (std::size_t i = 0; i < original.entries().size(); ++i) {
+        CHECK(rebuilt.entries()[i].kind == original.entries()[i].kind);
+        CHECK(rebuilt.entries()[i].text == original.entries()[i].text);
+        REQUIRE(rebuilt.entries()[i].sources.size() == original.entries()[i].sources.size());
+        for (std::size_t k = 0; k < original.entries()[i].sources.size(); ++k) {
+            CHECK(rebuilt.entries()[i].sources[k].title == original.entries()[i].sources[k].title);
+            CHECK(rebuilt.entries()[i].sources[k].url == original.entries()[i].sources[k].url);
+        }
+    }
+}
+
+TEST_CASE("Conversation: cada bloque reconstruido pide su propio nonce",
+          "[conversacion][busqueda][persistencia]") {
+    Conversation conversation = searched_conversation("a");
+    REQUIRE(conversation.submit("/buscar otra cosa").has_value());
+    REQUIRE(conversation.attach_search(sample_search(), "2026-10-09", "bloque"));
+    conversation.append_delta("Otra respuesta.");
+    REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
+
+    int calls = 0;
+    const Conversation rebuilt =
+        Conversation::from_stored(conversation.to_stored("x"), kDefaultSystemPrompt, [&calls] {
+            return "n" + std::to_string(++calls);
+        });
+    CHECK(calls == 2);
+    REQUIRE(rebuilt.history().size() == 5);
+    CHECK(rebuilt.history()[1].content.find("<resultados id=\"n1\">") != std::string::npos);
+    CHECK(rebuilt.history()[3].content.find("<resultados id=\"n2\">") != std::string::npos);
+    CHECK(rebuilt.history()[3].content.find("Fecha de hoy: 9 de octubre de 2026.") == 0);
+}
+
+TEST_CASE("Conversation: sin \"date\" se usa la fecha de created_at",
+          "[conversacion][busqueda][persistencia]") {
+    chatbot::cli::StoredConversation stored;
+    stored.id = "20261002-235800-a1b2c3";
+    stored.created_at = "2026-10-02T23:58:00-06:00";
+    stored.messages = {{Role::User, "/buscar algo", "", "",
+                        chatbot::cli::StoredSearch{"", sample_search()}},
+                       {Role::Assistant, "Respuesta", "m", "stop", std::nullopt}};
+    const Conversation rebuilt = Conversation::from_stored(stored, "", [] { return "n"; });
+    REQUIRE(rebuilt.history().size() == 2); // Sin mensaje de sistema.
+    CHECK(rebuilt.history()[0].content.find("Fecha de hoy: 2 de octubre de 2026.") == 0);
+}
+
+TEST_CASE("Conversation: una conversación vieja sin search carga igual que antes",
+          "[conversacion][busqueda][persistencia]") {
+    chatbot::cli::StoredConversation stored;
+    stored.id = "20261002-235800-a1b2c3";
+    stored.messages = {{Role::User, "/buscar no era comando", "", "", std::nullopt},
+                       {Role::Assistant, "Qué tal", "m", "stop", std::nullopt}};
+    const Conversation rebuilt = Conversation::from_stored(stored, kDefaultSystemPrompt);
+    REQUIRE(rebuilt.history().size() == 3);
+    CHECK(rebuilt.history()[1].content == "/buscar no era comando");
+    REQUIRE(rebuilt.entries().size() == 2);
+    CHECK(rebuilt.entries()[0].kind == EntryKind::User);
+    CHECK(rebuilt.entries()[1].kind == EntryKind::Assistant);
+}
+
+TEST_CASE("Conversation: si la respuesta falla, la búsqueda no se guarda",
+          "[conversacion][busqueda]") {
+    Conversation conversation{kDefaultSystemPrompt};
+    REQUIRE(conversation.submit("/buscar algo").has_value());
+    REQUIRE(conversation.attach_search(sample_search(), "2026-10-08", "bloque"));
+    CHECK(conversation.finish_error(sample_error()) == "/buscar algo");
+    // El historial ya no tiene el mensaje (ni el bloque) y no hay fuentes.
+    REQUIRE(conversation.history().size() == 1);
+    for (const Entry& entry : conversation.entries()) {
+        CHECK(entry.kind != EntryKind::Sources);
+    }
+    // El siguiente par no hereda la búsqueda.
+    REQUIRE(conversation.submit("Hola").has_value());
+    conversation.append_delta("Hola.");
+    REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
+    const chatbot::cli::StoredConversation stored = conversation.to_stored("x");
+    REQUIRE(stored.messages.size() == 2);
+    CHECK_FALSE(stored.messages[0].search.has_value());
+}
+
+TEST_CASE("Conversation: sin resultados es un aviso, no un error",
+          "[conversacion][busqueda]") {
+    Conversation conversation{kDefaultSystemPrompt};
+    REQUIRE(conversation.submit("/buscar nada").has_value());
+    const std::string restored = conversation.finish_error(chatbot::ChatError{
+        chatbot::ErrorKind::BadResponse, 0, std::string{chatbot::cli::kNoSearchResults},
+        std::nullopt});
+    CHECK(restored == "/buscar nada");
+    REQUIRE(conversation.entries().size() == 2);
+    CHECK(conversation.entries()[1].kind == EntryKind::Notice);
+    CHECK(conversation.entries()[1].text == "La búsqueda no encontró resultados.");
+    CHECK_FALSE(conversation.busy());
+    REQUIRE(conversation.history().size() == 1);
+}
+
+TEST_CASE("Conversation: attach_search sin petición en curso no hace nada",
+          "[conversacion][busqueda]") {
+    Conversation conversation{kDefaultSystemPrompt};
+    CHECK_FALSE(conversation.attach_search(sample_search(), "2026-10-08", "bloque"));
+    CHECK(conversation.history().size() == 1);
 }

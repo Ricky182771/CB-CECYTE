@@ -5,6 +5,7 @@
 // pantalla o la Conversation se ejecuta en el hilo de la interfaz mediante
 // App::Post.
 
+#include "command_parser.h"
 #include "conversation.h"
 #include "conversation_list.h"
 #include "conversation_store.h"
@@ -14,6 +15,8 @@
 #include "models_loader.h"
 #include "provider_settings.h"
 #include "request_runner.h"
+#include "search_context.h"
+#include "search_settings.h"
 #include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
@@ -27,7 +30,9 @@
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
 #include "chatbot/result.h"
+#include "chatbot/tavily_search.h"
 #include "chatbot/types.h"
+#include "chatbot/web_search.h"
 
 #include <ftxui/component/app.hpp>
 #include <ftxui/component/component.hpp>
@@ -48,6 +53,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -72,6 +78,33 @@ std::optional<std::string> env_value(const char* name) {
 std::optional<std::string> env_non_empty(const char* name) {
     std::optional<std::string> value = env_value(name);
     return value.has_value() && !value->empty() ? value : std::nullopt;
+}
+
+/// El entorno real del proceso, para load_search_api_key.
+std::string_view process_env(std::string_view name) {
+    const char* value = std::getenv(std::string{name}.c_str());
+    return value != nullptr ? std::string_view{value} : std::string_view{};
+}
+
+/// Proveedor de /buscar con la key vigente (CHAT_SEARCH_API_KEY o
+/// credentials.json): nullptr si no hay key. Si credentials.json no se puede
+/// leer, también nullptr y el motivo en warning.
+std::shared_ptr<chatbot::SearchProvider> make_search_provider(std::string& warning) {
+    const std::optional<std::string> credentials_path = chatbot::default_credentials_path();
+    if (!credentials_path.has_value() && env_non_empty("CHAT_SEARCH_API_KEY") == std::nullopt) {
+        return nullptr;
+    }
+    const chatbot::Result<std::string> key =
+        chatbot::load_search_api_key(process_env, credentials_path.value_or(""));
+    if (key.is_error()) {
+        warning = key.error().message;
+        return nullptr;
+    }
+    if (key.value().empty()) {
+        return nullptr;
+    }
+    return std::make_shared<chatbot::TavilySearch>(key.value(),
+                                                   std::make_unique<chatbot::CurlTransport>());
 }
 
 /// Traduce una tecla de FTXUI a la de la barra de conversaciones.
@@ -220,6 +253,17 @@ int main() {
         }
     }
 
+    // Búsqueda web (/buscar). Se comparte con el hilo de trabajo del runner,
+    // así que se puede reemplazar al guardar la key aunque haya un hilo
+    // terminado sin unir.
+    std::string search_warning;
+    std::shared_ptr<chatbot::SearchProvider> search_provider =
+        make_search_provider(search_warning);
+    if (!search_warning.empty()) {
+        startup_warning += (startup_warning.empty() ? "" : " ") + search_warning;
+    }
+    bool searching = false; ///< /buscar en curso, antes de que llegue la respuesta.
+
     // El orden de declaración importa: se destruyen en orden inverso. El
     // runner se destruye antes que screen y client (cancela y hace join del
     // hilo, que usa ambos); igual el cargador de modelos, que une sus hilos.
@@ -288,17 +332,30 @@ int main() {
         if (runner->busy()) {
             return; // Enter no hace nada mientras hay una respuesta en curso.
         }
+        // /buscar: sin consulta o sin key, el texto se queda en la caja.
+        const chatbot::cli::ParsedCommand command = chatbot::cli::parse_command(input_text);
+        if (command.type == chatbot::cli::ParsedCommand::Type::SearchEmpty) {
+            flash = "Uso: /buscar <consulta>";
+            return;
+        }
+        const bool search = command.type == chatbot::cli::ParsedCommand::Type::Search;
+        if (search && search_provider == nullptr) {
+            flash = std::string{chatbot::cli::kMissingSearchKey};
+            return;
+        }
         std::optional<std::vector<chatbot::Message>> messages = conversation.submit(input_text);
         if (!messages.has_value()) {
             return; // Caja vacía.
         }
         input_text.clear();
         scroll.to_bottom();
-        runner->start(
-            std::move(*messages),
-            [&conversation](std::string delta) { conversation.append_delta(delta); },
-            [&conversation, &input_text, &last_dropped, &store, &sidebar,
-             &model](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
+        const auto on_delta = [&conversation](std::string delta) {
+            conversation.append_delta(delta);
+        };
+        const auto on_done =
+            [&conversation, &input_text, &last_dropped, &store, &sidebar, &model,
+             &searching](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
+                searching = false;
                 last_dropped = dropped;
                 const std::optional<std::string> restored =
                     result.is_ok()
@@ -314,7 +371,23 @@ int main() {
                 if (restored.has_value() && input_text.empty()) {
                     input_text = *restored;
                 }
-            });
+            };
+        if (!search) {
+            runner->start(std::move(*messages), on_delta, on_done);
+            return;
+        }
+        // La fecha se guarda con la búsqueda (AAAA-MM-DD) y el bloque la
+        // lleva en español.
+        const std::string date = chatbot::cli::local_iso_date(std::time(nullptr));
+        searching = true;
+        runner->start_with_search(
+            std::move(*messages), command.text, search_provider, chatbot::cli::spanish_date(date),
+            [&conversation, &searching, date](chatbot::cli::RequestRunner::SearchContext found) {
+                searching = false;
+                (void)conversation.attach_search(std::move(found.response), date,
+                                                 std::move(found.block));
+            },
+            on_delta, on_done);
     };
 
     // La barra con lo que hay en el almacén y la conversación abierta.
@@ -427,6 +500,34 @@ int main() {
             scroll.to_bottom();
             return std::nullopt;
         },
+        [&](const std::string& key) -> std::optional<std::string> {
+            const std::optional<std::string> credentials_path =
+                chatbot::default_credentials_path();
+            if (!credentials_path.has_value()) {
+                return "No se encontró la carpeta de configuración (define HOME o "
+                       "XDG_CONFIG_HOME).";
+            }
+            chatbot::Result<chatbot::Credentials> saved =
+                chatbot::load_credentials(*credentials_path);
+            if (saved.is_error()) {
+                return saved.error().message;
+            }
+            chatbot::Credentials credentials = saved.value();
+            credentials.keys[std::string{chatbot::kSearchCredentialsKey}] = key;
+            if (const auto error = chatbot::save_credentials(*credentials_path, credentials)) {
+                return error->message;
+            }
+            // Se aplica sin reiniciar (la pantalla no se abre con una
+            // respuesta en curso).
+            std::string warning;
+            search_provider = make_search_provider(warning);
+            if (!warning.empty()) {
+                return warning;
+            }
+            conversation.add_notice("Key de búsqueda guardada: usa /buscar <consulta>.");
+            scroll.to_bottom();
+            return std::nullopt;
+        },
         [&] {
             right_tab = 0;
             input->TakeFocus();
@@ -473,10 +574,15 @@ int main() {
         env.base_url = env_non_empty("CHAT_BASE_URL");
         env.model = env_non_empty("CHAT_MODEL");
         env.api_key = env_non_empty("CHAT_API_KEY");
+        const auto saved_search =
+            credentials.value().keys.find(std::string{chatbot::kSearchCredentialsKey});
+        chatbot::cli::SearchSettings search(
+            saved_search != credentials.value().keys.end() ? saved_search->second : std::string{},
+            env_non_empty("CHAT_SEARCH_API_KEY"));
         right_tab = 1;
         settings.open(chatbot::cli::ProviderSettings(values.value(), credentials.value(),
                                                      std::move(env)),
-                      config, appearance, system_prompt, std::move(notice));
+                      config, appearance, system_prompt, std::move(search), std::move(notice));
     };
 
     // Ejecuta lo que pidió la barra de conversaciones.
@@ -591,7 +697,8 @@ int main() {
             status.push_back(ftxui::text(flash) | ftxui::bold);
         }
         if (busy()) {
-            status.push_back(ftxui::text("Pensando… (Esc para cancelar)"));
+            status.push_back(ftxui::text(searching ? "Buscando en la web… (Esc para cancelar)"
+                                                   : "Pensando… (Esc para cancelar)"));
         }
         if (scroll.has_more_below()) {
             // Con texto en la caja, End mueve el cursor: el aviso sugiere PgDn.

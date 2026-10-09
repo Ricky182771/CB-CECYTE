@@ -13,15 +13,6 @@ namespace {
 /// Largo mínimo de una key escrita en el formulario.
 constexpr std::size_t kMinKeyLength = 20;
 
-/// false si la key escrita parece el nombre de una variable ("$NIMKEY"),
-/// trae espacios o saltos de línea, o es demasiado corta para ser completa.
-bool plausible_key(std::string_view key) {
-    if (key.size() < kMinKeyLength || key.front() == '$') {
-        return false;
-    }
-    return key.find_first_of(" \t\n\r\v\f") == std::string_view::npos;
-}
-
 std::string lowercase(std::string_view text) {
     std::string out{text};
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
@@ -50,6 +41,13 @@ std::size_t initial_provider(const ConfigFileValues& saved) {
 }
 
 } // namespace
+
+bool plausible_key(std::string_view key) {
+    if (key.size() < kMinKeyLength || key.front() == '$') {
+        return false;
+    }
+    return key.find_first_of(" \t\n\r\v\f") == std::string_view::npos;
+}
 
 std::string mask_key(std::string_view key) {
     static const std::string kEllipsis = "…";

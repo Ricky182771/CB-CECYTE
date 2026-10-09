@@ -3,6 +3,7 @@
 
 #include "models_loader.h"
 #include "provider_settings.h"
+#include "search_settings.h"
 #include "theme.h"
 
 #include "chatbot/config.h"
@@ -18,9 +19,8 @@
 namespace chatbot::cli {
 
 /// Pantalla de configuración (FTXUI): categorías a la izquierda
-/// ("Proveedor", "Colores y Accesibilidad" e "Instrucciones del sistema") y
-/// el formulario de la elegida a
-/// la derecha. La lógica del proveedor está en ProviderSettings; la lista de
+/// ("Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema" y
+/// "Búsqueda web") y el formulario de la elegida a la derecha. La lógica del proveedor está en ProviderSettings; la lista de
 /// modelos se pide con ModelsLoader, en su hilo. Se dibuja con la paleta
 /// vigente (la de main.cpp, que cambia al guardar). Se usa solo desde el
 /// hilo de la interfaz.
@@ -37,21 +37,26 @@ public:
     /// para mostrar, o nullopt si se guardó.
     using OnSaveSystemPrompt =
         std::function<std::optional<std::string>(const std::optional<std::string>&)>;
+    /// Guarda la key de búsqueda web en credentials.json ("search:tavily") y
+    /// la aplica. Devuelve el error para mostrar, o nullopt si se guardó.
+    using OnSaveSearchKey = std::function<std::optional<std::string>(const std::string&)>;
     /// La pantalla se cerró (guardada o descartada).
     using OnClose = std::function<void()>;
 
     /// palette debe vivir más que la pantalla.
     SettingsScreen(ModelsLoader& loader, const Palette& palette, OnSave on_save,
                    OnSaveAppearance on_save_appearance,
-                   OnSaveSystemPrompt on_save_system_prompt, OnClose on_close);
+                   OnSaveSystemPrompt on_save_system_prompt, OnSaveSearchKey on_save_search_key,
+                   OnClose on_close);
 
     /// Abre con un formulario nuevo. base: la configuración actual (timeout,
     /// volcado, límite del historial) para pedir los modelos. appearance: el
     /// tema y el fondo vigentes. system_prompt: las instrucciones vigentes
-    /// (vacías: ninguna). notice: aviso inicial, si hay. Pide la lista de
-    /// modelos si ya hay URL y key.
+    /// (vacías: ninguna). search: la key de búsqueda guardada y la del
+    /// entorno. notice: aviso inicial, si hay. Pide la lista de modelos si ya
+    /// hay URL y key.
     void open(ProviderSettings settings, Config base, Appearance appearance,
-              std::string system_prompt, std::string notice = {});
+              std::string system_prompt, SearchSettings search, std::string notice = {});
     /// Esc, Cancelar o F2: cierra si no hay cambios; si los hay, pregunta
     /// "¿Descartar los cambios? (s/n)". Devuelve true si se cerró.
     bool request_close();
@@ -66,7 +71,7 @@ public:
 
 private:
     /// Categorías del menú de la izquierda.
-    enum Category : int { kProvider = 0, kAppearance = 1, kSystemPrompt = 2 };
+    enum Category : int { kProvider = 0, kAppearance = 1, kSystemPrompt = 2, kSearch = 3 };
 
     void request_models();
     void save();
@@ -80,6 +85,7 @@ private:
     [[nodiscard]] ftxui::Element render_provider() const;
     [[nodiscard]] ftxui::Element render_appearance() const;
     [[nodiscard]] ftxui::Element render_system_prompt() const;
+    [[nodiscard]] ftxui::Element render_search() const;
     /// Tema y fondo elegidos en el formulario.
     [[nodiscard]] Appearance chosen_appearance() const;
     [[nodiscard]] bool appearance_dirty() const;
@@ -92,8 +98,10 @@ private:
     OnSave on_save_;
     OnSaveAppearance on_save_appearance_;
     OnSaveSystemPrompt on_save_system_prompt_;
+    OnSaveSearchKey on_save_search_key_;
     OnClose on_close_;
     std::optional<ProviderSettings> settings_;
+    SearchSettings search_;
     Config base_;
     Appearance saved_appearance_; ///< El vigente al abrir (o al guardar).
     std::string saved_prompt_;    ///< Las instrucciones vigentes al abrir (o al guardar).
@@ -116,6 +124,7 @@ private:
     std::string filter_text_;
     std::string model_text_;
     std::string prompt_text_;
+    std::string search_key_text_;
     mutable std::vector<ftxui::Box> model_row_boxes_;
     mutable ftxui::Box models_box_{0, -1, 0, -1};
 
@@ -130,6 +139,7 @@ private:
     ftxui::Component model_input_;
     ftxui::Component prompt_input_;
     ftxui::Component restore_button_;
+    ftxui::Component search_key_input_;
     ftxui::Component save_button_;
     ftxui::Component cancel_button_;
     ftxui::Component root_;

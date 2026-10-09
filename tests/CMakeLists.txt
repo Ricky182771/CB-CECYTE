@@ -33,6 +33,7 @@ add_executable(chatbot_tests
     test_request_runner.cpp
     test_search_config.cpp
     test_search_context.cpp
+    test_search_settings.cpp
     test_sidebar.cpp
     test_sse.cpp
     test_streaming.cpp

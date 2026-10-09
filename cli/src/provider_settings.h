@@ -25,6 +25,11 @@ struct SettingsEnv {
 /// Estado de la lista de modelos.
 enum class ModelsState { Idle, Loading, Loaded, Failed };
 
+/// false si la key escrita parece el nombre de una variable ("$NIMKEY"),
+/// trae espacios o saltos de línea, o es demasiado corta para ser completa
+/// (menos de 20 caracteres). Vale para la key del modelo y la de búsqueda.
+[[nodiscard]] bool plausible_key(std::string_view key);
+
 /// Key enmascarada: "…" y sus últimos 4 caracteres si mide al menos 8 y esos
 /// 4 son ASCII imprimibles; si no, solo "…". Nunca expone más de 4.
 [[nodiscard]] std::string mask_key(std::string_view key);
