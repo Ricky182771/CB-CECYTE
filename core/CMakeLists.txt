@@ -1,8 +1,15 @@
 find_package(CURL REQUIRED)
 find_package(nlohmann_json 3.9 REQUIRED)
 
+# Capa de plataforma (chatbot/platform.h): CMake elige la implementación.
+if(WIN32)
+    set(CHATBOT_PLATFORM_SOURCE src/platform_windows.cpp)
+else()
+    set(CHATBOT_PLATFORM_SOURCE src/platform_posix.cpp)
+endif()
+
 add_library(chatbot_core STATIC
-    src/atomic_file.cpp
+    ${CHATBOT_PLATFORM_SOURCE}
     src/cancel_token.cpp
     src/credentials.cpp
     src/error.cpp

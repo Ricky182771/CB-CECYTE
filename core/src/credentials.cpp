@@ -1,6 +1,6 @@
 #include "chatbot/credentials.h"
 
-#include "atomic_file.h"
+#include "chatbot/platform.h"
 
 #include <nlohmann/json.hpp>
 
@@ -89,7 +89,8 @@ std::optional<ChatError> save_credentials(const std::string& path,
     }
     const std::string content =
         document.dump(4, ' ', false, nlohmann::ordered_json::error_handler_t::replace) + "\n";
-    if (const std::optional<std::string> error = write_file_atomic(path, content, 0600, 0700)) {
+    if (const std::optional<std::string> error = write_file_atomic(path, content, FilePrivacy::Private,
+                                                                        FolderPrivacy::Private)) {
         return config_error("No se pudieron guardar las credenciales: " + *error);
     }
     return std::nullopt;

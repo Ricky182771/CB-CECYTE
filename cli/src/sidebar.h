@@ -22,7 +22,7 @@ struct CalendarDay {
     bool operator==(const CalendarDay&) const = default;
 };
 
-/// Día local de un instante (localtime_r); nullopt si no se puede convertir.
+/// Día local de un instante (chatbot::local_time); nullopt si no se puede convertir.
 [[nodiscard]] std::optional<CalendarDay> local_day(std::time_t time);
 
 /// Día de un updated_at tal como quedó escrito ("2026-10-02T23:58:00-06:00"

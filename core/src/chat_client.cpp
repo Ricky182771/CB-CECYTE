@@ -2,6 +2,7 @@
 
 #include "chatbot/cancel_token.h"
 #include "chatbot/error.h"
+#include "chatbot/platform.h"
 #include "config_internal.h"
 #include "error_body.h"
 #include "sse.h"
@@ -289,12 +290,12 @@ bool is_comment_only(const std::string& raw) {
 /// Fecha y hora local con formato AAAA-MM-DD HH:MM:SS.
 std::string local_timestamp() {
     const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm local{};
-    if (localtime_r(&now, &local) == nullptr) {
+    const std::optional<std::tm> local = local_time(now);
+    if (!local.has_value()) {
         return "?";
     }
     std::ostringstream text;
-    text << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
+    text << std::put_time(&*local, "%Y-%m-%d %H:%M:%S");
     return text.str();
 }
 

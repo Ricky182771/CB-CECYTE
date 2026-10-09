@@ -33,6 +33,7 @@
 #include "chatbot/credentials.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
+#include "chatbot/platform.h"
 #include "chatbot/result.h"
 #include "chatbot/tavily_search.h"
 #include "chatbot/types.h"
@@ -60,8 +61,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#include <unistd.h>
 
 namespace {
 
@@ -219,7 +218,7 @@ int main() {
     const chatbot::Result<chatbot::Config> initial = chatbot::load_config(load_options);
     const std::optional<chatbot::ChatError> incomplete =
         initial.is_ok() ? chatbot::validate_config(initial.value()) : std::nullopt;
-    const bool has_terminal = ::isatty(STDIN_FILENO) == 1 && ::isatty(STDOUT_FILENO) == 1;
+    const bool has_terminal = chatbot::stdio_is_terminal();
     if (initial.is_error() || (incomplete.has_value() && !has_terminal)) {
         const chatbot::ChatError& error = initial.is_error() ? initial.error() : *incomplete;
         std::cerr << "[" << chatbot::error_kind_label(error.kind) << "] " << error.message

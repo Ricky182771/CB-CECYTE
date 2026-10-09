@@ -1,19 +1,14 @@
 #include "conversation_store.h"
 
+#include "chatbot/platform.h"
 #include "chatbot/web_search.h"
 
 #include <nlohmann/json.hpp>
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -26,11 +21,6 @@ namespace {
 
 using nlohmann::json;
 namespace fs = std::filesystem;
-
-/// Descripción de errno según la libc.
-std::string errno_text(int error) {
-    return std::string{std::strerror(error)};
-}
 
 /// Un id válido solo tiene dígitos, a-f y '-': no puede salir de la carpeta.
 bool is_valid_id(const std::string& id) {
@@ -286,39 +276,6 @@ std::optional<long long> iso8601_to_utc(const std::string& text) {
 }
 
 /// Escribe todo el búfer en fd, reintentando escrituras parciales.
-bool write_all(int fd, const std::string& data) {
-    std::size_t written = 0;
-    while (written < data.size()) {
-        const ssize_t result = ::write(fd, data.data() + written, data.size() - written);
-        if (result < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return false;
-        }
-        written += static_cast<std::size_t>(result);
-    }
-    return true;
-}
-
-/// Crea el directorio con 0700 (y sus padres con los permisos por defecto).
-std::optional<std::string> ensure_directory(const fs::path& dir) {
-    std::error_code error;
-    if (fs::is_directory(dir, error)) {
-        return std::nullopt;
-    }
-    if (dir.has_parent_path()) {
-        fs::create_directories(dir.parent_path(), error);
-        if (error) {
-            return "no se pudo crear " + dir.parent_path().string() + ": " + error.message();
-        }
-    }
-    if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
-        return "no se pudo crear " + dir.string() + ": " + errno_text(errno);
-    }
-    return std::nullopt;
-}
-
 } // namespace
 
 std::optional<std::string> resolve_data_dir(const std::optional<std::string>& chat_data_dir,
@@ -370,12 +327,12 @@ std::string make_title(std::string_view first_user_message) {
 }
 
 std::string format_iso8601(std::time_t time) {
-    std::tm local{};
-    if (localtime_r(&time, &local) == nullptr) {
+    const std::optional<std::tm> local = local_time(time);
+    if (!local.has_value()) {
         return {};
     }
     std::array<char, 32> buffer{};
-    if (std::strftime(buffer.data(), buffer.size(), "%Y-%m-%dT%H:%M:%S%z", &local) == 0) {
+    if (std::strftime(buffer.data(), buffer.size(), "%Y-%m-%dT%H:%M:%S%z", &*local) == 0) {
         return {};
     }
     std::string text{buffer.data()};
@@ -387,10 +344,7 @@ std::string format_iso8601(std::time_t time) {
 }
 
 std::string format_conversation_id(std::time_t time, std::uint32_t random) {
-    std::tm local{};
-    if (localtime_r(&time, &local) == nullptr) {
-        local = std::tm{};
-    }
+    const std::tm local = local_time(time).value_or(std::tm{});
     std::array<char, 32> stamp{};
     std::strftime(stamp.data(), stamp.size(), "%Y%m%d-%H%M%S", &local);
     std::array<char, 8> hex{};
@@ -535,38 +489,13 @@ std::optional<std::string> ConversationStore::save(const StoredConversation& con
                 return "el archivo existente es ilegible (" + *problem + ") y no se sobrescribe";
             }
         }
-        if (const std::optional<std::string> problem = ensure_directory(fs::path{dir_})) {
-            return problem;
-        }
-
         const std::string data =
             to_json(conversation)
                 .dump(2, ' ', false, nlohmann::ordered_json::error_handler_t::replace) +
             "\n";
-        const std::string temporary = target + ".tmp";
-        const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-        if (fd < 0) {
-            return "no se pudo crear " + temporary + ": " + errno_text(errno);
-        }
-        // Si el .tmp ya existía con otros permisos, O_TRUNC los conserva.
-        const bool written = ::fchmod(fd, 0600) == 0 && write_all(fd, data) && ::fsync(fd) == 0;
-        const int write_error = errno;
-        if (::close(fd) != 0 || !written) {
-            ::unlink(temporary.c_str());
-            return "no se pudo escribir " + temporary + ": " + errno_text(write_error);
-        }
-        if (::rename(temporary.c_str(), target.c_str()) != 0) {
-            const int rename_error = errno;
-            ::unlink(temporary.c_str());
-            return "no se pudo reemplazar " + target + ": " + errno_text(rename_error);
-        }
-        // fsync del directorio: que el rename sobreviva a un apagón.
-        const int dir_fd = ::open(dir_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (dir_fd >= 0) {
-            ::fsync(dir_fd);
-            ::close(dir_fd);
-        }
-        return std::nullopt;
+        // La carpeta se crea en 0700 si falta; si ya existía (CHAT_DATA_DIR
+        // puede ser una carpeta del usuario), sus permisos no se tocan.
+        return write_file_atomic(target, data, FilePrivacy::Private, FolderPrivacy::PrivateIfNew);
     } catch (...) {
         return "error inesperado al guardar";
     }
@@ -589,8 +518,13 @@ std::optional<std::string> ConversationStore::remove(const std::string& id) cons
         if (const std::optional<std::string> problem = parse_conversation(*content, ignored)) {
             return "el archivo es ilegible (" + *problem + ") y no se borra";
         }
-        if (::unlink(target.c_str()) != 0) {
-            return "no se pudo borrar " + target + ": " + errno_text(errno);
+        std::error_code error;
+        const bool removed = fs::remove(fs::path{target}, error);
+        if (error) {
+            return "no se pudo borrar " + target + ": " + error.message();
+        }
+        if (!removed) {
+            return "la conversación no existe";
         }
         return std::nullopt;
     } catch (...) {

@@ -2,8 +2,8 @@
 
 #include "config_internal.h"
 
-#include "atomic_file.h"
 #include "chatbot/credentials.h"
+#include "chatbot/platform.h"
 #include "url.h"
 
 #include <nlohmann/json.hpp>
@@ -23,9 +23,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
-
-#include <sys/stat.h>
 
 namespace chatbot {
 namespace {
@@ -63,6 +62,17 @@ std::optional<std::string> read_file(const std::string& path) {
         return std::nullopt;
     }
     return content;
+}
+
+/// true si path existe. Cualquier error al revisarlo cuenta como que no
+/// existe, igual que un archivo que falta.
+bool file_exists(const std::string& path) {
+    try {
+        std::error_code error;
+        return std::filesystem::exists(std::filesystem::path{path}, error);
+    } catch (const std::exception&) {
+        return false; // En Windows, fs::path lanza si la ruta no es UTF-8 válido.
+    }
 }
 
 /// Entero no negativo desde texto. Nullopt si no es un entero válido.
@@ -357,8 +367,7 @@ Result<Config> load_config(const ConfigOptions& options) {
 
 Result<ConfigFileValues> load_config_file_values(const std::string& path) {
     ConfigFileValues values;
-    struct stat info {};
-    if (::stat(path.c_str(), &info) != 0) {
+    if (!file_exists(path)) {
         return values; // Sin archivo: todo vacío.
     }
     try {
@@ -397,10 +406,7 @@ using ordered = nlohmann::ordered_json;
 std::optional<ChatError> update_config_file(const std::string& path,
                                             const std::function<void(ordered&)>& change) {
     ordered document = ordered::object();
-    mode_t mode = 0644; // config.json no lleva secretos.
-    struct stat info {};
-    if (::stat(path.c_str(), &info) == 0) {
-        mode = info.st_mode & 0777; // Se conservan los permisos que tenía.
+    if (file_exists(path)) {
         const std::optional<std::string> content = read_file(path);
         try {
             if (!content.has_value()) {
@@ -420,7 +426,9 @@ std::optional<ChatError> update_config_file(const std::string& path,
     change(document);
     const std::string text =
         document.dump(4, ' ', false, ordered::error_handler_t::replace) + "\n";
-    if (const std::optional<std::string> error = write_file_atomic(path, text, mode, 0700)) {
+    // config.json no lleva secretos: conserva los permisos que tenía, o 0644.
+    if (const std::optional<std::string> error =
+            write_file_atomic(path, text, FilePrivacy::KeepExisting, FolderPrivacy::Private)) {
         return ChatError{ErrorKind::Config, 0, "No se guardó la configuración: " + *error,
                          std::nullopt};
     }
@@ -440,8 +448,7 @@ std::optional<ChatError> save_config_file(const std::string& path,
 
 Result<AppearanceValues> load_appearance_values(const std::string& path) {
     AppearanceValues values;
-    struct stat info {};
-    if (::stat(path.c_str(), &info) != 0) {
+    if (!file_exists(path)) {
         return values; // Sin archivo: todo vacío.
     }
     try {
@@ -485,8 +492,7 @@ std::optional<ChatError> save_appearance(const std::string& path,
 }
 
 Result<std::optional<std::string>> load_system_prompt_value(const std::string& path) {
-    struct stat info {};
-    if (::stat(path.c_str(), &info) != 0) {
+    if (!file_exists(path)) {
         return std::optional<std::string>{}; // Sin archivo: la llave falta.
     }
     nlohmann::json document;
