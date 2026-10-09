@@ -73,6 +73,23 @@ ActionResult save_block(const CodeBlock& block, std::string_view file_name,
                           incomplete_warning(block));
 }
 
+ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
+                              BlockAction action, const ClipboardAccess& clipboard,
+                              const std::optional<std::string>& download_base,
+                              const std::string& home) {
+    const CodeBlockChoice choice = choose_code_block(blocks, number);
+    if (choice.block == nullptr) {
+        return {choice.problem, true};
+    }
+    if (action == BlockAction::Copy) {
+        return copy_block(*choice.block, clipboard);
+    }
+    if (!download_base.has_value()) {
+        return {std::string{kNoDownloadDir}, true};
+    }
+    return save_block(*choice.block, {}, *download_base, home);
+}
+
 ActionResult export_conversation(const Conversation& conversation, std::time_t now,
                                  const std::string& download_base, const std::string& home) {
     if (!conversation.has_turns()) {

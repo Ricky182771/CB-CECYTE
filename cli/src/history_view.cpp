@@ -140,9 +140,10 @@ std::optional<ButtonLabels> fitting_labels(int frame_width, int title_width) {
 /// puntero, no de la entrada.
 class HistoryView::Picture : public ftxui::Node {
 public:
+    /// hits: donde se anotan los botones dibujados (HistoryView::hits_).
     Picture(std::shared_ptr<const ftxui::Screen> image, std::vector<CodeFrame> frames,
-            const HistoryView& view)
-        : image_(std::move(image)), frames_(std::move(frames)), view_(view) {}
+            const HistoryView& view, std::vector<ButtonHit>* hits)
+        : image_(std::move(image)), frames_(std::move(frames)), view_(view), hits_(hits) {}
 
     void ComputeRequirement() override {
         requirement_ = ftxui::Requirement{};
@@ -199,8 +200,22 @@ private:
             screen.CellAt(x - 1, row).character = " ";
         }
         x = put(screen, x, row, labels->copy);
+        hit(screen, x - ftxui::string_width(std::string{labels->copy}), x - 1, row, frame.number,
+            BlockAction::Copy);
         x = put(screen, x, row, " ", false);
-        (void)put(screen, x, row, labels->save);
+        const int save_begin = x;
+        x = put(screen, x, row, labels->save);
+        hit(screen, save_begin, x - 1, row, frame.number, BlockAction::Save);
+    }
+
+    /// Anota el botón de las columnas begin a end (lo que se ve de él).
+    void hit(const ftxui::Screen& screen, int begin, int end, int y, int block,
+             BlockAction action) const {
+        const ftxui::Box box =
+            ftxui::Box::Intersection(ftxui::Box{begin, end, y, y}, screen.stencil);
+        if (hits_ != nullptr && !box.IsEmpty()) {
+            hits_->push_back(ButtonHit{box, block, action});
+        }
     }
 
     /// Escribe label desde (x, y), con la tinta notice sobre el fondo que ya
@@ -232,6 +247,7 @@ private:
     std::shared_ptr<const ftxui::Screen> image_;
     std::vector<CodeFrame> frames_;
     const HistoryView& view_;
+    std::vector<ButtonHit>* hits_;
 };
 
 
@@ -283,6 +299,15 @@ const std::vector<CodeFrame>& HistoryView::code_frames(std::size_t entry) const 
     return entry < cache_.size() ? cache_[entry].code_frames : kNone;
 }
 
+std::optional<ButtonHit> HistoryView::hit_test(int x, int y) const {
+    for (const ButtonHit& hit : hits_) {
+        if (hit.box.Contain(x, y)) {
+            return hit;
+        }
+    }
+    return std::nullopt;
+}
+
 void HistoryView::set_hover(int x, int y) { hover_ = std::pair{x, y}; }
 
 void HistoryView::clear_hover() { hover_.reset(); }
@@ -292,6 +317,7 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
                                    const std::vector<int>& first_code_numbers) {
     width = std::max(width, 1);
     palette_ = palette;
+    hits_.clear(); // Los de este cuadro los anota Picture::Render.
     const std::string palette_key = palette.key();
     // Si cambió la conversación, las entradas se comparan por contenido: las
     // iguales se reusan y las demás se vuelven a dibujar.
@@ -337,7 +363,7 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
         if (!rows.empty()) {
             rows.push_back(ftxui::text(""));
         }
-        rows.push_back(std::make_shared<Picture>(cached.image, cached.code_frames, *this));
+        rows.push_back(std::make_shared<Picture>(cached.image, cached.code_frames, *this, &hits_));
     }
     return ftxui::vbox(std::move(rows));
 }

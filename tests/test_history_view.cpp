@@ -10,8 +10,10 @@
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -518,6 +520,48 @@ std::vector<Entry> long_block_entries() {
             make(EntryKind::Assistant, before + "```cpp\n" + code + "```" + after)};
 }
 
+/// Para cada celda de la pantalla, hit_test da el botón cuya etiqueta se
+/// dibujó ahí ("[Copiar]" o "[Guardar]", del bloque en el orden de numbers),
+/// y nada en las demás celdas.
+void check_hits(const HistoryView& view, const ftxui::Screen& screen,
+                const std::vector<int>& numbers) {
+    using chatbot::cli::BlockAction;
+    struct Expected {
+        BlockAction action;
+    };
+    std::vector<std::vector<std::optional<Expected>>> expected(
+        static_cast<std::size_t>(screen.dimy()),
+        std::vector<std::optional<Expected>>(static_cast<std::size_t>(screen.dimx())));
+    for (int y = 0; y < screen.dimy(); ++y) {
+        // Cada fila tiene a lo más los botones de un bloque.
+        for (const auto& [label, action] :
+             {std::pair{std::string{"[Copiar]"}, BlockAction::Copy},
+              std::pair{std::string{"[Guardar]"}, BlockAction::Save}}) {
+            const int x = column_of(screen, y, label);
+            if (x < 0) {
+                continue;
+            }
+            for (int k = 0; k < ftxui::string_width(label); ++k) {
+                expected[static_cast<std::size_t>(y)][static_cast<std::size_t>(x + k)] =
+                    Expected{action};
+            }
+        }
+    }
+    for (int y = 0; y < screen.dimy(); ++y) {
+        for (int x = 0; x < screen.dimx(); ++x) {
+            INFO("celda (" << x << ", " << y << ")");
+            const std::optional<chatbot::cli::ButtonHit> hit = view.hit_test(x, y);
+            const std::optional<Expected>& want =
+                expected[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
+            REQUIRE(hit.has_value() == want.has_value());
+            if (hit.has_value()) {
+                CHECK(hit->action == want->action);
+                CHECK(std::find(numbers.begin(), numbers.end(), hit->block) != numbers.end());
+            }
+        }
+    }
+}
+
 } // namespace
 
 TEST_CASE("botones: fijos arriba del bloque en todos los desplazamientos",
@@ -588,6 +632,8 @@ TEST_CASE("botones: fijos arriba del bloque en todos los desplazamientos",
             CHECK(screen.CellAt(frames[0].box.x_max, rows.front()).character ==
                   (top_visible ? "╮" : "│"));
         }
+        // hit_test coincide con las celdas dibujadas.
+        check_hits(view, screen, {1});
         // Fuera de la caja del bloque, todo igual que sin botones.
         const ftxui::Screen without = draw_view(plain, entries, kWidth, kHeight, top, numbers);
         for (int y = 0; y < kHeight; ++y) {
@@ -660,4 +706,47 @@ TEST_CASE("botones: el puntero encima no vuelve a dibujar la entrada", "[histori
     screen = draw_view(view, entries, 40, 5, 0, {1});
     CHECK_FALSE(screen.CellAt(save_x, 1).inverted);
     CHECK(view.draw_count() == draws);
+}
+
+TEST_CASE("botones: hit_test con dos bloques en la misma entrada", "[historial][botones]") {
+    std::string first;
+    for (int i = 0; i < 6; ++i) {
+        first += "a" + std::to_string(i) + "\n";
+    }
+    const std::vector<Entry> entries{
+        make(EntryKind::Assistant, "```cpp\n" + first + "```\n\n```py\n" + first + "```")};
+    HistoryView view;
+    // Los dos bloques miden 8 filas cada uno, con una línea en blanco entre ellos.
+    for (int top = 0; top <= 12; ++top) {
+        INFO("primera fila visible: " << top);
+        const ftxui::Screen screen = draw_view(view, entries, 40, 6, top, {4});
+        check_hits(view, screen, {4, 5});
+        // Cada fila de botones es del bloque que la contiene.
+        const std::vector<chatbot::cli::CodeFrame>& frames = view.code_frames(0);
+        REQUIRE(frames.size() == 2);
+        for (int y = 0; y < 6; ++y) {
+            const int x = column_of(screen, y, "[Copiar]");
+            if (x < 0) {
+                continue;
+            }
+            const std::optional<chatbot::cli::ButtonHit> hit = view.hit_test(x, y);
+            REQUIRE(hit.has_value());
+            const int content_y = top + y;
+            const auto& frame = content_y <= frames[0].box.y_max ? frames[0] : frames[1];
+            CHECK(hit->block == frame.number);
+            // La única entrada empieza en la fila 0: sus coordenadas son las
+            // del historial. Nunca sobre el borde inferior.
+            CHECK(content_y >= frame.box.y_min);
+            CHECK(content_y <= frame.box.y_max - 1);
+        }
+    }
+    // Con todo a la vista, dos filas de botones, de los bloques 4 y 5.
+    const ftxui::Screen screen = draw_view(view, entries, 40, 30, 0, {4});
+    const std::vector<int> rows = rows_with(screen, "[Copiar] [Guardar]");
+    REQUIRE(rows.size() == 2);
+    CHECK(view.hit_test(column_of(screen, rows[0], "[Copiar]"), rows[0])->block == 4);
+    CHECK(view.hit_test(column_of(screen, rows[1], "[Guardar]"), rows[1])->block == 5);
+    CHECK(view.hit_test(column_of(screen, rows[1], "[Guardar]"), rows[1])->action ==
+          chatbot::cli::BlockAction::Save);
+    CHECK_FALSE(view.hit_test(column_of(screen, rows[0], "[Copiar]") + 8, rows[0]).has_value());
 }

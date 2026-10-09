@@ -6,6 +6,7 @@
 #include "conversation.h"
 
 #include <ctime>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +20,13 @@ struct ActionResult {
     std::string message;
     bool error = false;
 };
+
+/// Sin carpeta de descargas (resolve_download_dir dio nullopt).
+inline constexpr std::string_view kNoDownloadDir =
+    "No se encontró la carpeta de descargas (define HOME o CHAT_DOWNLOAD_DIR).";
+
+/// Qué hace un botón de un bloque de código.
+enum class BlockAction { Copy, Save };
 
 /// Lo que copy_block necesita para copiar, inyectable para probarla sin
 /// lanzar procesos ni escribir en la terminal (ver copy_to_clipboard).
@@ -45,6 +53,15 @@ struct ClipboardAccess {
 /// home abrevia la ruta del aviso con "~".
 [[nodiscard]] ActionResult save_block(const CodeBlock& block, std::string_view file_name,
                                       const std::string& download_base, const std::string& home);
+
+/// Lo que hace un botón del bloque con ese número (de collect_code_blocks):
+/// copy_block, o save_block con el nombre por defecto en download_base
+/// (resolve_download_dir; nullopt es un error). Un número que ya no existe
+/// es un error (choose_code_block).
+[[nodiscard]] ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
+                                            BlockAction action, const ClipboardAccess& clipboard,
+                                            const std::optional<std::string>& download_base,
+                                            const std::string& home);
 
 /// Exporta los pares guardados de la conversación a Markdown en
 /// <download_base>/chatbot (export_markdown, export_file_name). Sin pares es

@@ -1,6 +1,7 @@
 #ifndef CHATBOT_CLI_HISTORY_VIEW_H
 #define CHATBOT_CLI_HISTORY_VIEW_H
 
+#include "block_actions.h"
 #include "conversation.h"
 #include "markdown.h"
 #include "theme.h"
@@ -23,6 +24,13 @@ struct CodeFrame {
     int number = 0;      ///< Número del bloque (el de collect_code_blocks).
     ftxui::Box box;      ///< Marco del bloque, en coordenadas de la entrada.
     int title_width = 0; ///< Columnas del título del marco (" #3 · cpp ").
+};
+
+/// Un botón dibujado en el último cuadro.
+struct ButtonHit {
+    ftxui::Box box;  ///< En coordenadas de la pantalla (una fila).
+    int block = 0;   ///< Número del bloque (el de collect_code_blocks).
+    BlockAction action = BlockAction::Copy;
 };
 
 /// Dibuja las entradas de la conversación. Las respuestas del asistente se
@@ -59,6 +67,11 @@ public:
     [[nodiscard]] ftxui::Element render(const std::vector<Entry>& entries, int width,
                                         const Palette& palette,
                                         const std::vector<int>& first_code_numbers = {});
+
+    /// El botón que se dibujó en (x, y) de la pantalla, o nullopt. Es del
+    /// cuadro anterior (el último que se dibujó): un clic llega después de
+    /// verlo, así que es lo que el usuario tenía en pantalla.
+    [[nodiscard]] std::optional<ButtonHit> hit_test(int x, int y) const;
 
     /// Puntero en (x, y) de la pantalla: el botón que esté ahí se dibuja con
     /// el color de selección desde el siguiente cuadro.
@@ -104,6 +117,8 @@ private:
     std::vector<Cached> cache_;
     Palette palette_; ///< La del último render, para los botones.
     std::optional<std::pair<int, int>> hover_; ///< Puntero (x, y), si está encima.
+    /// Botones del último cuadro: render() lo vacía y Picture::Render lo llena.
+    std::vector<ButtonHit> hits_;
     bool buttons_visible_ = true;
     std::size_t parse_count_ = 0;
     std::size_t draw_count_ = 0;

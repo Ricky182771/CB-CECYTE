@@ -180,6 +180,9 @@ public:
     }
     void to_bottom() { follow_ = true; }
 
+    /// true si (x, y) cae en la zona visible del historial (último cuadro).
+    [[nodiscard]] bool contains(int x, int y) const { return view_box_.Contain(x, y); }
+
     /// true si el usuario subió y hay contenido debajo de la vista.
     [[nodiscard]] bool has_more_below() const { return !follow_; }
 
@@ -333,7 +336,7 @@ int main() {
         std::optional<std::string> base =
             chatbot::cli::resolve_download_dir(chatbot::cli::environment_value);
         if (!base.has_value()) {
-            flash = "No se encontró la carpeta de descargas (define HOME o CHAT_DOWNLOAD_DIR).";
+            flash = std::string{chatbot::cli::kNoDownloadDir};
         }
         return base;
     };
@@ -408,6 +411,18 @@ int main() {
         }
         // Copy: la caja se vacía aunque no se haya podido copiar.
         show(chatbot::cli::copy_block(*choice.block, chatbot::cli::real_clipboard()), true);
+    };
+
+    // Botones [Copiar] y [Guardar] de un bloque: también con una respuesta en
+    // curso. El resultado va a la línea de estado; no tocan el historial, el
+    // scroll ni la caja.
+    const auto run_button = [&](const chatbot::cli::ButtonHit& hit) {
+        code_blocks.update(conversation.entries());
+        flash = chatbot::cli::run_block_action(
+                    code_blocks.blocks(), hit.block, hit.action, chatbot::cli::real_clipboard(),
+                    chatbot::cli::resolve_download_dir(chatbot::cli::environment_value),
+                    env_value("HOME").value_or(""))
+                    .message;
     };
 
     // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.
@@ -926,6 +941,13 @@ int main() {
         if (!sidebar_visible) {
             sidebar_box = ftxui::Box{};
         }
+        if (mouse.motion == ftxui::Mouse::Moved) {
+            if (!settings.is_open() && scroll.contains(mouse.x, mouse.y)) {
+                history.set_hover(mouse.x, mouse.y);
+            } else {
+                history.clear_hover();
+            }
+        }
         const bool on_divider = sidebar_visible && mouse.x == sidebar_box.x_max + 1 &&
                                 mouse.y >= sidebar_box.y_min && mouse.y <= sidebar_box.y_max;
         if (on_divider && mouse.button == ftxui::Mouse::Left &&
@@ -952,6 +974,13 @@ int main() {
         }
         if (settings.is_open()) {
             return false;
+        }
+        if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed) {
+            if (const std::optional<chatbot::cli::ButtonHit> hit =
+                    history.hit_test(mouse.x, mouse.y)) {
+                run_button(*hit);
+                return true;
+            }
         }
         if (mouse.button == ftxui::Mouse::WheelUp) {
             scroll.by(-kWheelStep);

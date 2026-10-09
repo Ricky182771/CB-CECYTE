@@ -173,3 +173,32 @@ TEST_CASE("export_conversation: sin pares es un error; con pares escribe el Mark
     CHECK(text.find("¡Hola!") != std::string::npos);
     CHECK(text.find("sistema") == std::string::npos);
 }
+
+TEST_CASE("run_block_action: copia o guarda el bloque con ese número", "[block_actions]") {
+    using chatbot::cli::BlockAction;
+    FakeClipboard fake;
+    const std::vector<CodeBlock> blocks{block(1, "cpp", "int a;\n"), block(2, "py", "x = 1\n")};
+    const chatbot_test::ScopedTempDir dir;
+
+    ActionResult result = chatbot::cli::run_block_action(
+        blocks, 2, BlockAction::Copy, fake.access({program("xclip")}), dir.string(), "");
+    CHECK_FALSE(result.error);
+    CHECK(fake.input == "x = 1\n");
+    CHECK(result.message == "Copiado el bloque #2 (py, 1 línea) con xclip.");
+
+    result = chatbot::cli::run_block_action(blocks, 1, BlockAction::Save,
+                                            fake.access({program("xclip")}), dir.string(), "");
+    CHECK_FALSE(result.error);
+    CHECK(read_text(dir.string() + "/chatbot/bloque-1.cpp") == "int a;\n");
+    CHECK(fake.programs.size() == 1); // Guardar no copia.
+
+    result = chatbot::cli::run_block_action(blocks, 1, BlockAction::Save,
+                                            fake.access({program("xclip")}), std::nullopt, "");
+    CHECK(result.error);
+    CHECK(result.message == chatbot::cli::kNoDownloadDir);
+
+    result = chatbot::cli::run_block_action(blocks, 3, BlockAction::Copy,
+                                            fake.access({program("xclip")}), dir.string(), "");
+    CHECK(result.error);
+    CHECK(result.message.find("No existe el bloque #3") != std::string::npos);
+}
