@@ -5,11 +5,10 @@
 // pantalla o la Conversation se ejecuta en el hilo de la interfaz mediante
 // App::Post.
 
-#include "clipboard.h"
+#include "block_actions.h"
 #include "code_blocks.h"
 #include "command_parser.h"
 #include "conversation.h"
-#include "conversation_export.h"
 #include "conversation_list.h"
 #include "conversation_store.h"
 #include "downloads.h"
@@ -24,6 +23,7 @@
 #include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
+#include "status_line.h"
 #include "system_prompt.h"
 #include "theme.h"
 #include "title_bar.h"
@@ -181,6 +181,9 @@ public:
     }
     void to_bottom() { follow_ = true; }
 
+    /// true si (x, y) cae en la zona visible del historial (último cuadro).
+    [[nodiscard]] bool contains(int x, int y) const { return view_box_.Contain(x, y); }
+
     /// true si el usuario subió y hay contenido debajo de la vista.
     [[nodiscard]] bool has_more_below() const { return !follow_; }
 
@@ -298,6 +301,8 @@ int main() {
     int split_min = chatbot::cli::kSidebarMinWidth - 1;
     int split_max = chatbot::cli::kSidebarMaxWidth - 1;
     ftxui::Box sidebar_box; ///< Zona de la barra en el último cuadro (para el ratón).
+    ftxui::Box export_box;  ///< [Exportar] de la barra de título en el último cuadro.
+    bool export_hover = false;
     bool dragging = false;  ///< Se arrastra el divisor: el ratón es de ResizableSplit.
     int right_tab = 0; ///< Lado derecho: 0 = conversación, 1 = configuración.
     // Sin configuración completa no hay cliente ni runner (la caja no envía).
@@ -328,50 +333,39 @@ int main() {
     }
     const auto busy = [&] { return runner != nullptr && runner->busy(); };
 
-    // Carpeta <descargas>/chatbot para /guardar y /exportar, o nullopt con
-    // el motivo ya mostrado.
-    const auto download_dir = [&]() -> std::optional<std::string> {
-        const std::optional<std::string> base =
+    const std::string home = env_value("HOME").value_or(""); ///< Abrevia rutas con "~".
+    // Carpeta de descargas (sin chatbot/) para /guardar y /exportar, o
+    // nullopt con el motivo en la línea de estado.
+    const auto download_base = [&]() -> std::optional<std::string> {
+        std::optional<std::string> base =
             chatbot::cli::resolve_download_dir(chatbot::cli::environment_value);
         if (!base.has_value()) {
-            flash = "No se encontró la carpeta de descargas (define HOME o CHAT_DOWNLOAD_DIR).";
-            return std::nullopt;
+            flash = std::string{chatbot::cli::kNoDownloadDir};
         }
-        const chatbot::cli::WriteResult dir = chatbot::cli::ensure_download_dir(*base);
-        if (!dir.error.empty()) {
-            conversation.add_error(dir.error);
-            return std::nullopt;
-        }
-        return dir.path;
-    };
-    // Escribe un archivo nuevo en la carpeta de descargas y avisa dónde quedó.
-    const auto write_download = [&](std::string_view name, std::string_view content,
-                                    std::string_view done) {
-        const std::optional<std::string> dir = download_dir();
-        if (!dir.has_value()) {
-            return;
-        }
-        const chatbot::cli::WriteResult written =
-            chatbot::cli::write_new_file(*dir, name, content);
-        if (!written.error.empty()) {
-            conversation.add_error(written.error);
-        } else {
-            conversation.add_notice(std::string{done} + " " +
-                                    chatbot::cli::display_path(written.path,
-                                                               env_value("HOME").value_or("")));
-            input_text.clear();
-        }
-        scroll.to_bottom();
+        return base;
     };
 
     // /copiar, /guardar y /exportar: no van al modelo ni al historial. Los
-    // errores de uso van en la línea de estado y el texto se queda en la caja.
+    // errores de uso van en la línea de estado y el texto se queda en la caja;
+    // el resultado, en el historial.
     const auto run_local_command = [&](const chatbot::cli::ParsedCommand& command) {
         using Type = chatbot::cli::ParsedCommand::Type;
         if (busy()) {
             flash = "Espera a que termine la respuesta";
             return;
         }
+        // Muestra el resultado; la caja se vacía si salió bien (o siempre).
+        const auto show = [&](const chatbot::cli::ActionResult& result, bool always_clear) {
+            if (result.error) {
+                conversation.add_error(result.message);
+            } else {
+                conversation.add_notice(result.message);
+            }
+            if (!result.error || always_clear) {
+                input_text.clear();
+            }
+            scroll.to_bottom();
+        };
         switch (command.type) {
         case Type::CopyUsage:
             flash = std::string{chatbot::cli::kCopyUsage};
@@ -387,12 +381,11 @@ int main() {
                 flash = "Todavía no hay respuestas que exportar.";
                 return;
             }
-            const std::time_t now = std::time(nullptr);
-            const std::string markdown = chatbot::cli::export_markdown(
-                conversation.to_stored(chatbot::cli::format_iso8601(now)),
-                chatbot::cli::export_date(chatbot::cli::format_iso8601(now)));
-            write_download(chatbot::cli::export_file_name(conversation.id(), now), markdown,
-                           "Conversación exportada a");
+            if (const std::optional<std::string> base = download_base()) {
+                show(chatbot::cli::export_conversation(conversation, std::time(nullptr), *base,
+                                                       home),
+                     false);
+            }
             return;
         }
         default:
@@ -405,7 +398,6 @@ int main() {
             flash = choice.problem;
             return;
         }
-        const chatbot::cli::CodeBlock& block = *choice.block;
         if (command.type == Type::Save) {
             if (!command.file_name.empty()) {
                 if (const std::optional<std::string> reason =
@@ -414,39 +406,14 @@ int main() {
                     return;
                 }
             }
-            write_download(
-                chatbot::cli::block_file_name(command.file_name, block.number, block.info),
-                chatbot::cli::with_final_newline(block.code), "Guardado en");
+            if (const std::optional<std::string> base = download_base()) {
+                show(chatbot::cli::save_block(*choice.block, command.file_name, *base, home),
+                     false);
+            }
             return;
         }
-        // Copy.
-        const std::optional<std::string> tmux = chatbot::cli::environment_value("TMUX");
-        const chatbot::cli::CopyResult copied = chatbot::cli::copy_to_clipboard(
-            block.code,
-            chatbot::cli::clipboard_methods(chatbot::cli::environment_value,
-                                            chatbot::cli::find_in_path),
-            tmux.has_value() && !tmux->empty(),
-            [](const std::vector<std::string>& argv, std::string_view text) {
-                return chatbot::cli::run_with_input(argv, text);
-            },
-            chatbot::cli::write_to_terminal);
-        const std::string what = chatbot::cli::describe_code_block(block);
-        const std::string number = std::to_string(block.number);
-        if (!copied.copied) {
-            conversation.add_error(
-                copied.too_long
-                    ? "No se pudo copiar " + what + ": pasa de 100 000 bytes, el límite de OSC 52, " +
-                          "y no hay otro método. Usa /guardar " + number + "."
-                    : "No se pudo copiar " + what + ". Usa /guardar " + number + ".");
-        } else if (copied.fallback) {
-            conversation.add_notice("Copiado " + what +
-                                    " con OSC 52; si tu terminal no lo soporta, usa /guardar " +
-                                    number + ".");
-        } else {
-            conversation.add_notice("Copiado " + what + " con " + copied.method + ".");
-        }
-        input_text.clear();
-        scroll.to_bottom();
+        // Copy: la caja se vacía aunque no se haya podido copiar.
+        show(chatbot::cli::copy_block(*choice.block, chatbot::cli::real_clipboard()), true);
     };
 
     // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.
@@ -823,44 +790,35 @@ int main() {
             history.render(conversation.entries(), width, palette, code_blocks.first_numbers()));
         const ftxui::Decorator notice = palette.ink(&chatbot::cli::Theme::notice);
 
-        ftxui::Elements status;
+        // Los avisos usan lo que dejan los indicadores (reserved) y se
+        // recortan con "…" (status_line.h).
+        std::vector<chatbot::cli::StatusItem> status;
         if (sidebar_visible && sidebar_panel->Focused()) {
             if (const std::optional<std::string> question = sidebar.confirmation()) {
-                status.push_back(ftxui::text(*question) | ftxui::bold);
+                status.push_back({*question, ftxui::bold});
             } else if (flash.empty() && !busy()) {
                 // La ayuda solo si no hay otro aviso: juntos no caben.
-                status.push_back(
-                    ftxui::text("Enter abre · Supr borra · Esc vuelve a la caja") | notice);
+                status.push_back({"Enter abre · Supr borra · Esc vuelve a la caja", notice});
             }
         }
         if (!flash.empty()) {
-            status.push_back(ftxui::text(flash) | ftxui::bold);
+            status.push_back({flash, ftxui::bold});
         }
         if (busy()) {
-            status.push_back(ftxui::text(searching ? "Buscando en la web… (Esc para cancelar)"
-                                                   : "Pensando… (Esc para cancelar)"));
+            status.push_back({searching ? "Buscando en la web… (Esc para cancelar)"
+                                        : "Pensando… (Esc para cancelar)",
+                              ftxui::nothing, true});
         }
         if (scroll.has_more_below()) {
             // Con texto en la caja, End mueve el cursor: el aviso sugiere PgDn.
-            status.push_back(ftxui::text(input_text.empty() ? "↓ Hay más abajo (End)"
-                                                            : "↓ Hay más abajo (PgDn)") |
-                             ftxui::bold);
+            status.push_back({input_text.empty() ? "↓ Hay más abajo (End)"
+                                                 : "↓ Hay más abajo (PgDn)",
+                              ftxui::bold, true});
         }
         if (last_dropped > 0) {
-            status.push_back(ftxui::text("Se omitieron " + std::to_string(last_dropped) +
-                                         " mensajes antiguos para no exceder el límite.") |
-                             notice);
-        }
-        ftxui::Elements status_line;
-        for (ftxui::Element& item : status) {
-            if (!status_line.empty()) {
-                status_line.push_back(ftxui::text("   "));
-            }
-            status_line.push_back(std::move(item));
-        }
-        if (status_line.empty()) {
-            // Alto fijo: sin esto, un hbox vacío mide 0 líneas y la pantalla salta.
-            status_line.push_back(ftxui::text(""));
+            status.push_back({"Se omitieron " + std::to_string(last_dropped) +
+                                  " mensajes antiguos para no exceder el límite.",
+                              notice});
         }
 
         placeholder = runner != nullptr ? "Escribe tu mensaje y presiona Enter"
@@ -870,10 +828,11 @@ int main() {
             (conversation.title().empty() ? std::string{"Nueva conversación"}
                                           : chatbot::cli::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
-            chatbot::cli::title_bar(title, width, palette),
+            chatbot::cli::title_bar(title, width, palette,
+                                    {conversation.has_turns(), export_hover}, export_box),
             std::move(body),
             ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
-            ftxui::hbox(std::move(status_line)),
+            chatbot::cli::status_line(status, width),
             // El prompt en negritas marca la caja sin un bloque de color.
             ftxui::hbox({ftxui::text("> ") | ftxui::bold |
                              palette.ink(&chatbot::cli::Theme::user_label),
@@ -965,6 +924,14 @@ int main() {
         if (!sidebar_visible) {
             sidebar_box = ftxui::Box{};
         }
+        if (mouse.motion == ftxui::Mouse::Moved) {
+            if (!settings.is_open() && scroll.contains(mouse.x, mouse.y)) {
+                history.set_hover(mouse.x, mouse.y);
+            } else {
+                history.clear_hover();
+            }
+            export_hover = export_box.Contain(mouse.x, mouse.y);
+        }
         const bool on_divider = sidebar_visible && mouse.x == sidebar_box.x_max + 1 &&
                                 mouse.y >= sidebar_box.y_min && mouse.y <= sidebar_box.y_max;
         if (on_divider && mouse.button == ftxui::Mouse::Left &&
@@ -991,6 +958,31 @@ int main() {
         }
         if (settings.is_open()) {
             return false;
+        }
+        // Botones de los bloques y [Exportar] (sin respuestas no hace nada):
+        // también con una respuesta en curso. El resultado va a la línea de
+        // estado; no tocan el historial, el scroll ni la caja.
+        const bool click =
+            mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed;
+        if (const std::optional<chatbot::cli::ButtonHit> hit = history.hit_test(mouse.x, mouse.y);
+            click && hit.has_value()) {
+            code_blocks.update(conversation.entries());
+            const chatbot::cli::ActionResult result = chatbot::cli::run_block_action(
+                code_blocks.blocks(), hit->block, hit->action, chatbot::cli::real_clipboard(),
+                chatbot::cli::resolve_download_dir(chatbot::cli::environment_value), home);
+            flash = result.message;
+            if (!result.error && hit->action == chatbot::cli::BlockAction::Copy) {
+                history.show_copied(hit->block);
+            }
+            return true;
+        }
+        if (click && export_box.Contain(mouse.x, mouse.y) && conversation.has_turns()) {
+            if (const std::optional<std::string> base = download_base()) {
+                flash = chatbot::cli::export_conversation(conversation, std::time(nullptr), *base,
+                                                          home)
+                            .message;
+            }
+            return true;
         }
         if (mouse.button == ftxui::Mouse::WheelUp) {
             scroll.by(-kWheelStep);

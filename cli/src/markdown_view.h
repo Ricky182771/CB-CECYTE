@@ -5,6 +5,7 @@
 #include "theme.h"
 
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/box.hpp>
 
 #include <string>
 #include <string_view>
@@ -20,8 +21,18 @@ namespace chatbot::cli::md {
 /// first_code > 0 numera los bloques de código desde ahí, en el orden de
 /// code_blocks_of (code_blocks.h): el título del marco pasa de "cpp" a
 /// "#3 · cpp", o "#3" sin lenguaje. Con 0, sin números.
+/// code_boxes: si no es nulo, queda con un elemento por bloque de código, en
+/// el orden de code_blocks_of, con la caja de su marco (la que recibe al
+/// dibujar el elemento: en Render(screen, element), en coordenadas de esa
+/// pantalla). Con nullptr la salida es idéntica.
 [[nodiscard]] ftxui::Element render(const Document& document, int width,
-                                    const Palette& palette, int first_code = 0);
+                                    const Palette& palette, int first_code = 0,
+                                    std::vector<ftxui::Box>* code_boxes = nullptr);
+
+/// Título del marco de un bloque de código, con un espacio a cada lado:
+/// " #3 · cpp ", " #3 " (sin lenguaje), " cpp " (sin número: number = 0) o
+/// vacío si no hay ninguno de los dos.
+[[nodiscard]] std::string code_title(int number, std::string_view info);
 
 /// Texto plano (sin markdown) filtrado con sanitize() y ajustado a width
 /// columnas con las mismas reglas; conserva los espacios repetidos. style

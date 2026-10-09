@@ -220,6 +220,13 @@ TEST_CASE("Contraste de cada tema con fondo propio", "[tema]") {
               theme.min_text_contrast);
         CHECK(chatbot::cli::contrast_ratio(theme.highlight_fg.value, theme.highlight_bg.value) >=
               theme.min_text_contrast);
+        // Botones de los bloques de código: notice sobre el fondo del bloque
+        // (el del tema) y, con el puntero encima, la selección.
+        REQUIRE(is_rgb(theme.notice));
+        CHECK(chatbot::cli::contrast_ratio(theme.notice.value, background) >=
+              theme.min_text_contrast);
+        CHECK(chatbot::cli::contrast_ratio(theme.selection_fg.value, theme.selection_bg.value) >=
+              theme.min_text_contrast);
         for (const auto& [name, color] : ui_colors(theme)) {
             INFO(name);
             REQUIRE(is_rgb(color));
@@ -496,4 +503,48 @@ TEST_CASE("Cambiar el tema o el fondo invalida la caché del historial", "[tema]
     CHECK(view.draw_count() == 3 * count);
     // El árbol de markdown no depende del tema: no se vuelve a parsear.
     CHECK(view.parse_count() == 2);
+}
+
+TEST_CASE("Botones de los bloques: notice sobre el fondo y la selección con el puntero",
+          "[tema][botones]") {
+    true_color();
+    const Palette palette(catppuccin(), BackgroundMode::FromTheme);
+    HistoryView view;
+    const std::vector<Entry> entries{
+        Entry{EntryKind::Assistant, "```cpp\nint a;\n```", false, false, false, {}, {}}};
+    ftxui::Screen screen = draw(view.render(entries, 50, palette, {1}) | palette.base(), 50);
+    const Position copy = find(screen, "[Copiar]");
+    const Position save = find(screen, "[Guardar]");
+    REQUIRE(copy.x >= 0);
+    REQUIRE(save.x >= 0);
+    const ftxui::Cell& cell = screen.CellAt(copy.x, copy.y);
+    CHECK(cell.foreground_color == color_of(catppuccin().notice));
+    CHECK(cell.background_color == color_of(catppuccin().background));
+    CHECK_FALSE(cell.dim);
+    CHECK_FALSE(cell.automerge);
+
+    view.set_hover(save.x + 1, save.y);
+    screen = draw(view.render(entries, 50, palette, {1}) | palette.base(), 50);
+    const ftxui::Cell& hovered = screen.CellAt(save.x, save.y);
+    CHECK(hovered.foreground_color == color_of(catppuccin().selection_fg));
+    CHECK(hovered.background_color == color_of(catppuccin().selection_bg));
+    CHECK(screen.CellAt(copy.x, copy.y).background_color ==
+          color_of(catppuccin().background));
+}
+
+TEST_CASE("NO_COLOR: el botón con el puntero encima va invertido", "[tema][botones]") {
+    const chatbot_test::NoColorGuard environment("1");
+    const Palette palette(chatbot::cli::resolve_appearance("catppuccin-mocha", "theme"));
+    HistoryView view;
+    const std::vector<Entry> entries{
+        Entry{EntryKind::Assistant, "```cpp\nint a;\n```", false, false, false, {}, {}}};
+    ftxui::Screen screen = draw(view.render(entries, 50, palette, {1}), 50);
+    const Position copy = find(screen, "[Copiar]");
+    REQUIRE(copy.x >= 0);
+    CHECK_FALSE(screen.CellAt(copy.x, copy.y).inverted);
+    CHECK(screen.CellAt(copy.x, copy.y).foreground_color == ftxui::Color(ftxui::Color::Default));
+    view.set_hover(copy.x, copy.y);
+    screen = draw(view.render(entries, 50, palette, {1}), 50);
+    CHECK(screen.CellAt(copy.x, copy.y).inverted);
+    CHECK_FALSE(screen.CellAt(copy.x, copy.y).dim);
 }

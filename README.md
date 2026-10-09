@@ -239,7 +239,18 @@ Para ver cómo se muestra un archivo markdown sin usar la API:
 
 ### Copiar, guardar y exportar
 
-Los bloques de código de las respuestas se numeran desde 1 en toda la conversación, en el orden en que aparecen; el número va en el título del bloque (`#3 · cpp`). Estos comandos no se envían al modelo ni entran al historial: el resultado aparece como un aviso en la conversación.
+Los bloques de código de las respuestas se numeran desde 1 en toda la conversación, en el orden en que aparecen; el número va en el título del bloque (`#3 · cpp`).
+
+**Con el ratón.** Cada bloque lleva a la derecha de su título los botones `[Copiar]` y `[Guardar]`. Si el bloque es más alto que la pantalla, al bajar con la rueda los botones se quedan pegados a la primera fila visible del bloque y desaparecen con él cuando ya no queda ninguna fila de código a la vista.
+
+- `[Copiar]` copia el bloque y cambia a `[✓ Copiado]` hasta que mueves el puntero fuera del botón o pasan 2 segundos.
+- `[Guardar]` lo guarda con el nombre por defecto (`bloque-3.cpp`). Para otro nombre, usa `/guardar 3 suma.cpp`.
+- `[Exportar]`, a la derecha de la barra de título, exporta la conversación. Sin respuestas que exportar se ve atenuado y no hace nada.
+- El resultado aparece en la línea de estado, corto y con lo importante primero: `#1 copiado con wl-copy`, `#1 copiado con OSC 52 · si no pega, usa [Guardar]`, `#1 guardado en ~/Descargas/chatbot/bloque-1.cpp` o `No se pudo copiar #1 · usa [Guardar]`. Si no cabe, termina en `…`; el indicador de la derecha (`Pensando…`) nunca se recorta. Los botones no agregan nada a la conversación ni mueven la vista: puedes copiar un bloque de la mitad de la conversación sin que salte al final.
+- Funcionan también mientras llega una respuesta: un bloque que sigue llegando se copia como va, y el aviso empieza con `⚠ #1 incompleto (aún no termina)`. Lo mismo con un bloque de una respuesta cancelada (`se canceló`) o cortada por un error (`se cortó`).
+- En una terminal angosta los botones se acortan a `[C]` `[G]`; si tampoco caben, no se muestran (los comandos siguen funcionando). Con el puntero encima van en el color de selección del tema (invertidos con `NO_COLOR`).
+
+**Con comandos**, para cuando no hay ratón (por ejemplo, por SSH desde una terminal que no lo manda) o prefieres el teclado. No se envían al modelo ni entran al historial: el resultado aparece como un aviso en la conversación.
 
 | Comando | Qué hace |
 |---|---|
@@ -251,7 +262,7 @@ Los bloques de código de las respuestas se numeran desde 1 en toda la conversac
 
 - Solo en minúsculas y con los argumentos separados por espacios. Cualquier otro texto que empiece con `/` (por ejemplo `/copiarx`) se envía como un mensaje normal.
 - Con una respuesta en curso, la línea de estado dice `Espera a que termine la respuesta`. Si no hay bloques, el número no existe o sobran argumentos, la línea de estado explica cómo se usa y el texto se queda en la caja.
-- `/guardar` y `/exportar` nunca sobrescriben: si el archivo ya existe, usan `suma-2.cpp`, `suma-3.cpp`… (hasta `-99`). Los archivos quedan con permisos 0644, nunca como ejecutables (tampoco los `.sh`).
+- `/guardar` y `/exportar` nunca sobrescriben: si el archivo ya existe, usan `suma-2.cpp`, `suma-3.cpp`… (hasta `-99`). Los archivos se crean con permisos 0644 (o menos, según tu `umask`), nunca como ejecutables (tampoco los `.sh`).
 - El nombre que das es solo el nombre del archivo: no puede llevar `/`, `\`, `..` ni caracteres de control, ni empezar con `.`, y mide como máximo 100 bytes.
 - El archivo exportado tiene el título, la fecha y el modelo, y cada pregunta (`## Tú`, tal como la escribiste, también el `/buscar …`) con su respuesta (`## Asistente`) y, si hubo búsqueda, sus fuentes (`### Fuentes`). Nunca incluye las instrucciones del sistema, los resultados de búsqueda que recibió el modelo, keys, avisos ni errores.
 
@@ -263,7 +274,7 @@ Los bloques de código de las respuestas se numeran desde 1 en toda la conversac
 
 OSC 52 solo manda bloques de hasta 100 000 bytes; para uno más grande, usa `/guardar`.
 
-**Dónde se guarda:** en la carpeta `chatbot/` (se crea con permisos 0755) dentro de la primera de estas que aplique:
+**Dónde se guarda:** en la carpeta `chatbot/` (se crea con permisos 0755, o menos según tu `umask`) dentro de la primera de estas que aplique:
 
 1. `CHAT_DOWNLOAD_DIR`, si la defines;
 2. tu carpeta de descargas de `~/.config/user-dirs.dirs` (`XDG_DOWNLOAD_DIR`, la que configura tu escritorio), si existe;

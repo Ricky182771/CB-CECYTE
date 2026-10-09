@@ -11,13 +11,29 @@
 
 namespace chatbot::cli {
 
+/// Por qué un bloque puede estar incompleto: cómo terminó su respuesta.
+enum class IncompleteReason {
+    None,       ///< La respuesta terminó bien.
+    Cancelled,  ///< El usuario la canceló (Entry::cancelled).
+    Error,      ///< Se cortó por un error (Entry::incomplete).
+    InProgress, ///< Todavía está llegando (Entry::in_progress).
+};
+
 /// Un bloque de código de una respuesta del asistente.
 struct CodeBlock {
     int number = 0;         ///< Desde 1 en toda la conversación, en orden.
     std::string info;       ///< Lenguaje del bloque (Block::info), o vacío.
     std::string code;       ///< Texto del bloque, tal como lo dio md::parse.
     std::size_t entry = 0;  ///< Índice de la entrada donde está.
+    /// false si su respuesta se canceló, se cortó por un error o sigue
+    /// llegando: el bloque puede estar a la mitad. reason dice cuál.
+    bool complete = true;
+    IncompleteReason reason = IncompleteReason::None;
 };
+
+/// Cómo terminó una entrada (para CodeBlock::reason). Si hay varias marcas,
+/// gana cancelled, luego incomplete y luego in_progress.
+[[nodiscard]] IncompleteReason incomplete_reason(const Entry& entry);
 
 /// Bloques de código de un documento en el orden en que md::render los
 /// dibuja: los bloques en orden (también dentro de listas, citas y
@@ -52,6 +68,12 @@ struct CodeBlockChoice {
 /// "el bloque #3 (cpp, 24 líneas)", o "el bloque #3 (1 línea)" sin lenguaje.
 [[nodiscard]] std::string describe_code_block(const CodeBlock& block);
 
+/// Para el final de un aviso de copiar o guardar: vacío si el bloque está
+/// completo; si no, " Ojo: el bloque está incompleto (la respuesta se
+/// canceló)." (o "se cortó por un error", o "aún no termina"), con el
+/// espacio inicial.
+[[nodiscard]] std::string incomplete_warning(const CodeBlock& block);
+
 /// collect_code_blocks con caché por entrada: solo vuelve a parsear una
 /// respuesta si su texto cambió (mientras llega una respuesta, la interfaz
 /// lo llama en cada cuadro). Da el mismo resultado que collect_code_blocks.
@@ -67,6 +89,7 @@ public:
 private:
     struct Cached {
         bool assistant = false;
+        IncompleteReason reason = IncompleteReason::None;
         std::string source;
         std::vector<CodeBlock> blocks; ///< Numerados desde 1 dentro de la entrada.
     };

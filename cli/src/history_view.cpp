@@ -1,5 +1,6 @@
 #include "history_view.h"
 
+#include "code_blocks.h"
 #include "markdown_view.h"
 
 #include "chatbot/web_search.h"
@@ -8,6 +9,7 @@
 #include <ftxui/dom/requirement.hpp>
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
+#include <ftxui/screen/string.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -100,12 +102,53 @@ md::Document sources_document(const std::vector<SearchResult>& sources) {
     return document;
 }
 
+/// Etiquetas de los botones de un bloque: completas o compactas.
+struct ButtonLabels {
+    std::string_view copy;
+    std::string_view save;
+};
+constexpr ButtonLabels kFullLabels{"[Copiar]", "[Guardar]"};
+constexpr ButtonLabels kShortLabels{"[C]", "[G]"};
+/// Después de copiar, el botón de copiar cambia a estas.
+constexpr ButtonLabels kFullCopied{"[✓ Copiado]", "[Guardar]"};
+constexpr ButtonLabels kShortCopied{"[✓]", "[G]"};
+/// Columnas libres entre el título del marco y los botones.
+constexpr int kTitleMargin = 2;
+
+int labels_width(const ButtonLabels& labels) {
+    return ftxui::string_width(std::string{labels.copy}) + 1 +
+           ftxui::string_width(std::string{labels.save});
+}
+
+/// Las etiquetas que caben en un marco de frame_width columnas con un título
+/// de title_width: los botones terminan una columna antes del borde derecho
+/// y empiezan al menos kTitleMargin columnas después del título (que va
+/// desde la columna 1). nullopt si ni las compactas caben. copied: con
+/// [✓ Copiado], que también tiene que caber.
+std::optional<ButtonLabels> fitting_labels(int frame_width, int title_width, bool copied) {
+    for (const ButtonLabels& labels :
+         {copied ? kFullCopied : kFullLabels, copied ? kShortCopied : kShortLabels}) {
+        const int start = frame_width - 1 - labels_width(labels);
+        if (start >= 1 + title_width + kTitleMargin) {
+            return labels;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
 /// Nodo que muestra una entrada ya dibujada: copia solo las celdas que caen
 /// dentro de la zona visible (el stencil que deja yframe), así que el costo
-/// de cada cuadro no crece con el largo del historial.
-class Picture : public ftxui::Node {
+/// de cada cuadro no crece con el largo del historial. Después dibuja los
+/// botones de sus bloques de código, que dependen de la zona visible y del
+/// puntero, no de la entrada.
+class HistoryView::Picture : public ftxui::Node {
 public:
-    explicit Picture(std::shared_ptr<const ftxui::Screen> image) : image_(std::move(image)) {}
+    /// hits: donde se anotan los botones dibujados (HistoryView::hits_).
+    Picture(std::shared_ptr<const ftxui::Screen> image, std::vector<CodeFrame> frames,
+            const HistoryView& view, std::vector<ButtonHit>* hits)
+        : image_(std::move(image)), frames_(std::move(frames)), view_(view), hits_(hits) {}
 
     void ComputeRequirement() override {
         requirement_ = ftxui::Requirement{};
@@ -131,13 +174,88 @@ public:
                 screen.CellAt(x, y) = std::move(cell);
             }
         }
+        if (view_.buttons_visible_) {
+            for (const CodeFrame& frame : frames_) {
+                draw_buttons(screen, frame);
+            }
+        }
     }
 
 private:
+    void draw_buttons(ftxui::Screen& screen, const CodeFrame& frame) const {
+        const ftxui::Box& stencil = screen.stencil;
+        const int top = box_.y_min + frame.box.y_min;     // Borde superior del bloque.
+        const int bottom = box_.y_min + frame.box.y_max;  // Borde inferior del bloque.
+        const int row = std::max(top, stencil.y_min);
+        if (row > bottom - 1 || row > stencil.y_max) {
+            return; // Ya no queda a la vista ninguna fila de contenido.
+        }
+        const int left = box_.x_min + frame.box.x_min;
+        const int right = box_.x_min + frame.box.x_max;
+        const std::optional<ButtonLabels> labels =
+            fitting_labels(right - left + 1, frame.title_width,
+                           frame.number == view_.copied_block_);
+        if (!labels.has_value()) {
+            return;
+        }
+        int x = right - labels_width(*labels);
+        // Si la celda de la izquierda es la mitad de un carácter ancho que
+        // los botones taparían, se cambia por un espacio.
+        if (x - 1 >= stencil.x_min && x - 1 <= stencil.x_max &&
+            ftxui::string_width(screen.CellAt(x - 1, row).character) == 2) {
+            screen.CellAt(x - 1, row).character = " ";
+        }
+        x = put(screen, x, row, labels->copy);
+        hit(screen, x - ftxui::string_width(std::string{labels->copy}), x - 1, row, frame.number,
+            BlockAction::Copy);
+        x = put(screen, x, row, " ", false);
+        const int save_begin = x;
+        x = put(screen, x, row, labels->save);
+        hit(screen, save_begin, x - 1, row, frame.number, BlockAction::Save);
+    }
+
+    /// Anota el botón de las columnas begin a end (lo que se ve de él).
+    void hit(const ftxui::Screen& screen, int begin, int end, int y, int block,
+             BlockAction action) const {
+        const ftxui::Box box =
+            ftxui::Box::Intersection(ftxui::Box{begin, end, y, y}, screen.stencil);
+        if (hits_ != nullptr && !box.IsEmpty()) {
+            hits_->push_back(ButtonHit{box, block, action});
+        }
+    }
+
+    /// Escribe label desde (x, y), con la tinta notice sobre el fondo que ya
+    /// tiene la celda (y la selección si es un botón con el puntero encima).
+    /// Devuelve la columna siguiente.
+    int put(ftxui::Screen& screen, int x, int y, std::string_view label,
+            bool button = true) const {
+        const int end = x + ftxui::string_width(std::string{label}) - 1;
+        const bool hovered = button && view_.hover_.has_value() && view_.hover_->second == y &&
+                             view_.hover_->first >= x && view_.hover_->first <= end;
+        for (const std::string& glyph : ftxui::Utf8ToGlyphs(std::string{label})) {
+            if (x >= screen.stencil.x_min && x <= screen.stencil.x_max) {
+                ftxui::Cell& cell = screen.CellAt(x, y);
+                const ftxui::Color background = cell.background_color;
+                cell = ftxui::Cell{};
+                cell.character = glyph;
+                cell.background_color = background;
+                cell.automerge = false;
+                view_.palette_.ink_cell(cell, &Theme::notice);
+                if (hovered) {
+                    view_.palette_.select_cell(cell);
+                }
+            }
+            ++x;
+        }
+        return x;
+    }
+
     std::shared_ptr<const ftxui::Screen> image_;
+    std::vector<CodeFrame> frames_;
+    const HistoryView& view_;
+    std::vector<ButtonHit>* hits_;
 };
 
-} // namespace
 
 const md::Document& HistoryView::document_for(Cached& cached, const std::string& text) {
     if (!cached.parsed || cached.source != text) {
@@ -160,7 +278,8 @@ ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, in
     case EntryKind::Assistant: {
         ftxui::Elements lines{
             label(ftxui::text("Asistente:") | ftxui::bold | palette.ink(&Theme::assistant_label)),
-            md::render(document_for(cached, entry.text), width, palette, first_code)};
+            md::render(document_for(cached, entry.text), width, palette, first_code,
+                       first_code > 0 ? &cached.code_boxes : nullptr)};
         if (entry.cancelled) {
             lines.push_back(label(ftxui::text("(cancelada)") | notice));
         } else if (entry.incomplete) {
@@ -181,10 +300,49 @@ ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, in
     return ftxui::text("");
 }
 
+const std::vector<CodeFrame>& HistoryView::code_frames(std::size_t entry) const {
+    static const std::vector<CodeFrame> kNone;
+    return entry < cache_.size() ? cache_[entry].code_frames : kNone;
+}
+
+std::optional<ButtonHit> HistoryView::hit_test(int x, int y) const {
+    for (const ButtonHit& hit : hits_) {
+        if (hit.box.Contain(x, y)) {
+            return hit;
+        }
+    }
+    return std::nullopt;
+}
+
+void HistoryView::set_hover(int x, int y) {
+    hover_ = std::pair{x, y};
+    if (copied_block_ != 0) {
+        const std::optional<ButtonHit> hit = hit_test(x, y);
+        if (!hit.has_value() || hit->action != BlockAction::Copy || hit->block != copied_block_) {
+            copied_block_ = 0; // El puntero salió del botón.
+        }
+    }
+}
+
+void HistoryView::clear_hover() {
+    hover_.reset();
+    copied_block_ = 0;
+}
+
+void HistoryView::show_copied(int block) {
+    copied_block_ = block;
+    copied_at_ = clock_();
+}
+
 ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
                                    const Palette& palette,
                                    const std::vector<int>& first_code_numbers) {
     width = std::max(width, 1);
+    palette_ = palette;
+    hits_.clear(); // Los de este cuadro los anota Picture::Render.
+    if (copied_block_ != 0 && clock_() - copied_at_ >= kCopiedFor) {
+        copied_block_ = 0;
+    }
     const std::string palette_key = palette.key();
     // Si cambió la conversación, las entradas se comparan por contenido: las
     // iguales se reusan y las demás se vuelven a dibujar.
@@ -199,6 +357,7 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
             cached.first_code != first_code || !same_entry(cached.drawn, entry)) {
             // Con el fondo y el texto de la paleta: Picture copia las celdas
             // tal cual, también su fondo.
+            cached.code_boxes.clear();
             ftxui::Element element =
                 entry_element(cached, entry, width, palette, first_code) | palette.base();
             // El ajuste de líneas es propio (sin flexbox), así que el alto
@@ -207,6 +366,18 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
             const int height = std::max(element->requirement().min_y, 1);
             auto image = std::make_shared<ftxui::Screen>(width, height);
             ftxui::Render(*image, element);
+            // Render dejó las cajas de los marcos en coordenadas de la imagen,
+            // que son las de la entrada.
+            cached.code_frames.clear();
+            if (!cached.code_boxes.empty()) {
+                const std::vector<CodeBlock> blocks = code_blocks_of(cached.document);
+                for (std::size_t b = 0; b < cached.code_boxes.size() && b < blocks.size(); ++b) {
+                    const int number = first_code + static_cast<int>(b);
+                    cached.code_frames.push_back(
+                        CodeFrame{number, cached.code_boxes[b],
+                                  ftxui::string_width(md::code_title(number, blocks[b].info))});
+                }
+            }
             cached.image = std::move(image);
             cached.width = width;
             cached.palette_key = palette_key;
@@ -217,7 +388,7 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
         if (!rows.empty()) {
             rows.push_back(ftxui::text(""));
         }
-        rows.push_back(std::make_shared<Picture>(cached.image));
+        rows.push_back(std::make_shared<Picture>(cached.image, cached.code_frames, *this, &hits_));
     }
     return ftxui::vbox(std::move(rows));
 }

@@ -228,11 +228,8 @@ std::string with_final_newline(std::string_view text) {
 
 WriteResult ensure_download_dir(const std::string& base) {
     const std::string dir = base + "/chatbot";
+    // 0755 menos la umask del usuario: si la umask es más estricta, se respeta.
     if (::mkdir(dir.c_str(), 0755) == 0) {
-        // mkdir respeta la umask; la carpeta queda en 0755.
-        if (::chmod(dir.c_str(), 0755) != 0) {
-            return {"", "No se pudo preparar " + dir + ": " + describe_errno(errno)};
-        }
         return {dir, ""};
     }
     const int error = errno;
@@ -258,8 +255,8 @@ WriteResult write_new_file(const std::string& dir, std::string_view name,
             }
             return {"", "No se pudo escribir " + candidate + ": " + describe_errno(errno)};
         }
-        // open respeta la umask; el archivo queda en 0644 (nunca ejecutable).
-        bool ok = ::fchmod(fd, 0644) == 0 && write_all(fd, content);
+        // 0644 menos la umask del usuario: nunca ejecutable ni más abierto.
+        bool ok = write_all(fd, content);
         const int error = ok ? 0 : errno;
         ok = ::close(fd) == 0 && ok;
         if (!ok) {

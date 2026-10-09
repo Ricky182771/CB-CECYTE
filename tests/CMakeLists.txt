@@ -14,6 +14,7 @@ endif()
 find_package(nlohmann_json 3.9 REQUIRED)
 
 add_executable(chatbot_tests
+    test_block_actions.cpp
     test_cancel.cpp
     test_clipboard.cpp
     test_code_blocks.cpp
@@ -67,6 +68,7 @@ add_executable(chatbot_ui_tests
     test_history_view.cpp
     test_input_style.cpp
     test_sidebar_view.cpp
+    test_status_line.cpp
     test_markdown_view.cpp
     test_theme.cpp
     test_title_bar.cpp)

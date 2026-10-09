@@ -2,6 +2,7 @@
 #define CHATBOT_CLI_THEME_H
 
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/cell.hpp>
 #include <ftxui/screen/color.hpp>
 
 #include <cstdint>
@@ -138,6 +139,13 @@ public:
     /// ink(&Theme::border): vuelve al color de texto antes de dibujar, para
     /// que no herede el del borde. Nada si border no tiene color.
     [[nodiscard]] ftxui::Decorator inside_border() const;
+    /// Para lo que se escribe celda por celda (los botones de los bloques de
+    /// código): el color (y dim) de un uso, como ink(); sin color propio, el
+    /// del texto. No cambia el fondo de la celda.
+    void ink_cell(ftxui::Cell& cell, ThemeColor Theme::*field) const;
+    /// La selección sobre una celda, como selection(): selection_fg sobre
+    /// selection_bg, o invertida (sin dim) si el tema invierte la selección.
+    void select_cell(ftxui::Cell& cell) const;
     /// Como ftxui::vscroll_indicator, con la barra en el color scrollbar.
     [[nodiscard]] ftxui::Element vscroll(ftxui::Element element) const;
 
