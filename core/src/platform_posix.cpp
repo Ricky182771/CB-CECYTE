@@ -87,6 +87,11 @@ bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
 std::optional<std::string> known_folder(KnownFolder /*folder*/) { return std::nullopt; }
 
+// La terminal de POSIX no tiene página de códigos que cambiar.
+ConsoleCodePages set_console_utf8() { return {}; }
+
+void restore_console_code_pages(const ConsoleCodePages& /*previous*/) {}
+
 CreateResult create_new_file(const std::string& path, std::string_view content) {
     // 0644 menos la umask del usuario: nunca ejecutable ni más abierto.
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0644);

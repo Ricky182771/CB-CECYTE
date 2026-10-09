@@ -118,6 +118,27 @@ bool stdio_is_terminal() { return is_console(STD_INPUT_HANDLE) && is_console(STD
 
 bool stdout_is_terminal() { return is_console(STD_OUTPUT_HANDLE); }
 
+ConsoleCodePages set_console_utf8() {
+    // Sin consola, las dos dan 0 y no hay nada que cambiar ni restaurar.
+    const ConsoleCodePages previous{::GetConsoleCP(), ::GetConsoleOutputCP()};
+    if (previous.input != 0) {
+        ::SetConsoleCP(CP_UTF8);
+    }
+    if (previous.output != 0) {
+        ::SetConsoleOutputCP(CP_UTF8);
+    }
+    return previous;
+}
+
+void restore_console_code_pages(const ConsoleCodePages& previous) {
+    if (previous.input != 0) {
+        ::SetConsoleCP(previous.input);
+    }
+    if (previous.output != 0) {
+        ::SetConsoleOutputCP(previous.output);
+    }
+}
+
 std::optional<std::string> known_folder(KnownFolder folder) {
     const KNOWNFOLDERID* id = &FOLDERID_RoamingAppData;
     switch (folder) {

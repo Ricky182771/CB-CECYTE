@@ -208,6 +208,11 @@ private:
 } // namespace
 
 int main() {
+    // Windows: la consola en UTF-8 mientras corre el programa, y al salir
+    // (también por un error) vuelve a la página de códigos que tenía. Se
+    // declara primero para que se destruya al último, después de FTXUI.
+    const chatbot::ConsoleUtf8Scope console_utf8;
+
     // La configuración se carga antes de tocar la terminal: si falla, el
     // error sale por stderr sin abrir la pantalla completa. Si lo único que
     // falta es la key o el modelo, la app arranca con la pantalla de

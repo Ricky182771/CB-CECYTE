@@ -33,6 +33,36 @@ enum class Os { Posix, Windows };
 /// Como stdio_is_terminal, pero solo stdout.
 [[nodiscard]] bool stdout_is_terminal();
 
+/// Páginas de códigos de la consola de Windows (GetConsoleCP y
+/// GetConsoleOutputCP). 0: no había consola, no hay nada que restaurar.
+struct ConsoleCodePages {
+    unsigned input = 0;
+    unsigned output = 0;
+};
+
+/// Pone la consola de Windows en UTF-8 (CP_UTF8) y devuelve las páginas que
+/// tenía. Sin consola, o en POSIX, no hace nada y devuelve ceros.
+[[nodiscard]] ConsoleCodePages set_console_utf8();
+
+/// Vuelve a poner las páginas que devolvió set_console_utf8 (las que son 0
+/// no se tocan). En POSIX no hace nada.
+void restore_console_code_pages(const ConsoleCodePages& previous);
+
+/// Mientras vive, la consola de Windows usa UTF-8; al destruirse restaura
+/// las páginas de códigos que tenía, también cuando main sale por un error.
+/// Así los errores salen con acentos y el CMD del usuario no se queda en
+/// 65001 al cerrar (FTXUI pone CP_UTF8 pero nunca lo restaura).
+class ConsoleUtf8Scope {
+public:
+    ConsoleUtf8Scope() : previous_(set_console_utf8()) {}
+    ~ConsoleUtf8Scope() { restore_console_code_pages(previous_); }
+    ConsoleUtf8Scope(const ConsoleUtf8Scope&) = delete;
+    ConsoleUtf8Scope& operator=(const ConsoleUtf8Scope&) = delete;
+
+private:
+    ConsoleCodePages previous_;
+};
+
 /// Carpetas conocidas de Windows (FOLDERID_*).
 enum class KnownFolder {
     RoamingAppData, ///< %APPDATA%: config.json y credentials.json.
