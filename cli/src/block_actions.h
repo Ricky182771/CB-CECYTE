@@ -31,16 +31,19 @@ enum class Wording { Long, Short };
 enum class BlockAction { Copy, Save };
 
 /// Lo que copy_block necesita para copiar, inyectable para probarla sin
-/// lanzar procesos ni escribir en la terminal (ver copy_to_clipboard).
+/// lanzar procesos, tocar el portapapeles del sistema ni escribir en la
+/// terminal (ver copy_to_clipboard).
 struct ClipboardAccess {
     std::vector<ClipboardMethod> methods;
     bool tmux = false;
     ProgramRunner run;
     TerminalWriter write;
+    NativeCopier native{}; ///< Vacío: el método Native falla.
 };
 
-/// El portapapeles real: clipboard_methods con el entorno del proceso,
-/// run_with_input y write_to_terminal.
+/// El portapapeles real: clipboard_methods con el entorno del proceso y el
+/// sistema actual, run_with_input, write_to_terminal y
+/// copy_to_native_clipboard.
 [[nodiscard]] ClipboardAccess real_clipboard();
 
 /// Copia el bloque. "Copiado el bloque #3 (cpp, 24 líneas) con wl-copy.",

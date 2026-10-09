@@ -41,9 +41,17 @@ set_target_properties(md4c PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${MD
 # Lógica de la conversación y del hilo de trabajo: solo depende del núcleo,
 # sin FTXUI, para poder probarla sin terminal.
 find_package(Threads REQUIRED)
+# Portapapeles: el lanzador de programas (posix_spawnp) solo en POSIX; la API
+# de Win32 solo en Windows.
+if(WIN32)
+    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_windows.cpp)
+else()
+    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_posix.cpp)
+endif()
 add_library(chatbot_cli_lib STATIC
     src/block_actions.cpp
     src/clipboard.cpp
+    ${CHATBOT_CLIPBOARD_SOURCE}
     src/code_blocks.cpp
     src/command_parser.cpp
     src/conversation.cpp
@@ -67,6 +75,11 @@ target_link_libraries(chatbot_cli_lib
     PUBLIC chatbot::core Threads::Threads
     PRIVATE nlohmann_json::nlohmann_json md4c)
 chatbot_set_warnings(chatbot_cli_lib)
+# Windows: portapapeles y ventana de solo mensajes (user32). Biblioteca del
+# sistema, no una dependencia nueva.
+if(WIN32)
+    target_link_libraries(chatbot_cli_lib PRIVATE user32)
+endif()
 
 # Dibujo con FTXUI que no necesita la terminal (solo dom y screen), aparte de
 # chatbot_cli_lib para que esta siga sin FTXUI. Las pruebas de la vista lo
