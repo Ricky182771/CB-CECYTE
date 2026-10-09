@@ -1,3 +1,4 @@
+#include "code_blocks.h"
 #include "conversation.h"
 #include "history_view.h"
 #include "performance.hpp"
@@ -40,8 +41,10 @@ std::string screen_text(const ftxui::Screen& screen) {
     return text;
 }
 
-std::string draw(HistoryView& view, const std::vector<Entry>& entries, int width) {
-    ftxui::Element element = view.render(entries, width, chatbot::cli::terminal_palette());
+std::string draw(HistoryView& view, const std::vector<Entry>& entries, int width,
+                 const std::vector<int>& first_code_numbers = {}) {
+    ftxui::Element element =
+        view.render(entries, width, chatbot::cli::terminal_palette(), first_code_numbers);
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                                  ftxui::Dimension::Fit(element, true));
     ftxui::Render(screen, element);
@@ -348,4 +351,62 @@ TEST_CASE("historial: la caché vuelve a dibujar si cambian las fuentes",
     text = draw(view, {sources}, 40);
     CHECK(view.draw_count() == drawn + 2);
     CHECK(text.find("2026-10-04") != std::string::npos);
+}
+
+TEST_CASE("historial: los bloques de código llevan el número de collect_code_blocks",
+          "[historial][code_blocks]") {
+    std::vector<Entry> entries{
+        make(EntryKind::User, "```cpp\nno cuenta\n```"),
+        make(EntryKind::Assistant, "```cpp\nint a;\n```\n\n```\nsin lenguaje\n```"),
+        make(EntryKind::Notice, "aviso"),
+        make(EntryKind::Assistant,
+             "- lista\n\n  ```py\n  print(1)\n  ```\n\n> ```sh\n> ls\n> ```"),
+    };
+    const auto numbered = [&](HistoryView& view) {
+        const std::vector<chatbot::cli::CodeBlock> blocks =
+            chatbot::cli::collect_code_blocks(entries);
+        const std::string text =
+            draw(view, entries, 40, chatbot::cli::first_code_numbers(blocks, entries.size()));
+        // Cada bloque aparece con su número y en el mismo orden.
+        std::size_t from = 0;
+        for (const chatbot::cli::CodeBlock& block : blocks) {
+            const std::string title = " #" + std::to_string(block.number) +
+                                      (block.info.empty() ? "" : " · " + block.info) + " ";
+            INFO(title);
+            const std::size_t at = text.find(title, from);
+            CHECK(at != std::string::npos);
+            from = at == std::string::npos ? from : at;
+        }
+        return text;
+    };
+    HistoryView view;
+    std::string text = numbered(view);
+    CHECK(text.find("```cpp") != std::string::npos); // El del usuario no es markdown.
+    CHECK(text.find("#5") == std::string::npos);
+
+    // Una respuesta en curso agrega números sin cambiar los anteriores.
+    entries.push_back(make(EntryKind::User, "más"));
+    entries.push_back(make(EntryKind::Assistant, "```go\nfunc"));
+    entries.back().in_progress = true;
+    text = numbered(view);
+    CHECK(text.find(" #5 · go ") != std::string::npos);
+
+    // Sin números (vector vacío): el título de siempre.
+    HistoryView plain;
+    text = draw(plain, entries, 40);
+    CHECK(text.find("╭ cpp ─") != std::string::npos);
+    CHECK(text.find("#1") == std::string::npos);
+}
+
+TEST_CASE("historial: el número del primer bloque es parte de la caché", "[historial][code_blocks]") {
+    const std::vector<Entry> entries{make(EntryKind::Assistant, "```cpp\nint a;\n```")};
+    HistoryView view;
+    CHECK(draw(view, entries, 40, {1}).find(" #1 · cpp ") != std::string::npos);
+    CHECK(view.draw_count() == 1);
+    CHECK(draw(view, entries, 40, {1}).find(" #1 · cpp ") != std::string::npos);
+    CHECK(view.draw_count() == 1);
+    // Cambió el número (por ejemplo, se borró una entrada anterior).
+    CHECK(draw(view, entries, 40, {4}).find(" #4 · cpp ") != std::string::npos);
+    CHECK(view.draw_count() == 2);
+    CHECK(view.parse_count() == 1); // El árbol sirve igual.
 }
