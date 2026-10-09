@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Sin procesos reales: el lanzador y la terminal son falsos, y los archivos
@@ -184,7 +185,7 @@ TEST_CASE("run_block_action: copia o guarda el bloque con ese número", "[block_
         blocks, 2, BlockAction::Copy, fake.access({program("xclip")}), dir.string(), "");
     CHECK_FALSE(result.error);
     CHECK(fake.input == "x = 1\n");
-    CHECK(result.message == "Copiado el bloque #2 (py, 1 línea) con xclip.");
+    CHECK(result.message == "#2 copiado con xclip"); // Botones: aviso corto.
 
     result = chatbot::cli::run_block_action(blocks, 1, BlockAction::Save,
                                             fake.access({program("xclip")}), dir.string(), "");
@@ -217,9 +218,59 @@ TEST_CASE("run_block_action: un bloque de la respuesta en curso se copia como va
         std::nullopt, "");
     CHECK_FALSE(result.error);
     CHECK(fake.input == "int a;\nint b\n");
-    CHECK(result.message == "Copiado el bloque #1 (cpp, 2 líneas) con wl-copy. Ojo: el bloque "
-                            "está incompleto (la respuesta aún no termina).");
+    CHECK(result.message == "⚠ #1 incompleto (aún no termina) · copiado con wl-copy");
     // No tocó la conversación.
     CHECK(conversation.entries().size() == 2);
     CHECK(conversation.busy());
+}
+
+TEST_CASE("avisos cortos de los botones, caso por caso", "[block_actions]") {
+    using chatbot::cli::IncompleteReason;
+    using chatbot::cli::Wording;
+    FakeClipboard fake;
+    const CodeBlock code = block(1, "cpp", "int a;\n");
+
+    CHECK(chatbot::cli::copy_block(code, fake.access({program("wl-copy")}), Wording::Short)
+              .message == "#1 copiado con wl-copy");
+    // OSC 52 como primer método (por SSH) no es el último recurso.
+    CHECK(chatbot::cli::copy_block(code, fake.access({osc52(false)}), Wording::Short).message ==
+          "#1 copiado con OSC 52");
+    CHECK(chatbot::cli::copy_block(code, fake.access({osc52(true)}), Wording::Short).message ==
+          "#1 copiado con OSC 52 · si no pega, usa [Guardar]");
+
+    CodeBlock unfinished = code;
+    unfinished.complete = false;
+    for (const auto& [reason, text] :
+         {std::pair{IncompleteReason::InProgress, "aún no termina"},
+          std::pair{IncompleteReason::Cancelled, "se canceló"},
+          std::pair{IncompleteReason::Error, "se cortó"}}) {
+        INFO(text);
+        unfinished.reason = reason;
+        CHECK(chatbot::cli::copy_block(unfinished, fake.access({program("wl-copy")}),
+                                       Wording::Short)
+                  .message == "⚠ #1 incompleto (" + std::string{text} + ") · copiado con wl-copy");
+    }
+
+    fake.program_ok = false;
+    ActionResult failed =
+        chatbot::cli::copy_block(code, fake.access({program("wl-copy")}), Wording::Short);
+    CHECK(failed.error);
+    CHECK(failed.message == "No se pudo copiar #1 · usa [Guardar]");
+    failed = chatbot::cli::copy_block(block(4, "", std::string(chatbot::cli::kOsc52MaxBytes + 1, 'x')),
+                                      fake.access({osc52(true)}), Wording::Short);
+    CHECK(failed.message == "No se pudo copiar #4 · usa [Guardar]");
+
+    const chatbot_test::ScopedTempDir dir;
+    ActionResult saved = chatbot::cli::save_block(code, "", dir.string(), dir.string(),
+                                                  Wording::Short);
+    CHECK_FALSE(saved.error);
+    CHECK(saved.message == "#1 guardado en ~/chatbot/bloque-1.cpp");
+    unfinished.reason = IncompleteReason::Cancelled;
+    saved = chatbot::cli::save_block(unfinished, "", dir.string(), dir.string(), Wording::Short);
+    CHECK(saved.message == "⚠ #1 incompleto (se canceló) · guardado en ~/chatbot/bloque-1-2.cpp");
+
+    // Los comandos conservan los textos largos.
+    CHECK(chatbot::cli::copy_block(code, fake.access({osc52(true)})).message ==
+          "Copiado el bloque #1 (cpp, 1 línea) con OSC 52; si tu terminal no lo soporta, usa "
+          "/guardar 1.");
 }

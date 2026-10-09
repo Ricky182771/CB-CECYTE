@@ -246,8 +246,8 @@ Los bloques de código de las respuestas se numeran desde 1 en toda la conversac
 - `[Copiar]` copia el bloque y cambia a `[✓ Copiado]` hasta que mueves el puntero fuera del botón o pasan 2 segundos.
 - `[Guardar]` lo guarda con el nombre por defecto (`bloque-3.cpp`). Para otro nombre, usa `/guardar 3 suma.cpp`.
 - `[Exportar]`, a la derecha de la barra de título, exporta la conversación. Sin respuestas que exportar se ve atenuado y no hace nada.
-- El resultado (con qué se copió, la ruta del archivo o el error) aparece en la línea de estado. Los botones no agregan nada a la conversación ni mueven la vista: puedes copiar un bloque de la mitad de la conversación sin que salte al final.
-- Funcionan también mientras llega una respuesta: un bloque que sigue llegando se copia como va, y el aviso dice `Ojo: el bloque está incompleto (la respuesta aún no termina)`. Lo mismo pasa con un bloque de una respuesta cancelada o cortada por un error.
+- El resultado aparece en la línea de estado, corto y con lo importante primero: `#1 copiado con wl-copy`, `#1 copiado con OSC 52 · si no pega, usa [Guardar]`, `#1 guardado en ~/Descargas/chatbot/bloque-1.cpp` o `No se pudo copiar #1 · usa [Guardar]`. Si no cabe, termina en `…`; el indicador de la derecha (`Pensando…`) nunca se recorta. Los botones no agregan nada a la conversación ni mueven la vista: puedes copiar un bloque de la mitad de la conversación sin que salte al final.
+- Funcionan también mientras llega una respuesta: un bloque que sigue llegando se copia como va, y el aviso empieza con `⚠ #1 incompleto (aún no termina)`. Lo mismo con un bloque de una respuesta cancelada (`se canceló`) o cortada por un error (`se cortó`).
 - En una terminal angosta los botones se acortan a `[C]` `[G]`; si tampoco caben, no se muestran (los comandos siguen funcionando). Con el puntero encima van en el color de selección del tema (invertidos con `NO_COLOR`).
 
 **Con comandos**, para cuando no hay ratón (por ejemplo, por SSH desde una terminal que no lo manda) o prefieres el teclado. No se envían al modelo ni entran al historial: el resultado aparece como un aviso en la conversación.

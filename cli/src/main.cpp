@@ -23,6 +23,7 @@
 #include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
+#include "status_line.h"
 #include "system_prompt.h"
 #include "theme.h"
 #include "title_bar.h"
@@ -789,44 +790,35 @@ int main() {
             history.render(conversation.entries(), width, palette, code_blocks.first_numbers()));
         const ftxui::Decorator notice = palette.ink(&chatbot::cli::Theme::notice);
 
-        ftxui::Elements status;
+        // Los avisos usan lo que dejan los indicadores (reserved) y se
+        // recortan con "…" (status_line.h).
+        std::vector<chatbot::cli::StatusItem> status;
         if (sidebar_visible && sidebar_panel->Focused()) {
             if (const std::optional<std::string> question = sidebar.confirmation()) {
-                status.push_back(ftxui::text(*question) | ftxui::bold);
+                status.push_back({*question, ftxui::bold});
             } else if (flash.empty() && !busy()) {
                 // La ayuda solo si no hay otro aviso: juntos no caben.
-                status.push_back(
-                    ftxui::text("Enter abre · Supr borra · Esc vuelve a la caja") | notice);
+                status.push_back({"Enter abre · Supr borra · Esc vuelve a la caja", notice});
             }
         }
         if (!flash.empty()) {
-            status.push_back(ftxui::text(flash) | ftxui::bold);
+            status.push_back({flash, ftxui::bold});
         }
         if (busy()) {
-            status.push_back(ftxui::text(searching ? "Buscando en la web… (Esc para cancelar)"
-                                                   : "Pensando… (Esc para cancelar)"));
+            status.push_back({searching ? "Buscando en la web… (Esc para cancelar)"
+                                        : "Pensando… (Esc para cancelar)",
+                              ftxui::nothing, true});
         }
         if (scroll.has_more_below()) {
             // Con texto en la caja, End mueve el cursor: el aviso sugiere PgDn.
-            status.push_back(ftxui::text(input_text.empty() ? "↓ Hay más abajo (End)"
-                                                            : "↓ Hay más abajo (PgDn)") |
-                             ftxui::bold);
+            status.push_back({input_text.empty() ? "↓ Hay más abajo (End)"
+                                                 : "↓ Hay más abajo (PgDn)",
+                              ftxui::bold, true});
         }
         if (last_dropped > 0) {
-            status.push_back(ftxui::text("Se omitieron " + std::to_string(last_dropped) +
-                                         " mensajes antiguos para no exceder el límite.") |
-                             notice);
-        }
-        ftxui::Elements status_line;
-        for (ftxui::Element& item : status) {
-            if (!status_line.empty()) {
-                status_line.push_back(ftxui::text("   "));
-            }
-            status_line.push_back(std::move(item));
-        }
-        if (status_line.empty()) {
-            // Alto fijo: sin esto, un hbox vacío mide 0 líneas y la pantalla salta.
-            status_line.push_back(ftxui::text(""));
+            status.push_back({"Se omitieron " + std::to_string(last_dropped) +
+                                  " mensajes antiguos para no exceder el límite.",
+                              notice});
         }
 
         placeholder = runner != nullptr ? "Escribe tu mensaje y presiona Enter"
@@ -840,7 +832,7 @@ int main() {
                                     {conversation.has_turns(), export_hover}, export_box),
             std::move(body),
             ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
-            ftxui::hbox(std::move(status_line)),
+            chatbot::cli::status_line(status, width),
             // El prompt en negritas marca la caja sin un bloque de color.
             ftxui::hbox({ftxui::text("> ") | ftxui::bold |
                              palette.ink(&chatbot::cli::Theme::user_label),
