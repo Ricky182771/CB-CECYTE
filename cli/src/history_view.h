@@ -10,7 +10,9 @@
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/screen.hpp>
 
+#include <chrono>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -54,12 +56,22 @@ struct ButtonHit {
 /// del marco. Van sobre el borde superior si está a la vista; si no, fijos
 /// en la primera fila visible del contenido, nunca sobre el borde inferior
 /// ni fuera del bloque. Si no caben después del título con 2 columnas de
-/// margen, [C] [G]; si tampoco, no hay botones. El puntero encima (hover) no
-/// vuelve a dibujar ninguna entrada.
+/// margen, [C] [G]; si tampoco, no hay botones. Tras copiar, [✓ Copiado] (o
+/// [✓]) hasta que el puntero sale del botón o pasan kCopiedFor, revisado en
+/// el siguiente cuadro (sin hilos ni temporizadores). Ni el puntero encima
+/// (hover) ni ese aviso vuelven a dibujar ninguna entrada.
 ///
 /// Se usa solo desde el hilo de la interfaz.
 class HistoryView {
 public:
+    /// Reloj para el aviso de copiado (uno falso en las pruebas).
+    using Clock = std::function<std::chrono::steady_clock::time_point()>;
+    /// Cuánto dura [✓ Copiado] si el puntero no sale del botón.
+    static constexpr std::chrono::seconds kCopiedFor{2};
+
+    explicit HistoryView(Clock clock = std::chrono::steady_clock::now)
+        : clock_(std::move(clock)) {}
+
     /// first_code_numbers[i]: número del primer bloque de código de la
     /// entrada i (CodeBlockIndex::first_numbers o first_code_numbers, en
     /// code_blocks.h); los bloques se dibujan como "#3 · cpp". Si falta (por
@@ -76,8 +88,12 @@ public:
     /// Puntero en (x, y) de la pantalla: el botón que esté ahí se dibuja con
     /// el color de selección desde el siguiente cuadro.
     void set_hover(int x, int y);
-    /// El puntero salió del historial: ningún botón con hover.
+    /// El puntero salió del historial: ningún botón con hover (y se quita
+    /// [✓ Copiado]).
     void clear_hover();
+    /// Se copió el bloque: su botón dice [✓ Copiado] hasta que el puntero
+    /// sale de él (set_hover, clear_hover) o pasan kCopiedFor (en render()).
+    void show_copied(int block);
     /// true (por defecto) dibuja los botones de los bloques.
     void set_buttons_visible(bool visible) { buttons_visible_ = visible; }
 
@@ -120,6 +136,9 @@ private:
     /// Botones del último cuadro: render() lo vacía y Picture::Render lo llena.
     std::vector<ButtonHit> hits_;
     bool buttons_visible_ = true;
+    Clock clock_;
+    int copied_block_ = 0; ///< Bloque con [✓ Copiado], o 0.
+    std::chrono::steady_clock::time_point copied_at_;
     std::size_t parse_count_ = 0;
     std::size_t draw_count_ = 0;
 };

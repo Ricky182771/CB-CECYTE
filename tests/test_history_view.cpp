@@ -750,3 +750,64 @@ TEST_CASE("botones: hit_test con dos bloques en la misma entrada", "[historial][
           chatbot::cli::BlockAction::Save);
     CHECK_FALSE(view.hit_test(column_of(screen, rows[0], "[Copiar]") + 8, rows[0]).has_value());
 }
+
+TEST_CASE("botones: [✓ Copiado] hasta que el puntero sale o pasan 2 s", "[historial][botones]") {
+    const std::vector<Entry> entries{
+        make(EntryKind::Assistant, "```cpp\nint a;\n```\n\n```py\nx = 1\n```")};
+    auto now = std::chrono::steady_clock::time_point{};
+    HistoryView view([&now] { return now; });
+    ftxui::Screen screen = draw_view(view, entries, 40, 10, 0, {1});
+    const std::size_t draws = view.draw_count();
+    const std::vector<int> rows = rows_with(screen, "[Copiar] [Guardar]");
+    REQUIRE(rows.size() == 2);
+    const int copy_x = column_of(screen, rows[0], "[Copiar]");
+
+    // Clic en copiar del bloque 1, con el puntero encima.
+    view.set_hover(copy_x, rows[0]);
+    view.show_copied(1);
+    screen = draw_view(view, entries, 40, 10, 0, {1});
+    CHECK(row_text(screen, rows[0]).find("[✓ Copiado] [Guardar]╮") != std::string::npos);
+    CHECK(row_text(screen, rows[1]).find("[Copiar] [Guardar]╮") != std::string::npos);
+    // El botón creció a la izquierda: el puntero sigue encima.
+    const std::optional<chatbot::cli::ButtonHit> hit = view.hit_test(copy_x, rows[0]);
+    REQUIRE(hit.has_value());
+    CHECK(hit->action == chatbot::cli::BlockAction::Copy);
+    CHECK(view.hit_test(column_of(screen, rows[0], "[✓ Copiado]"), rows[0]).has_value());
+
+    // Moverse dentro del botón no lo quita; 1.9 s después sigue.
+    view.set_hover(copy_x + 1, rows[0]);
+    now += std::chrono::milliseconds{1900};
+    screen = draw_view(view, entries, 40, 10, 0, {1});
+    CHECK(row_text(screen, rows[0]).find("[✓ Copiado]") != std::string::npos);
+    // A los 2 s, en el siguiente cuadro, vuelve a [Copiar].
+    now += std::chrono::milliseconds{100};
+    screen = draw_view(view, entries, 40, 10, 0, {1});
+    CHECK(row_text(screen, rows[0]).find("[Copiar] [Guardar]╮") != std::string::npos);
+
+    // Salir del botón (aunque sea al de guardar del mismo bloque) lo quita.
+    view.show_copied(1);
+    screen = draw_view(view, entries, 40, 10, 0, {1});
+    REQUIRE(row_text(screen, rows[0]).find("[✓ Copiado]") != std::string::npos);
+    view.set_hover(column_of(screen, rows[0], "[Guardar]"), rows[0]);
+    screen = draw_view(view, entries, 40, 10, 0, {1});
+    CHECK(row_text(screen, rows[0]).find("[✓ Copiado]") == std::string::npos);
+
+    // Fuera del historial también.
+    view.show_copied(2);
+    screen = draw_view(view, entries, 40, 10, 0, {1});
+    CHECK(row_text(screen, rows[1]).find("[✓ Copiado]") != std::string::npos);
+    view.clear_hover();
+    screen = draw_view(view, entries, 40, 10, 0, {1});
+    CHECK(row_text(screen, rows[1]).find("[✓ Copiado]") == std::string::npos);
+
+    // Nada de esto vuelve a dibujar las entradas.
+    CHECK(view.draw_count() == draws);
+}
+
+TEST_CASE("botones: [✓] en la versión compacta", "[historial][botones]") {
+    const std::vector<Entry> entries{make(EntryKind::Assistant, "```cpp\nint a;\n```")};
+    HistoryView view;
+    view.show_copied(1);
+    const ftxui::Screen screen = draw_view(view, entries, 25, 5, 0, {1});
+    CHECK(row_text(screen, 1).find("[✓] [G]╮") != std::string::npos);
+}

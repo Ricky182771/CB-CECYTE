@@ -418,11 +418,14 @@ int main() {
     // scroll ni la caja.
     const auto run_button = [&](const chatbot::cli::ButtonHit& hit) {
         code_blocks.update(conversation.entries());
-        flash = chatbot::cli::run_block_action(
-                    code_blocks.blocks(), hit.block, hit.action, chatbot::cli::real_clipboard(),
-                    chatbot::cli::resolve_download_dir(chatbot::cli::environment_value),
-                    env_value("HOME").value_or(""))
-                    .message;
+        const chatbot::cli::ActionResult result = chatbot::cli::run_block_action(
+            code_blocks.blocks(), hit.block, hit.action, chatbot::cli::real_clipboard(),
+            chatbot::cli::resolve_download_dir(chatbot::cli::environment_value),
+            env_value("HOME").value_or(""));
+        flash = result.message;
+        if (!result.error && hit.action == chatbot::cli::BlockAction::Copy) {
+            history.show_copied(hit.block);
+        }
     };
 
     // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.

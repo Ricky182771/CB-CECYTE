@@ -109,6 +109,9 @@ struct ButtonLabels {
 };
 constexpr ButtonLabels kFullLabels{"[Copiar]", "[Guardar]"};
 constexpr ButtonLabels kShortLabels{"[C]", "[G]"};
+/// Después de copiar, el botón de copiar cambia a estas.
+constexpr ButtonLabels kFullCopied{"[✓ Copiado]", "[Guardar]"};
+constexpr ButtonLabels kShortCopied{"[✓]", "[G]"};
 /// Columnas libres entre el título del marco y los botones.
 constexpr int kTitleMargin = 2;
 
@@ -120,9 +123,11 @@ int labels_width(const ButtonLabels& labels) {
 /// Las etiquetas que caben en un marco de frame_width columnas con un título
 /// de title_width: los botones terminan una columna antes del borde derecho
 /// y empiezan al menos kTitleMargin columnas después del título (que va
-/// desde la columna 1). nullopt si ni las compactas caben.
-std::optional<ButtonLabels> fitting_labels(int frame_width, int title_width) {
-    for (const ButtonLabels& labels : {kFullLabels, kShortLabels}) {
+/// desde la columna 1). nullopt si ni las compactas caben. copied: con
+/// [✓ Copiado], que también tiene que caber.
+std::optional<ButtonLabels> fitting_labels(int frame_width, int title_width, bool copied) {
+    for (const ButtonLabels& labels :
+         {copied ? kFullCopied : kFullLabels, copied ? kShortCopied : kShortLabels}) {
         const int start = frame_width - 1 - labels_width(labels);
         if (start >= 1 + title_width + kTitleMargin) {
             return labels;
@@ -188,7 +193,8 @@ private:
         const int left = box_.x_min + frame.box.x_min;
         const int right = box_.x_min + frame.box.x_max;
         const std::optional<ButtonLabels> labels =
-            fitting_labels(right - left + 1, frame.title_width);
+            fitting_labels(right - left + 1, frame.title_width,
+                           frame.number == view_.copied_block_);
         if (!labels.has_value()) {
             return;
         }
@@ -308,9 +314,25 @@ std::optional<ButtonHit> HistoryView::hit_test(int x, int y) const {
     return std::nullopt;
 }
 
-void HistoryView::set_hover(int x, int y) { hover_ = std::pair{x, y}; }
+void HistoryView::set_hover(int x, int y) {
+    hover_ = std::pair{x, y};
+    if (copied_block_ != 0) {
+        const std::optional<ButtonHit> hit = hit_test(x, y);
+        if (!hit.has_value() || hit->action != BlockAction::Copy || hit->block != copied_block_) {
+            copied_block_ = 0; // El puntero salió del botón.
+        }
+    }
+}
 
-void HistoryView::clear_hover() { hover_.reset(); }
+void HistoryView::clear_hover() {
+    hover_.reset();
+    copied_block_ = 0;
+}
+
+void HistoryView::show_copied(int block) {
+    copied_block_ = block;
+    copied_at_ = clock_();
+}
 
 ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
                                    const Palette& palette,
@@ -318,6 +340,9 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
     width = std::max(width, 1);
     palette_ = palette;
     hits_.clear(); // Los de este cuadro los anota Picture::Render.
+    if (copied_block_ != 0 && clock_() - copied_at_ >= kCopiedFor) {
+        copied_block_ = 0;
+    }
     const std::string palette_key = palette.key();
     // Si cambió la conversación, las entradas se comparan por contenido: las
     // iguales se reusan y las demás se vuelven a dibujar.

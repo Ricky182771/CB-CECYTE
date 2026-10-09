@@ -202,3 +202,24 @@ TEST_CASE("run_block_action: copia o guarda el bloque con ese número", "[block_
     CHECK(result.error);
     CHECK(result.message.find("No existe el bloque #3") != std::string::npos);
 }
+
+TEST_CASE("run_block_action: un bloque de la respuesta en curso se copia como va",
+          "[block_actions]") {
+    chatbot::cli::Conversation conversation{""};
+    REQUIRE(conversation.submit("dame código").has_value());
+    conversation.append_delta("Va:\n\n```cpp\nint a;\nint b");
+    REQUIRE(conversation.busy());
+    chatbot::cli::CodeBlockIndex index;
+    index.update(conversation.entries());
+    FakeClipboard fake;
+    const ActionResult result = chatbot::cli::run_block_action(
+        index.blocks(), 1, chatbot::cli::BlockAction::Copy, fake.access({program("wl-copy")}),
+        std::nullopt, "");
+    CHECK_FALSE(result.error);
+    CHECK(fake.input == "int a;\nint b\n");
+    CHECK(result.message == "Copiado el bloque #1 (cpp, 2 líneas) con wl-copy. Ojo: el bloque "
+                            "está incompleto (la respuesta aún no termina).");
+    // No tocó la conversación.
+    CHECK(conversation.entries().size() == 2);
+    CHECK(conversation.busy());
+}
