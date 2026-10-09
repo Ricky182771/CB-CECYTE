@@ -43,6 +43,9 @@ struct StoredConversation {
     std::string title;
     std::string created_at; ///< ISO 8601 con desfase.
     std::string updated_at; ///< ISO 8601 con desfase.
+    /// Pares usuario → asistente alternados, empezando en User y terminando
+    /// en Assistant (al menos uno). Al leer, un archivo que no cumple es
+    /// ilegible.
     std::vector<StoredMessage> messages;
 };
 
@@ -99,7 +102,8 @@ public:
     [[nodiscard]] std::string new_id() const;
 
     /// Un resumen por cada *.json, el más reciente primero. Los ilegibles
-    /// (corruptos o de una versión desconocida) aparecen marcados, al final.
+    /// (corruptos, de una versión desconocida o con mensajes que no alternan)
+    /// aparecen marcados, al final.
     [[nodiscard]] std::vector<ConversationSummary> list() const;
 
     [[nodiscard]] LoadResult load(const std::string& id) const;

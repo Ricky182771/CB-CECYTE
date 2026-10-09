@@ -412,7 +412,8 @@ TEST_CASE("ConversationStore: un resultado guardado con URL que no es web se des
                          {"title": "Bueno", "url": "https://ejemplo.com/1", "content": "a"},
                          {"title": "Malo", "url": ")" + bad_url + R"(", "content": "b"},
                          {"title": "Mayúsculas", "url": "HTTPS://EJEMPLO.COM/2", "content": "c"}
-                       ]}}]})");
+                       ]}},
+                       {"role": "assistant", "content": "r", "model": "m", "finish_reason": "stop"}]})");
         const LoadResult loaded = store.load(id);
         REQUIRE(loaded.conversation.has_value());
         REQUIRE(loaded.conversation->messages[0].search.has_value());
@@ -440,9 +441,71 @@ TEST_CASE("ConversationStore: una búsqueda mal formada hace ilegible el archivo
         INFO(search);
         write_file(temp.path() / (id + ".json"),
                    R"({"version": 1, "id": ")" + id +
-                       R"(", "messages": [{"role": "user", "content": "x", )" + search + "}]}");
+                       R"(", "messages": [{"role": "user", "content": "x", )" + search +
+                       R"(}, {"role": "assistant", "content": "r"}]})");
         const LoadResult loaded = store.load(id);
         CHECK_FALSE(loaded.conversation.has_value());
         CHECK_FALSE(loaded.error.empty());
+        CHECK(loaded.error.find("alterna") == std::string::npos);
+        CHECK(loaded.error.find("seguid") == std::string::npos);
     }
+}
+
+TEST_CASE("ConversationStore: mensajes que no alternan usuario → asistente hacen ilegible el archivo",
+          "[almacen][sistema]") {
+    // Antes se cargaban tal cual y from_stored mandaba, por ejemplo, dos User
+    // seguidos al modelo.
+    const ScopedTempDir temp;
+    const ConversationStore store{temp.string()};
+    const std::string id = "20261009-100000-000001";
+    const std::string user = R"({"role": "user", "content": "Hola"})";
+    const std::string assistant =
+        R"({"role": "assistant", "content": "Qué tal", "model": "m", "finish_reason": "stop"})";
+    struct Case {
+        std::string name;
+        std::string messages;
+        std::string error;
+    };
+    const Case cases[] = {
+        {"dos user seguidos", user + "," + user + "," + assistant,
+         "hay dos mensajes del usuario seguidos"},
+        {"dos user seguidos en medio",
+         user + "," + assistant + "," + user + "," + user + "," + assistant,
+         "hay dos mensajes del usuario seguidos"},
+        {"dos assistant seguidos", user + "," + assistant + "," + assistant,
+         "hay dos respuestas del asistente seguidas"},
+        {"termina en user", user + "," + assistant + "," + user,
+         "el último mensaje del usuario no tiene respuesta"},
+        {"solo un user", user, "el último mensaje del usuario no tiene respuesta"},
+        {"empieza en assistant", assistant + "," + user + "," + assistant,
+         "el primer mensaje no es del usuario"},
+        {"sin mensajes", "", "no tiene mensajes"},
+    };
+    for (const Case& test : cases) {
+        INFO(test.name);
+        const std::string original = R"({"version": 1, "id": ")" + id +
+                                     R"(", "title": "Hola", "messages": [)" + test.messages +
+                                     "]}";
+        write_file(temp.path() / (id + ".json"), original);
+
+        const LoadResult loaded = store.load(id);
+        CHECK_FALSE(loaded.conversation.has_value());
+        CHECK_THAT(loaded.error, Catch::Matchers::ContainsSubstring(test.error));
+        const std::vector<ConversationSummary> listed = store.list();
+        REQUIRE(listed.size() == 1);
+        CHECK_FALSE(listed[0].readable);
+        CHECK_THAT(listed[0].error, Catch::Matchers::ContainsSubstring(test.error));
+        // Mismo trato que cualquier ilegible: ni se sobrescribe ni se borra.
+        CHECK(store.save(sample(id, "2026-10-09T10:00:00-06:00")).has_value());
+        CHECK(store.remove(id).has_value());
+        CHECK(read_file(temp.path() / (id + ".json")) == original);
+    }
+
+    // Pares bien alternados: carga.
+    write_file(temp.path() / (id + ".json"),
+               R"({"version": 1, "id": ")" + id + R"(", "messages": [)" + user + "," +
+                   assistant + "," + user + "," + assistant + "]}");
+    const LoadResult good = store.load(id);
+    REQUIRE(good.conversation.has_value());
+    CHECK(good.conversation->messages.size() == 4);
 }
