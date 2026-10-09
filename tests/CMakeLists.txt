@@ -58,6 +58,7 @@ target_compile_definitions(chatbot_tests PRIVATE
     CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 chatbot_set_warnings(chatbot_tests)
+chatbot_windows_manifest(chatbot_tests)
 
 add_test(NAME chatbot_tests COMMAND chatbot_tests)
 
@@ -79,4 +80,5 @@ target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui ftxui::component C
 target_compile_definitions(chatbot_ui_tests PRIVATE
     CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 chatbot_set_warnings(chatbot_ui_tests)
+chatbot_windows_manifest(chatbot_ui_tests)
 add_test(NAME chatbot_ui_tests COMMAND chatbot_ui_tests)

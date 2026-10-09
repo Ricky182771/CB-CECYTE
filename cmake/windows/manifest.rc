@@ -1,0 +1,3 @@
+// Incrusta chatbot.manifest como el manifiesto del ejecutable: recurso
+// RT_MANIFEST (24) con id CREATEPROCESS_MANIFEST_RESOURCE_ID (1).
+1 24 "chatbot.manifest"
