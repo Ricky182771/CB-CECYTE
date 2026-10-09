@@ -23,7 +23,7 @@ inline constexpr std::string_view kMissingSearchKey =
 [[nodiscard]] std::string local_iso_date(std::time_t time);
 
 /// "AAAA-MM-DD" (también el inicio de una fecha ISO 8601 completa) en
-/// español para "Fecha de hoy": "8 de octubre de 2026". Si no tiene esa
+/// español para "Fecha de la búsqueda": "8 de octubre de 2026". Si no tiene esa
 /// forma, la devuelve tal cual; vacía, "fecha desconocida".
 [[nodiscard]] std::string spanish_date(std::string_view iso_date);
 

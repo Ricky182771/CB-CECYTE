@@ -50,16 +50,18 @@ inline constexpr std::size_t kSearchTotalMaxBytes = 6000;
 [[nodiscard]] SearchResponse trim_search_response(const SearchResponse& response);
 
 /// Formatea los resultados de búsqueda como contexto para el modelo. Recorta
-/// con trim_search_response; en title, url, published_date, today y la
+/// con trim_search_response; en title, url, published_date, search_date y la
 /// consulta, además, \n se vuelve espacio. La cadena de cierre del bloque se
 /// neutraliza en todos los campos.
 ///
 /// @param response Los resultados de la búsqueda.
-/// @param today La fecha de hoy en formato legible (por ejemplo, "6 de octubre de 2026").
+/// @param search_date La fecha en que se hizo la búsqueda, en formato legible
+///                    (por ejemplo, "6 de octubre de 2026"); va como "Fecha de la
+///                    búsqueda". Al reabrir una conversación es la guardada.
 /// @param nonce Cadena aleatoria para evitar inyección de cierre de etiqueta.
 /// @return El bloque de contexto formateado.
 [[nodiscard]] std::string format_search_context(const SearchResponse& response,
-                                                std::string_view today,
+                                                std::string_view search_date,
                                                 std::string_view nonce);
 
 }  // namespace chatbot

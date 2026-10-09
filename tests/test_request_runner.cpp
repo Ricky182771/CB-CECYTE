@@ -459,7 +459,7 @@ TEST_CASE("RequestRunner: búsqueda bien hecha y luego streaming con un solo Use
     REQUIRE(search.context.has_value());
     REQUIRE(search.context->response.results.size() == 1);
     CHECK(search.context->response.results[0].title == "Resultado 1");
-    CHECK(search.context->block.find("Fecha de hoy: 8 de octubre de 2026.") == 0);
+    CHECK(search.context->block.find("Fecha de la búsqueda: 8 de octubre de 2026.") == 0);
 
     REQUIRE(harness.outcome.result.has_value());
     REQUIRE(harness.outcome.result->is_ok());

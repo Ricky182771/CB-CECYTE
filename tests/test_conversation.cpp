@@ -621,7 +621,7 @@ TEST_CASE("Conversation: /buscar se ve como se escribió y se envía con el bloq
     // Historial: System, User(bloque), Assistant.
     REQUIRE(conversation.history().size() == 3);
     CHECK(conversation.history()[1].role == Role::User);
-    CHECK(conversation.history()[1].content.find("Fecha de hoy: 8 de octubre de 2026.") == 0);
+    CHECK(conversation.history()[1].content.find("Fecha de la búsqueda: 8 de octubre de 2026.") == 0);
     CHECK(conversation.history()[1].content.find("<resultados id=\"nonce-1\">") !=
           std::string::npos);
 
@@ -686,7 +686,7 @@ TEST_CASE("Conversation: cada bloque reconstruido pide su propio nonce",
     REQUIRE(rebuilt.history().size() == 5);
     CHECK(rebuilt.history()[1].content.find("<resultados id=\"n1\">") != std::string::npos);
     CHECK(rebuilt.history()[3].content.find("<resultados id=\"n2\">") != std::string::npos);
-    CHECK(rebuilt.history()[3].content.find("Fecha de hoy: 9 de octubre de 2026.") == 0);
+    CHECK(rebuilt.history()[3].content.find("Fecha de la búsqueda: 9 de octubre de 2026.") == 0);
 }
 
 TEST_CASE("Conversation: sin \"date\" se usa la fecha de created_at",
@@ -699,7 +699,7 @@ TEST_CASE("Conversation: sin \"date\" se usa la fecha de created_at",
                        {Role::Assistant, "Respuesta", "m", "stop", std::nullopt}};
     const Conversation rebuilt = Conversation::from_stored(stored, "", [] { return "n"; });
     REQUIRE(rebuilt.history().size() == 2); // Sin mensaje de sistema.
-    CHECK(rebuilt.history()[0].content.find("Fecha de hoy: 2 de octubre de 2026.") == 0);
+    CHECK(rebuilt.history()[0].content.find("Fecha de la búsqueda: 2 de octubre de 2026.") == 0);
 }
 
 TEST_CASE("Conversation: una conversación vieja sin search carga igual que antes",
