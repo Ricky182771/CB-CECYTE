@@ -177,6 +177,37 @@ TEST_CASE("known_folder: las carpetas de Windows; en POSIX no hay", "[plataforma
     }
 }
 
+TEST_CASE("interactive_console_input_mode solo quita ENABLE_PROCESSED_INPUT",
+          "[plataforma][windows]") {
+    using chatbot::interactive_console_input_mode;
+    // Valores de la documentación de SetConsoleMode.
+    constexpr unsigned kProcessed = 0x0001;     // ENABLE_PROCESSED_INPUT
+    constexpr unsigned kLine = 0x0002;          // ENABLE_LINE_INPUT
+    constexpr unsigned kEcho = 0x0004;          // ENABLE_ECHO_INPUT
+    constexpr unsigned kWindow = 0x0008;        // ENABLE_WINDOW_INPUT
+    constexpr unsigned kMouse = 0x0010;         // ENABLE_MOUSE_INPUT
+    constexpr unsigned kInsert = 0x0020;        // ENABLE_INSERT_MODE
+    constexpr unsigned kQuickEdit = 0x0040;     // ENABLE_QUICK_EDIT_MODE
+    constexpr unsigned kExtended = 0x0080;      // ENABLE_EXTENDED_FLAGS
+    constexpr unsigned kAutoPosition = 0x0100; // ENABLE_AUTO_POSITION
+    constexpr unsigned kVirtualTerminal = 0x0200; // ENABLE_VIRTUAL_TERMINAL_INPUT
+    CHECK(chatbot::kConsoleProcessedInput == kProcessed);
+
+    // El modo por defecto de conhost (0x1F7): todo igual menos el bit 0x1.
+    constexpr unsigned kDefault =
+        kProcessed | kLine | kEcho | kMouse | kInsert | kQuickEdit | kExtended | kAutoPosition;
+    CHECK(kDefault == 0x1F7U);
+    CHECK(interactive_console_input_mode(kDefault) == 0x1F6U);
+    CHECK(interactive_console_input_mode(kProcessed) == 0U);
+    CHECK(interactive_console_input_mode(0U) == 0U);
+    // Lo que pone FTXUI y QuickEdit (W2) no se tocan.
+    CHECK(interactive_console_input_mode(kVirtualTerminal | kWindow | kProcessed) ==
+          (kVirtualTerminal | kWindow));
+    CHECK(interactive_console_input_mode(kQuickEdit | kExtended) == (kQuickEdit | kExtended));
+    // Aplicarla dos veces da lo mismo.
+    CHECK(interactive_console_input_mode(interactive_console_input_mode(kDefault)) == 0x1F6U);
+}
+
 TEST_CASE("std::random_device no es determinista", "[plataforma]") {
     // En MinGW antes de GCC 9.2, random_device daba siempre la misma
     // secuencia. Dos instancias distintas no deben coincidir en 4 valores

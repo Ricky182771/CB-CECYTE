@@ -96,6 +96,7 @@ Para usarlo en una PC sin MSYS2, descarga el artefacto `chatbot-windows-x64` de 
 - `/copiar` y `[Copiar]` usan el portapapeles de Windows (con acentos y saltos de línea que el Bloc de notas respeta); por SSH, OSC 52 primero.
 - Los certificados HTTPS salen del almacén de Windows: no hace falta instalar nada más.
 - Al arrancar, la consola se pone en UTF-8 para que los acentos se vean bien, y al salir vuelve a la página de códigos que tenía (`chcp` muestra lo mismo que antes).
+- Ctrl+C sale limpio, también a mitad de una respuesta. Ctrl+Break y cerrar la ventana terminan el programa de golpe: lo que ya estaba guardado sigue ahí, pero la respuesta en curso se pierde y, con Ctrl+Break, `chcp` puede quedar en 65001.
 - En CMD y PowerShell sin Windows Terminal (conhost), el ratón y algunos símbolos todavía pueden no funcionar; con Windows Terminal sí.
 
 ### Integración continua

@@ -6,6 +6,10 @@
 
 namespace chatbot {
 
+unsigned interactive_console_input_mode(unsigned previous) {
+    return previous & ~kConsoleProcessedInput;
+}
+
 std::string join_windows_path(std::string_view base, std::string_view tail) {
     while (!base.empty() && (base.back() == '\\' || base.back() == '/')) {
         base.remove_suffix(1);

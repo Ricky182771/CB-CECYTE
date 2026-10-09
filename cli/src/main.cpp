@@ -212,6 +212,12 @@ int main() {
     // (también por un error) vuelve a la página de códigos que tenía. Se
     // declara primero para que se destruya al último, después de FTXUI.
     const chatbot::ConsoleUtf8Scope console_utf8;
+    // Windows: sin ENABLE_PROCESSED_INPUT, Ctrl+C llega como tecla y sale por
+    // screen.Exit() (ver CatchEvent), en lugar de matar el proceso con
+    // SIGINT dentro de Loop(). Se construye antes de Loop() y se destruye
+    // después de que el runner cancela y hace join, así que Ctrl+C durante
+    // ese join tampoco mata el proceso.
+    const chatbot::ConsoleInputScope console_input;
 
     // La configuración se carga antes de tocar la terminal: si falla, el
     // error sale por stderr sin abrir la pantalla completa. Si lo único que

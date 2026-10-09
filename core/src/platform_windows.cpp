@@ -139,6 +139,29 @@ void restore_console_code_pages(const ConsoleCodePages& previous) {
     }
 }
 
+static_assert(ENABLE_PROCESSED_INPUT == kConsoleProcessedInput,
+              "kConsoleProcessedInput debe ser ENABLE_PROCESSED_INPUT");
+
+ConsoleInputMode set_console_input_mode() {
+    const HANDLE input = ::GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (input == nullptr || input == INVALID_HANDLE_VALUE || ::GetConsoleMode(input, &mode) == 0) {
+        return {}; // stdin no es una consola: nada que cambiar ni restaurar.
+    }
+    ::SetConsoleMode(input, interactive_console_input_mode(mode));
+    return {true, mode};
+}
+
+void restore_console_input_mode(const ConsoleInputMode& previous) {
+    if (!previous.saved) {
+        return;
+    }
+    const HANDLE input = ::GetStdHandle(STD_INPUT_HANDLE);
+    if (input != nullptr && input != INVALID_HANDLE_VALUE) {
+        ::SetConsoleMode(input, previous.mode);
+    }
+}
+
 std::optional<std::string> known_folder(KnownFolder folder) {
     const KNOWNFOLDERID* id = &FOLDERID_RoamingAppData;
     switch (folder) {

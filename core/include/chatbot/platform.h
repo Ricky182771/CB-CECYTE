@@ -63,6 +63,48 @@ private:
     ConsoleCodePages previous_;
 };
 
+/// ENABLE_PROCESSED_INPUT del modo de entrada de la consola de Windows (el
+/// valor de la documentación de SetConsoleMode), para la función pura.
+inline constexpr unsigned kConsoleProcessedInput = 0x0001;
+
+/// Modo de entrada de la consola para la interfaz, a partir del que tenía
+/// (función pura, probada en todas las plataformas): sin
+/// ENABLE_PROCESSED_INPUT. Con ese bit, la consola convierte Ctrl+C en
+/// CTRL_C_EVENT, el CRT llama al manejador de SIGINT de FTXUI y el proceso
+/// termina sin regresar de Loop(); sin él, Ctrl+C llega como la tecla 0x03
+/// (Event::CtrlC) y main sale con screen.Exit(). Los demás bits no cambian.
+[[nodiscard]] unsigned interactive_console_input_mode(unsigned previous);
+
+/// Modo de entrada de la consola guardado por set_console_input_mode.
+struct ConsoleInputMode {
+    bool saved = false; ///< false: stdin no era una consola (nada que restaurar).
+    unsigned mode = 0;
+};
+
+/// Si stdin es una consola de Windows, le pone interactive_console_input_mode
+/// y devuelve el modo que tenía. En POSIX, o sin consola, no hace nada.
+[[nodiscard]] ConsoleInputMode set_console_input_mode();
+
+/// Vuelve a poner el modo que devolvió set_console_input_mode (si se guardó).
+/// En POSIX no hace nada.
+void restore_console_input_mode(const ConsoleInputMode& previous);
+
+/// Mientras vive, la consola de Windows no convierte Ctrl+C en una señal
+/// (interactive_console_input_mode); al destruirse restaura el modo de
+/// entrada original. FTXUI lee el modo al empezar Loop() y lo restaura al
+/// salir: este objeto se construye antes y se destruye después, así que el
+/// modo original queda al final.
+class ConsoleInputScope {
+public:
+    ConsoleInputScope() : previous_(set_console_input_mode()) {}
+    ~ConsoleInputScope() { restore_console_input_mode(previous_); }
+    ConsoleInputScope(const ConsoleInputScope&) = delete;
+    ConsoleInputScope& operator=(const ConsoleInputScope&) = delete;
+
+private:
+    ConsoleInputMode previous_;
+};
+
 /// Carpetas conocidas de Windows (FOLDERID_*).
 enum class KnownFolder {
     RoamingAppData, ///< %APPDATA%: config.json y credentials.json.
