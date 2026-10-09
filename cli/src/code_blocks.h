@@ -5,6 +5,7 @@
 #include "markdown.h"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,23 @@ struct CodeBlock {
 /// entrada sin bloques lleva el número que tendría su primer bloque.
 [[nodiscard]] std::vector<int> first_code_numbers(const std::vector<CodeBlock>& blocks,
                                                   std::size_t entry_count);
+
+/// Bloque que piden /copiar y /guardar: block apunta a él, o problem
+/// explica por qué no hay (sin bloques o número fuera de rango).
+struct CodeBlockChoice {
+    const CodeBlock* block = nullptr;
+    std::string problem;
+};
+
+/// El bloque con ese número, o el último si number es nullopt.
+[[nodiscard]] CodeBlockChoice choose_code_block(const std::vector<CodeBlock>& blocks,
+                                                std::optional<int> number);
+
+/// Líneas del texto del bloque (sin contar el salto de línea final).
+[[nodiscard]] std::size_t count_lines(const std::string& code);
+
+/// "el bloque #3 (cpp, 24 líneas)", o "el bloque #3 (1 línea)" sin lenguaje.
+[[nodiscard]] std::string describe_code_block(const CodeBlock& block);
 
 /// collect_code_blocks con caché por entrada: solo vuelve a parsear una
 /// respuesta si su texto cambió (mientras llega una respuesta, la interfaz

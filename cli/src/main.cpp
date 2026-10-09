@@ -5,10 +5,14 @@
 // pantalla o la Conversation se ejecuta en el hilo de la interfaz mediante
 // App::Post.
 
+#include "clipboard.h"
+#include "code_blocks.h"
 #include "command_parser.h"
 #include "conversation.h"
+#include "conversation_export.h"
 #include "conversation_list.h"
 #include "conversation_store.h"
+#include "downloads.h"
 #include "history_view.h"
 #include "input_style.h"
 #include "markdown.h"
@@ -277,6 +281,7 @@ int main() {
     std::string input_text;
     Scroll scroll;
     chatbot::cli::HistoryView history;
+    chatbot::cli::CodeBlockIndex code_blocks; ///< Números de los bloques (/copiar, /guardar).
     std::size_t last_dropped = 0;
     chatbot::cli::Sidebar sidebar;
     sidebar.open(store.list(), conversation.id());
@@ -323,8 +328,143 @@ int main() {
     }
     const auto busy = [&] { return runner != nullptr && runner->busy(); };
 
+    // Carpeta <descargas>/chatbot para /guardar y /exportar, o nullopt con
+    // el motivo ya mostrado.
+    const auto download_dir = [&]() -> std::optional<std::string> {
+        const std::optional<std::string> base =
+            chatbot::cli::resolve_download_dir(chatbot::cli::environment_value);
+        if (!base.has_value()) {
+            flash = "No se encontró la carpeta de descargas (define HOME o CHAT_DOWNLOAD_DIR).";
+            return std::nullopt;
+        }
+        const chatbot::cli::WriteResult dir = chatbot::cli::ensure_download_dir(*base);
+        if (!dir.error.empty()) {
+            conversation.add_error(dir.error);
+            return std::nullopt;
+        }
+        return dir.path;
+    };
+    // Escribe un archivo nuevo en la carpeta de descargas y avisa dónde quedó.
+    const auto write_download = [&](std::string_view name, std::string_view content,
+                                    std::string_view done) {
+        const std::optional<std::string> dir = download_dir();
+        if (!dir.has_value()) {
+            return;
+        }
+        const chatbot::cli::WriteResult written =
+            chatbot::cli::write_new_file(*dir, name, content);
+        if (!written.error.empty()) {
+            conversation.add_error(written.error);
+        } else {
+            conversation.add_notice(std::string{done} + " " +
+                                    chatbot::cli::display_path(written.path,
+                                                               env_value("HOME").value_or("")));
+            input_text.clear();
+        }
+        scroll.to_bottom();
+    };
+
+    // /copiar, /guardar y /exportar: no van al modelo ni al historial. Los
+    // errores de uso van en la línea de estado y el texto se queda en la caja.
+    const auto run_local_command = [&](const chatbot::cli::ParsedCommand& command) {
+        using Type = chatbot::cli::ParsedCommand::Type;
+        if (busy()) {
+            flash = "Espera a que termine la respuesta";
+            return;
+        }
+        switch (command.type) {
+        case Type::CopyUsage:
+            flash = std::string{chatbot::cli::kCopyUsage};
+            return;
+        case Type::SaveUsage:
+            flash = std::string{chatbot::cli::kSaveUsage};
+            return;
+        case Type::ExportUsage:
+            flash = std::string{chatbot::cli::kExportUsage};
+            return;
+        case Type::Export: {
+            if (!conversation.has_turns()) {
+                flash = "Todavía no hay respuestas que exportar.";
+                return;
+            }
+            const std::time_t now = std::time(nullptr);
+            const std::string markdown = chatbot::cli::export_markdown(
+                conversation.to_stored(chatbot::cli::format_iso8601(now)),
+                chatbot::cli::export_date(chatbot::cli::format_iso8601(now)));
+            write_download(chatbot::cli::export_file_name(conversation.id(), now), markdown,
+                           "Conversación exportada a");
+            return;
+        }
+        default:
+            break;
+        }
+        code_blocks.update(conversation.entries());
+        const chatbot::cli::CodeBlockChoice choice =
+            chatbot::cli::choose_code_block(code_blocks.blocks(), command.block);
+        if (choice.block == nullptr) {
+            flash = choice.problem;
+            return;
+        }
+        const chatbot::cli::CodeBlock& block = *choice.block;
+        if (command.type == Type::Save) {
+            if (!command.file_name.empty()) {
+                if (const std::optional<std::string> reason =
+                        chatbot::cli::validate_file_name(command.file_name)) {
+                    flash = *reason;
+                    return;
+                }
+            }
+            write_download(
+                chatbot::cli::block_file_name(command.file_name, block.number, block.info),
+                chatbot::cli::with_final_newline(block.code), "Guardado en");
+            return;
+        }
+        // Copy.
+        const std::optional<std::string> tmux = chatbot::cli::environment_value("TMUX");
+        const chatbot::cli::CopyResult copied = chatbot::cli::copy_to_clipboard(
+            block.code,
+            chatbot::cli::clipboard_methods(chatbot::cli::environment_value,
+                                            chatbot::cli::find_in_path),
+            tmux.has_value() && !tmux->empty(),
+            [](const std::vector<std::string>& argv, std::string_view text) {
+                return chatbot::cli::run_with_input(argv, text);
+            },
+            chatbot::cli::write_to_terminal);
+        const std::string what = chatbot::cli::describe_code_block(block);
+        const std::string number = std::to_string(block.number);
+        if (!copied.copied) {
+            conversation.add_error(
+                copied.too_long
+                    ? "No se pudo copiar " + what + ": pasa de 100 000 bytes, el límite de OSC 52, " +
+                          "y no hay otro método. Usa /guardar " + number + "."
+                    : "No se pudo copiar " + what + ". Usa /guardar " + number + ".");
+        } else if (copied.fallback) {
+            conversation.add_notice("Copiado " + what +
+                                    " con OSC 52; si tu terminal no lo soporta, usa /guardar " +
+                                    number + ".");
+        } else {
+            conversation.add_notice("Copiado " + what + " con " + copied.method + ".");
+        }
+        input_text.clear();
+        scroll.to_bottom();
+    };
+
     // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.
     const auto send = [&] {
+        const chatbot::cli::ParsedCommand command = chatbot::cli::parse_command(input_text);
+        switch (command.type) {
+        case chatbot::cli::ParsedCommand::Type::Copy:
+        case chatbot::cli::ParsedCommand::Type::CopyUsage:
+        case chatbot::cli::ParsedCommand::Type::Save:
+        case chatbot::cli::ParsedCommand::Type::SaveUsage:
+        case chatbot::cli::ParsedCommand::Type::Export:
+        case chatbot::cli::ParsedCommand::Type::ExportUsage:
+            // No necesitan modelo: funcionan aunque falte la configuración.
+            run_local_command(command);
+            return;
+        default:
+            break;
+        }
         if (runner == nullptr) {
             flash = kSetupNotice; // Sin configuración, la caja no envía.
             return;
@@ -333,7 +473,6 @@ int main() {
             return; // Enter no hace nada mientras hay una respuesta en curso.
         }
         // /buscar: sin consulta o sin key, el texto se queda en la caja.
-        const chatbot::cli::ParsedCommand command = chatbot::cli::parse_command(input_text);
         if (command.type == chatbot::cli::ParsedCommand::Type::SearchEmpty) {
             flash = "Uso: /buscar <consulta>";
             return;
@@ -679,8 +818,9 @@ int main() {
         // El historial ocupa el ancho que deja la barra (más su divisor y un
         // espacio de separación).
         const int width = ftxui::Terminal::Size().dimx - (sidebar_visible ? split_size + 2 : 0);
-        ftxui::Element body =
-            scroll.apply(history.render(conversation.entries(), width, palette));
+        code_blocks.update(conversation.entries());
+        ftxui::Element body = scroll.apply(
+            history.render(conversation.entries(), width, palette, code_blocks.first_numbers()));
         const ftxui::Decorator notice = palette.ink(&chatbot::cli::Theme::notice);
 
         ftxui::Elements status;

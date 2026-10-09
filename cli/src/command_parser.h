@@ -31,6 +31,11 @@ struct ParsedCommand {
     std::string file_name;
 };
 
+/// Avisos de uso de /copiar, /guardar y /exportar.
+inline constexpr std::string_view kCopyUsage = "Uso: /copiar [número de bloque]";
+inline constexpr std::string_view kSaveUsage = "Uso: /guardar [número de bloque [nombre]]";
+inline constexpr std::string_view kExportUsage = "Uso: /exportar (sin argumentos)";
+
 /// Parsea el texto de entrada para detectar un comando.
 /// - `/buscar <consulta>`: devuelve Search con la consulta (sin espacios en los extremos).
 /// - `/buscar` sin consulta: devuelve SearchEmpty.

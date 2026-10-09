@@ -1,5 +1,8 @@
 #include "code_blocks.h"
 
+#include "markdown.h"
+
+#include <algorithm>
 #include <utility>
 
 namespace chatbot::cli {
@@ -61,6 +64,47 @@ std::vector<int> first_code_numbers(const std::vector<CodeBlock>& blocks,
         }
     }
     return numbers;
+}
+
+CodeBlockChoice choose_code_block(const std::vector<CodeBlock>& blocks,
+                                  std::optional<int> number) {
+    CodeBlockChoice choice;
+    if (blocks.empty()) {
+        choice.problem = "No hay bloques de código en la conversación.";
+        return choice;
+    }
+    if (!number.has_value()) {
+        choice.block = &blocks.back();
+        return choice;
+    }
+    if (*number < 1 || *number > static_cast<int>(blocks.size())) {
+        choice.problem = "No existe el bloque #" + std::to_string(*number) + ": " +
+                         (blocks.size() == 1 ? std::string{"solo hay el #1."}
+                                             : "hay del #1 al #" + std::to_string(blocks.size()) +
+                                                   ".");
+        return choice;
+    }
+    choice.block = &blocks[static_cast<std::size_t>(*number - 1)];
+    return choice;
+}
+
+std::size_t count_lines(const std::string& code) {
+    if (code.empty()) {
+        return 0;
+    }
+    const auto breaks = static_cast<std::size_t>(std::count(code.begin(), code.end(), '\n'));
+    return code.back() == '\n' ? breaks : breaks + 1;
+}
+
+std::string describe_code_block(const CodeBlock& block) {
+    const std::size_t lines = count_lines(block.code);
+    std::string out = "el bloque #" + std::to_string(block.number) + " (";
+    if (!block.info.empty()) {
+        // El lenguaje sale del modelo: filtrado y en una línea.
+        out += md::sanitize(block.info) + ", ";
+    }
+    out += std::to_string(lines) + (lines == 1 ? " línea)" : " líneas)");
+    return out;
 }
 
 void CodeBlockIndex::update(const std::vector<Entry>& entries) {

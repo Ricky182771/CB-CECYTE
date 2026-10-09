@@ -129,3 +129,53 @@ TEST_CASE("CodeBlockIndex da lo mismo que collect_code_blocks y reusa la caché"
     index.update(entries);
     same();
 }
+
+TEST_CASE("choose_code_block: el último, un número o un aviso", "[code_blocks]") {
+    using chatbot::cli::choose_code_block;
+    const std::vector<CodeBlock> blocks = collect_code_blocks(sample());
+
+    const auto last = choose_code_block(blocks, std::nullopt);
+    REQUIRE(last.block != nullptr);
+    CHECK(last.block->number == 5);
+    CHECK(last.problem.empty());
+
+    const auto second = choose_code_block(blocks, 2);
+    REQUIRE(second.block != nullptr);
+    CHECK(second.block->code == "sin lenguaje\n");
+
+    for (const int number : {0, 6, 99}) {
+        INFO(number);
+        const auto out = choose_code_block(blocks, number);
+        CHECK(out.block == nullptr);
+        CHECK(out.problem == "No existe el bloque #" + std::to_string(number) +
+                                 ": hay del #1 al #5.");
+    }
+    const std::vector<CodeBlock> one(blocks.begin(), blocks.begin() + 1);
+    CHECK(choose_code_block(one, 99).problem == "No existe el bloque #99: solo hay el #1.");
+
+    const auto none = choose_code_block({}, std::nullopt);
+    CHECK(none.block == nullptr);
+    CHECK(none.problem == "No hay bloques de código en la conversación.");
+    CHECK(choose_code_block({}, 3).problem == none.problem);
+}
+
+TEST_CASE("describe_code_block cuenta las líneas", "[code_blocks]") {
+    using chatbot::cli::count_lines;
+    using chatbot::cli::describe_code_block;
+    CHECK(count_lines("") == 0);
+    CHECK(count_lines("a") == 1);
+    CHECK(count_lines("a\n") == 1);
+    CHECK(count_lines("a\nb") == 2);
+    CHECK(count_lines("a\n\nb\n") == 3);
+
+    CodeBlock block;
+    block.number = 3;
+    block.info = "cpp";
+    block.code = std::string(24, '\n');
+    CHECK(describe_code_block(block) == "el bloque #3 (cpp, 24 líneas)");
+    block.info.clear();
+    block.code = "x\n";
+    CHECK(describe_code_block(block) == "el bloque #3 (1 línea)");
+    block.info = "c\x1b[2J";
+    CHECK(describe_code_block(block).find('\x1b') == std::string::npos);
+}
