@@ -1,8 +1,7 @@
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
 #include "fake_transport.hpp"
-
-#include <unistd.h>
+#include "temp_dir.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -20,21 +19,10 @@ namespace {
 using chatbot_test::make_client;
 using chatbot_test::sample_messages;
 
-/// Ruta única en el directorio temporal; se borra al salir del ámbito.
+/// Ruta única en un directorio temporal propio; se borra al salir del ámbito.
 class TempPath {
 public:
-    explicit TempPath(const std::string& name)
-        : path_{std::filesystem::temp_directory_path() /
-                ("chatbot_debug_" + std::to_string(static_cast<long>(::getpid())) + "_" + name)} {
-        std::error_code ignored;
-        std::filesystem::remove(path_, ignored);
-    }
-    ~TempPath() {
-        std::error_code ignored;
-        std::filesystem::remove(path_, ignored);
-    }
-    TempPath(const TempPath&) = delete;
-    TempPath& operator=(const TempPath&) = delete;
+    explicit TempPath(const std::string& name) : path_{dir_.path() / name} {}
 
     [[nodiscard]] std::string string() const { return path_.string(); }
     [[nodiscard]] bool exists() const { return std::filesystem::exists(path_); }
@@ -44,6 +32,7 @@ public:
     }
 
 private:
+    chatbot_test::ScopedTempDir dir_; ///< Antes que path_: se construye primero.
     std::filesystem::path path_;
 };
 

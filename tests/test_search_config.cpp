@@ -3,12 +3,14 @@
 #include "chatbot/config.h"
 #include "chatbot/credentials.h"
 #include "fake_transport.hpp"
+#include "posix_permissions.hpp"
 #include "temp_dir.hpp"
 
-#include <sys/stat.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <random>
+#include <stdexcept>
 #include <string>
 
 using namespace chatbot;
@@ -16,15 +18,19 @@ using namespace chatbot_test;
 
 namespace {
 
-/// Crea un directorio temporal para las pruebas.
+/// Crea un directorio temporal para las pruebas (portable, sin mkdtemp: el
+/// nombre lleva un número al azar y create_directory falla si ya existe).
 std::filesystem::path make_temp_dir() {
-    std::filesystem::path temp = std::filesystem::temp_directory_path();
-    temp /= "chatbot_search_config_test_XXXXXX";
-    std::string temp_str = temp.string();
-    if (::mkdtemp(temp_str.data()) == nullptr) {
-        throw std::runtime_error("mkdtemp falló");
+    static std::mt19937_64 generator{std::random_device{}()};
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const std::filesystem::path candidate =
+            std::filesystem::temp_directory_path() /
+            ("chatbot_search_config_test_" + std::to_string(generator()));
+        if (std::filesystem::create_directory(candidate)) {
+            return candidate;
+        }
     }
-    return std::filesystem::path{temp_str};
+    throw std::runtime_error("no se pudo crear un directorio temporal");
 }
 
 /// Escribe un archivo.
@@ -36,11 +42,9 @@ void write_file(const std::filesystem::path& path, std::string_view content) {
     }
 }
 
-/// Cambia los permisos de un archivo.
-void set_permissions(const std::filesystem::path& path, mode_t mode) {
-    if (::chmod(path.string().c_str(), mode) != 0) {
-        throw std::runtime_error("chmod falló en " + path.string());
-    }
+/// Cambia los permisos de un archivo (solo en POSIX; en Windows no hace nada).
+void set_permissions(const std::filesystem::path& path, unsigned mode) {
+    chatbot_test::set_mode(path, mode);
 }
 
 }  // namespace
@@ -89,6 +93,7 @@ TEST_CASE("load_search_api_key: archivo inexistente devuelve vacío", "[search_c
     REQUIRE(result.value().empty());
 }
 
+#ifndef _WIN32
 TEST_CASE("load_search_api_key: permisos 0644 es un error", "[search_config]") {
     const auto temp_dir = make_temp_dir();
     const auto creds_path = temp_dir / "credentials.json";
@@ -106,6 +111,7 @@ TEST_CASE("load_search_api_key: permisos 0644 es un error", "[search_config]") {
 
     std::filesystem::remove_all(temp_dir);
 }
+#endif
 
 TEST_CASE("load_search_api_key: JSON inválido es un error", "[search_config]") {
     const auto temp_dir = make_temp_dir();

@@ -3,7 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#ifndef _WIN32
 #include <sys/stat.h>
+#endif
 
 #include <filesystem>
 #include <fstream>
@@ -35,6 +37,7 @@ std::string read_text(const std::string& path) {
     return buffer.str();
 }
 
+#ifndef _WIN32
 unsigned mode_of(const std::string& path) {
     struct stat info{};
     REQUIRE(::stat(path.c_str(), &info) == 0);
@@ -55,6 +58,9 @@ public:
 private:
     mode_t old_;
 };
+#endif
+
+using chatbot_test::native_separators;
 
 } // namespace
 
@@ -276,10 +282,12 @@ TEST_CASE("ensure_download_dir crea chatbot/ con 0755 o menos", "[downloads]") {
     const chatbot_test::ScopedTempDir dir;
     const chatbot::cli::WriteResult created = chatbot::cli::ensure_download_dir(dir.string());
     REQUIRE(created.error.empty());
-    CHECK(created.path == dir.string() + "/chatbot");
+    CHECK(created.path == native_separators(dir.string() + "/chatbot"));
+#ifndef _WIN32
     // La umask del usuario puede quitar permisos, nunca agregarlos.
     CHECK(within(mode_of(created.path), 0755U));
     CHECK((mode_of(created.path) & 0700U) == 0700U);
+#endif
     // Si ya existe, se usa tal cual.
     CHECK(chatbot::cli::ensure_download_dir(dir.string()).error.empty());
 
@@ -296,30 +304,37 @@ TEST_CASE("write_new_file nunca sobrescribe y deja 0644 o menos", "[downloads]")
 
     const auto first = write_new_file(dir.string(), "suma.cpp", "uno\n");
     REQUIRE(first.error.empty());
-    CHECK(first.path == dir.string() + "/suma.cpp");
+    CHECK(first.path == native_separators(dir.string() + "/suma.cpp"));
     CHECK(read_text(first.path) == "uno\n");
+#ifndef _WIN32
     CHECK(within(mode_of(first.path), 0644U));
     CHECK((mode_of(first.path) & 0600U) == 0600U);
+#endif
 
     const auto second = write_new_file(dir.string(), "suma.cpp", "dos\n");
     REQUIRE(second.error.empty());
-    CHECK(second.path == dir.string() + "/suma-2.cpp");
+    CHECK(second.path == native_separators(dir.string() + "/suma-2.cpp"));
     CHECK(read_text(first.path) == "uno\n"); // El primero no cambió.
     CHECK(read_text(second.path) == "dos\n");
 
     const auto third = write_new_file(dir.string(), "suma.cpp", "tres\n");
-    CHECK(third.path == dir.string() + "/suma-3.cpp");
+    CHECK(third.path == native_separators(dir.string() + "/suma-3.cpp"));
 
     // Sin extensión, el sufijo va al final.
-    CHECK(write_new_file(dir.string(), "notas", "x").path == dir.string() + "/notas");
-    CHECK(write_new_file(dir.string(), "notas", "x").path == dir.string() + "/notas-2");
+    CHECK(write_new_file(dir.string(), "notas", "x").path ==
+          native_separators(dir.string() + "/notas"));
+    CHECK(write_new_file(dir.string(), "notas", "x").path ==
+          native_separators(dir.string() + "/notas-2"));
 
+#ifndef _WIN32
     // Un .sh nunca queda ejecutable.
     const auto script = write_new_file(dir.string(), "script.sh", "echo hola\n");
     CHECK(within(mode_of(script.path), 0644U));
     CHECK((mode_of(script.path) & 0111U) == 0U);
+#endif
 }
 
+#ifndef _WIN32
 TEST_CASE("la carpeta y los archivos respetan la umask del usuario", "[downloads]") {
     const chatbot_test::ScopedTempDir dir;
     const ScopedUmask strict(077);
@@ -330,6 +345,7 @@ TEST_CASE("la carpeta y los archivos respetan la umask del usuario", "[downloads
     REQUIRE(written.error.empty());
     CHECK(mode_of(written.path) == 0600U);
 }
+#endif
 
 TEST_CASE("write_new_file se rinde después de -99", "[downloads]") {
     using chatbot::cli::write_new_file;
@@ -348,11 +364,15 @@ TEST_CASE("write_new_file no sigue enlaces simbólicos ni escribe en carpetas qu
           "[downloads]") {
     using chatbot::cli::write_new_file;
     const chatbot_test::ScopedTempDir dir;
+#ifndef _WIN32
+    // En Windows, crear un enlace simbólico pide privilegios (o el modo de
+    // desarrollador): esta parte solo corre en POSIX.
     write_text(dir.path() / "destino.txt", "original");
     fs::create_symlink(dir.path() / "destino.txt", dir.path() / "enlace.txt");
     const auto result = write_new_file(dir.string(), "enlace.txt", "nuevo");
     CHECK(result.path == dir.string() + "/enlace-2.txt"); // El enlace cuenta como existente.
     CHECK(read_text((dir.path() / "destino.txt").string()) == "original");
+#endif
 
     CHECK_FALSE(write_new_file((dir.path() / "no-existe").string(), "a.txt", "x").error.empty());
 }

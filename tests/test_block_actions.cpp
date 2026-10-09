@@ -22,6 +22,7 @@ namespace {
 namespace fs = std::filesystem;
 
 using chatbot::cli::ActionResult;
+using chatbot_test::native_separators;
 using chatbot::cli::ClipboardAccess;
 using chatbot::cli::ClipboardMethod;
 using chatbot::cli::CodeBlock;
@@ -120,9 +121,9 @@ TEST_CASE("copy_block y save_block avisan si el bloque está incompleto", "[bloc
     const chatbot_test::ScopedTempDir dir;
     const ActionResult saved = chatbot::cli::save_block(code, "", dir.string(), "");
     CHECK_FALSE(saved.error);
-    CHECK(saved.message == "Guardado en " + dir.string() +
-                               "/chatbot/bloque-3.cpp. Ojo: el bloque está incompleto (la "
-                               "respuesta se canceló).");
+    CHECK(saved.message ==
+          "Guardado en " + native_separators(dir.string() + "/chatbot/bloque-3.cpp") +
+              ". Ojo: el bloque está incompleto (la respuesta se canceló).");
 }
 
 TEST_CASE("save_block: nombre por defecto, propio, inválido y carpeta imposible",
@@ -132,15 +133,22 @@ TEST_CASE("save_block: nombre por defecto, propio, inválido y carpeta imposible
 
     ActionResult result = chatbot::cli::save_block(code, "", dir.string(), "");
     CHECK_FALSE(result.error);
-    CHECK(result.message == "Guardado en " + dir.string() + "/chatbot/bloque-2.py");
+    CHECK(result.message ==
+          "Guardado en " + native_separators(dir.string() + "/chatbot/bloque-2.py"));
     CHECK(read_text(dir.string() + "/chatbot/bloque-2.py") == "print(1)\n");
 
-    // Nunca sobrescribe; home se abrevia con ~.
+    // Nunca sobrescribe; home se abrevia con ~ (en Windows main pasa home
+    // vacía y la ruta va completa).
     result = chatbot::cli::save_block(code, "", dir.string(), dir.string());
-    CHECK(result.message == "Guardado en ~/chatbot/bloque-2-2.py");
+    if (chatbot::current_os() == chatbot::Os::Posix) {
+        CHECK(result.message == "Guardado en ~/chatbot/bloque-2-2.py");
+    } else {
+        CHECK(result.message ==
+              "Guardado en " + native_separators(dir.string() + "/chatbot/bloque-2-2.py"));
+    }
 
     result = chatbot::cli::save_block(code, "hola", dir.string(), "");
-    CHECK(result.message == "Guardado en " + dir.string() + "/chatbot/hola.py");
+    CHECK(result.message == "Guardado en " + native_separators(dir.string() + "/chatbot/hola.py"));
 
     result = chatbot::cli::save_block(code, "../x", dir.string(), "");
     CHECK(result.error);
@@ -168,8 +176,15 @@ TEST_CASE("export_conversation: sin pares es un error; con pares escribe el Mark
     conversation.set_identity("20260101-000000-abcdef", "2026-01-01T00:00:00Z");
     result = chatbot::cli::export_conversation(conversation, now, dir.string(), dir.string());
     CHECK_FALSE(result.error);
-    CHECK(result.message == "Conversación exportada a ~/chatbot/conversacion-20260101-000000-"
-                            "abcdef.md");
+    if (chatbot::current_os() == chatbot::Os::Posix) {
+        CHECK(result.message == "Conversación exportada a ~/chatbot/conversacion-20260101-000000-"
+                                "abcdef.md");
+    } else {
+        CHECK(result.message ==
+              "Conversación exportada a " +
+                  native_separators(dir.string() +
+                                    "/chatbot/conversacion-20260101-000000-abcdef.md"));
+    }
     const std::string text =
         read_text(dir.string() + "/chatbot/conversacion-20260101-000000-abcdef.md");
     CHECK(text.find("¡Hola!") != std::string::npos);
@@ -262,13 +277,21 @@ TEST_CASE("avisos cortos de los botones, caso por caso", "[block_actions]") {
     CHECK(failed.message == "No se pudo copiar #4 · usa [Guardar]");
 
     const chatbot_test::ScopedTempDir dir;
+    // Con home = dir, "~/..." en POSIX; en Windows no se abrevia (main pasa
+    // home vacía) y va la ruta completa.
+    const auto shown = [&dir](const std::string& relative) {
+        return chatbot::current_os() == chatbot::Os::Posix
+                   ? "~/" + relative
+                   : native_separators(dir.string() + "/" + relative);
+    };
     ActionResult saved = chatbot::cli::save_block(code, "", dir.string(), dir.string(),
                                                   Wording::Short);
     CHECK_FALSE(saved.error);
-    CHECK(saved.message == "#1 guardado en ~/chatbot/bloque-1.cpp");
+    CHECK(saved.message == "#1 guardado en " + shown("chatbot/bloque-1.cpp"));
     unfinished.reason = IncompleteReason::Cancelled;
     saved = chatbot::cli::save_block(unfinished, "", dir.string(), dir.string(), Wording::Short);
-    CHECK(saved.message == "⚠ #1 incompleto (se canceló) · guardado en ~/chatbot/bloque-1-2.cpp");
+    CHECK(saved.message ==
+          "⚠ #1 incompleto (se canceló) · guardado en " + shown("chatbot/bloque-1-2.cpp"));
 
     // Los comandos conservan los textos largos.
     CHECK(chatbot::cli::copy_block(code, fake.access({osc52(true)})).message ==
