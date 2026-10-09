@@ -300,6 +300,8 @@ int main() {
     int split_min = chatbot::cli::kSidebarMinWidth - 1;
     int split_max = chatbot::cli::kSidebarMaxWidth - 1;
     ftxui::Box sidebar_box; ///< Zona de la barra en el último cuadro (para el ratón).
+    ftxui::Box export_box;  ///< [Exportar] de la barra de título en el último cuadro.
+    bool export_hover = false;
     bool dragging = false;  ///< Se arrastra el divisor: el ratón es de ResizableSplit.
     int right_tab = 0; ///< Lado derecho: 0 = conversación, 1 = configuración.
     // Sin configuración completa no hay cliente ni runner (la caja no envía).
@@ -330,6 +332,7 @@ int main() {
     }
     const auto busy = [&] { return runner != nullptr && runner->busy(); };
 
+    const std::string home = env_value("HOME").value_or(""); ///< Abrevia rutas con "~".
     // Carpeta de descargas (sin chatbot/) para /guardar y /exportar, o
     // nullopt con el motivo en la línea de estado.
     const auto download_base = [&]() -> std::optional<std::string> {
@@ -350,7 +353,6 @@ int main() {
             flash = "Espera a que termine la respuesta";
             return;
         }
-        const std::string home = env_value("HOME").value_or("");
         // Muestra el resultado; la caja se vacía si salió bien (o siempre).
         const auto show = [&](const chatbot::cli::ActionResult& result, bool always_clear) {
             if (result.error) {
@@ -411,21 +413,6 @@ int main() {
         }
         // Copy: la caja se vacía aunque no se haya podido copiar.
         show(chatbot::cli::copy_block(*choice.block, chatbot::cli::real_clipboard()), true);
-    };
-
-    // Botones [Copiar] y [Guardar] de un bloque: también con una respuesta en
-    // curso. El resultado va a la línea de estado; no tocan el historial, el
-    // scroll ni la caja.
-    const auto run_button = [&](const chatbot::cli::ButtonHit& hit) {
-        code_blocks.update(conversation.entries());
-        const chatbot::cli::ActionResult result = chatbot::cli::run_block_action(
-            code_blocks.blocks(), hit.block, hit.action, chatbot::cli::real_clipboard(),
-            chatbot::cli::resolve_download_dir(chatbot::cli::environment_value),
-            env_value("HOME").value_or(""));
-        flash = result.message;
-        if (!result.error && hit.action == chatbot::cli::BlockAction::Copy) {
-            history.show_copied(hit.block);
-        }
     };
 
     // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.
@@ -849,7 +836,8 @@ int main() {
             (conversation.title().empty() ? std::string{"Nueva conversación"}
                                           : chatbot::cli::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
-            chatbot::cli::title_bar(title, width, palette),
+            chatbot::cli::title_bar(title, width, palette,
+                                    {conversation.has_turns(), export_hover}, export_box),
             std::move(body),
             ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
             ftxui::hbox(std::move(status_line)),
@@ -950,6 +938,7 @@ int main() {
             } else {
                 history.clear_hover();
             }
+            export_hover = export_box.Contain(mouse.x, mouse.y);
         }
         const bool on_divider = sidebar_visible && mouse.x == sidebar_box.x_max + 1 &&
                                 mouse.y >= sidebar_box.y_min && mouse.y <= sidebar_box.y_max;
@@ -978,12 +967,30 @@ int main() {
         if (settings.is_open()) {
             return false;
         }
-        if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed) {
-            if (const std::optional<chatbot::cli::ButtonHit> hit =
-                    history.hit_test(mouse.x, mouse.y)) {
-                run_button(*hit);
-                return true;
+        // Botones de los bloques y [Exportar] (sin respuestas no hace nada):
+        // también con una respuesta en curso. El resultado va a la línea de
+        // estado; no tocan el historial, el scroll ni la caja.
+        const bool click =
+            mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed;
+        if (const std::optional<chatbot::cli::ButtonHit> hit = history.hit_test(mouse.x, mouse.y);
+            click && hit.has_value()) {
+            code_blocks.update(conversation.entries());
+            const chatbot::cli::ActionResult result = chatbot::cli::run_block_action(
+                code_blocks.blocks(), hit->block, hit->action, chatbot::cli::real_clipboard(),
+                chatbot::cli::resolve_download_dir(chatbot::cli::environment_value), home);
+            flash = result.message;
+            if (!result.error && hit->action == chatbot::cli::BlockAction::Copy) {
+                history.show_copied(hit->block);
             }
+            return true;
+        }
+        if (click && export_box.Contain(mouse.x, mouse.y) && conversation.has_turns()) {
+            if (const std::optional<std::string> base = download_base()) {
+                flash = chatbot::cli::export_conversation(conversation, std::time(nullptr), *base,
+                                                          home)
+                            .message;
+            }
+            return true;
         }
         if (mouse.button == ftxui::Mouse::WheelUp) {
             scroll.by(-kWheelStep);
