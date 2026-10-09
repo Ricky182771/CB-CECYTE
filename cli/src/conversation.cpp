@@ -187,7 +187,7 @@ Conversation Conversation::from_stored(const StoredConversation& stored,
             flush_sources();
             continue;
         }
-        flush_sources(); // Un User sin respuesta en medio (archivo editado a mano).
+        flush_sources();
         std::string content = message.content;
         if (message.search.has_value()) {
             // Sin "date" (archivo editado a mano), la fecha de la conversación.

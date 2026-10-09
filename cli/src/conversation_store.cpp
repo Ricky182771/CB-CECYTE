@@ -178,7 +178,23 @@ std::optional<std::string> parse_conversation(const std::string& content,
         } else {
             return "un mensaje tiene un rol desconocido";
         }
+        // Solo pares usuario → asistente alternados, como los escribe
+        // save_conversation: así nunca se envían dos User seguidos.
+        const Role expected = out.messages.size() % 2 == 0 ? Role::User : Role::Assistant;
+        if (message.role != expected) {
+            if (out.messages.empty()) {
+                return "el primer mensaje no es del usuario";
+            }
+            return message.role == Role::User ? "hay dos mensajes del usuario seguidos"
+                                              : "hay dos respuestas del asistente seguidas";
+        }
         out.messages.push_back(std::move(message));
+    }
+    if (out.messages.empty()) {
+        return "no tiene mensajes";
+    }
+    if (out.messages.back().role == Role::User) {
+        return "el último mensaje del usuario no tiene respuesta";
     }
     return std::nullopt;
 }

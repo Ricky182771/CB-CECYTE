@@ -5,7 +5,9 @@
 #include "chatbot/chat_client.h"
 #include "chatbot/sleeper.h"
 #include "chatbot/tavily_search.h"
+#include "fake_search_provider.hpp"
 #include "fake_transport.hpp"
+#include "system_prompt_invariants.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -389,13 +391,7 @@ TEST_CASE("RequestRunner: cancelar antes de que corra on_done convierte el éxit
 
 namespace {
 
-/// Respuesta 200 de Tavily con los resultados dados (título, url, contenido).
-HttpResponse tavily_response(const nlohmann::json& results) {
-    HttpResponse response;
-    response.status = 200;
-    response.body = nlohmann::json{{"query", "q"}, {"results", results}}.dump();
-    return response;
-}
+using chatbot_test::tavily_response;
 
 /// Lo que el hilo de la interfaz recibió de on_search_done.
 struct SearchOutcome {
@@ -600,4 +596,138 @@ TEST_CASE("RequestRunner: cancelar durante la respuesta después de buscar",
     REQUIRE(harness.outcome.result->is_error());
     CHECK(harness.outcome.result->error().kind == ErrorKind::Cancelled);
     CHECK(harness.outcome.deltas == std::vector<std::string>{"Hola"});
+}
+
+// Invariantes del mensaje de sistema en el reintento por contexto: se
+// revisan sobre el cuerpo JSON de las dos peticiones, que es lo que ve el
+// modelo.
+
+namespace {
+
+using chatbot_test::check_invariants;
+using chatbot_test::sent_messages_of;
+
+/// Sistema + pairs vueltas de pair_bytes por mensaje + el mensaje actual.
+std::vector<Message> long_history(const std::string& system, int pairs, std::size_t pair_bytes,
+                                  const std::string& last) {
+    std::vector<Message> history{Message{Role::System, system}};
+    for (int i = 0; i < pairs; ++i) {
+        history.push_back(
+            Message{Role::User, "u" + std::to_string(i) + " " + std::string(pair_bytes, 'u')});
+        history.push_back(Message{Role::Assistant,
+                                  "a" + std::to_string(i) + " " + std::string(pair_bytes, 'a')});
+    }
+    history.push_back(Message{Role::User, last});
+    return history;
+}
+
+/// FakeTransport que responde 400 y luego un flujo bien hecho.
+std::unique_ptr<chatbot_test::FakeTransport> rejecting_once_transport() {
+    auto transport = std::make_unique<chatbot_test::FakeTransport>();
+    transport->responses.push_back(HttpResponse{400, "{}", std::nullopt, false, ""});
+    transport->responses.push_back(HttpResponse{200, sse_flow({"ok"}), std::nullopt, false, ""});
+    return transport;
+}
+
+} // namespace
+
+TEST_CASE("RequestRunner: el reintento por contexto conserva el sistema en las dos peticiones",
+          "[runner][hilos][contexto][sistema]") {
+    const std::string system = "Eres un asistente de prueba. " + std::string(200, 's');
+    auto transport = rejecting_once_transport();
+    chatbot_test::FakeTransport* fake = transport.get();
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>(),
+                          32000);
+
+    // ~12 KB: cabe en el límite; el reintento recorta a la mitad.
+    REQUIRE(harness.start(long_history(system, 20, 300, "pregunta actual")));
+    REQUIRE(harness.wait_done());
+
+    REQUIRE(harness.outcome.result->is_ok());
+    REQUIRE(fake->requests.size() == 2);
+    const std::vector<Message> first = sent_messages_of(fake->requests[0]);
+    const std::vector<Message> second = sent_messages_of(fake->requests[1]);
+    CHECK(check_invariants(first, system, chatbot_test::Ending::Sent, "pregunta actual") == "");
+    CHECK(check_invariants(second, system, chatbot_test::Ending::Sent, "pregunta actual") == "");
+    CHECK(first.size() == 42);
+    CHECK(second.size() < first.size());
+    CHECK(harness.outcome.dropped == first.size() - second.size());
+}
+
+TEST_CASE("RequestRunner: con un sistema mayor que la mitad del límite el reintento lo conserva",
+          "[runner][hilos][contexto][sistema]") {
+    const std::string system(1200, 's'); // Límite 2000: la mitad es 1000.
+    auto transport = rejecting_once_transport();
+    chatbot_test::FakeTransport* fake = transport.get();
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>(),
+                          2000);
+
+    // 1200 + 6 × ~100 + 15 < 2000: la primera va completa; la segunda, con
+    // límite 925, solo puede llevar el sistema y el último mensaje.
+    REQUIRE(harness.start(long_history(system, 3, 95, "pregunta actual")));
+    REQUIRE(harness.wait_done());
+
+    REQUIRE(harness.outcome.result->is_ok());
+    REQUIRE(fake->requests.size() == 2);
+    const std::vector<Message> first = sent_messages_of(fake->requests[0]);
+    const std::vector<Message> second = sent_messages_of(fake->requests[1]);
+    CHECK(check_invariants(first, system, chatbot_test::Ending::Sent, "pregunta actual") == "");
+    CHECK(check_invariants(second, system, chatbot_test::Ending::Sent, "pregunta actual") == "");
+    CHECK(first.size() == 8);
+    CHECK(second.size() == 2);
+    CHECK(harness.outcome.dropped == 6);
+}
+
+TEST_CASE("RequestRunner: reintento por contexto tras /buscar conserva sistema y bloque",
+          "[runner][hilos][contexto][sistema][busqueda]") {
+    const std::string system = "Eres un asistente de prueba. " + std::string(200, 's');
+    auto transport = rejecting_once_transport();
+    chatbot_test::FakeTransport* fake = transport.get();
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>(),
+                          32000);
+
+    auto search_transport = std::make_unique<chatbot_test::FakeTransport>();
+    search_transport->responses.push_back(tavily_response(nlohmann::json::array(
+        {{{"title", "Resultado 1"},
+          {"url", "https://ejemplo.com/1"},
+          {"content", std::string(1200, 'c')}},
+         {{"title", "Resultado 2"},
+          {"url", "https://ejemplo.com/2"},
+          {"content", std::string(1200, 'd')}}})));
+    auto provider = std::make_shared<chatbot::TavilySearch>("clave-ficticia",
+                                                            std::move(search_transport));
+
+    SearchOutcome search;
+    REQUIRE(harness.runner->start_with_search(
+        long_history(system, 20, 300, "/buscar consulta de prueba"), "consulta de prueba",
+        provider, "9 de octubre de 2026",
+        [&search](RequestRunner::SearchContext context) {
+            search.context = std::move(context);
+            ++search.calls;
+        },
+        [&harness](std::string delta) { harness.outcome.deltas.push_back(std::move(delta)); },
+        [&harness](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
+            harness.outcome.result = std::move(result);
+            harness.outcome.dropped = dropped;
+            ++harness.outcome.done_calls;
+        }));
+    REQUIRE(harness.wait_done());
+
+    REQUIRE(harness.outcome.result->is_ok());
+    REQUIRE(search.context.has_value());
+    const std::string& block = search.context->block;
+    CHECK(block.find("Pregunta del usuario: consulta de prueba\n") != std::string::npos);
+    CHECK(block.find(std::string(1200, 'c')) != std::string::npos); // Sin recortar.
+    REQUIRE(fake->requests.size() == 2);
+    const std::vector<Message> first = sent_messages_of(fake->requests[0]);
+    const std::vector<Message> second = sent_messages_of(fake->requests[1]);
+    CHECK(check_invariants(first, system, chatbot_test::Ending::Sent, block) == "");
+    CHECK(check_invariants(second, system, chatbot_test::Ending::Sent, block) == "");
+    CHECK(second.size() < first.size());
+    CHECK(harness.outcome.dropped == first.size() - second.size());
+    for (const std::vector<Message>* sent : {&first, &second}) {
+        for (const Message& message : *sent) {
+            CHECK(message.content.find("/buscar") == std::string::npos);
+        }
+    }
 }
