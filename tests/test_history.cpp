@@ -392,3 +392,56 @@ TEST_CASE("check_invariants: detecta cada violación", "[historial][sistema]") {
     CHECK(check_invariants({Message{Role::System, "P"}}, prompt, Ending::Idle).empty());
     CHECK(check_invariants({}, "", Ending::Idle).empty());
 }
+
+// Caso límite documentado en chatbot/history.h: el sistema y el último
+// mensaje se mandan aunque juntos excedan el límite.
+
+namespace {
+
+std::vector<Message> big_system_history(std::string last) {
+    std::vector<Message> messages{Message{Role::System, bytes(8000)}};
+    for (int i = 0; i < 5; ++i) {
+        messages.push_back(Message{Role::User, "u" + std::to_string(i) + bytes(100)});
+        messages.push_back(Message{Role::Assistant, "a" + std::to_string(i) + bytes(100)});
+    }
+    messages.push_back(Message{Role::User, std::move(last)});
+    return messages;
+}
+
+} // namespace
+
+TEST_CASE("trim_history: sistema de 8000 B con límite de 1000 B manda sistema y último",
+          "[historial][sistema]") {
+    const std::vector<Message> messages = big_system_history("pregunta actual");
+    const TrimResult result = trim_history(messages, 1000);
+
+    CHECK(check_invariants(result.messages, bytes(8000), chatbot_test::Ending::Sent,
+                           "pregunta actual") == "");
+    REQUIRE(result.messages.size() == 2);
+    CHECK(result.dropped == 10);
+    CHECK(content_bytes(result.messages) > 1000); // Excede, a propósito.
+}
+
+TEST_CASE("trim_history: sistema de 8000 B con límite de 1000 B y un bloque de búsqueda al final",
+          "[historial][sistema][busqueda]") {
+    chatbot::SearchResponse response;
+    response.query = "consulta";
+    for (int i = 0; i < 5; ++i) {
+        response.results.push_back(chatbot::SearchResult{
+            "Título " + std::to_string(i), "https://ejemplo.com/" + std::to_string(i),
+            std::string(chatbot::kSearchContentMaxBytes, 'c'), ""});
+    }
+    const std::string block =
+        chatbot::format_search_context(response, "9 de octubre de 2026", "0123456789abcdef");
+    REQUIRE(block.size() > chatbot::kSearchTotalMaxBytes); // Más grande que el límite solo.
+
+    const std::vector<Message> messages = big_system_history(block);
+    const TrimResult result = trim_history(messages, 1000);
+
+    CHECK(check_invariants(result.messages, bytes(8000), chatbot_test::Ending::Sent, block) ==
+          "");
+    REQUIRE(result.messages.size() == 2);
+    CHECK(result.dropped == 10);
+    CHECK(result.messages.back().content.find("Pregunta del usuario: consulta\n") !=
+          std::string::npos);
+}
