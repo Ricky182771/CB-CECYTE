@@ -46,6 +46,7 @@ add_library(chatbot_cli_lib STATIC
     src/code_blocks.cpp
     src/command_parser.cpp
     src/conversation.cpp
+    src/conversation_export.cpp
     src/conversation_list.cpp
     src/conversation_store.cpp
     src/downloads.cpp
