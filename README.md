@@ -71,7 +71,7 @@ Funciona en Windows 10 (versión 1903 o posterior; se prueba en Windows 10 IoT L
    ctest --preset release --output-on-failure   # opcional: las pruebas
    ```
 
-   Clona con el `git` de MSYS2 (no convierte los saltos de línea). Si usas Git for Windows, antes corre `git config --global core.autocrlf false`; si no, las pruebas que comparan contra `tests/data` fallan.
+   También puedes clonar con Git for Windows: `.gitattributes` fija los saltos de línea, así que no hace falta cambiar `core.autocrlf`.
 
 **Ejecutar.** El programa es una aplicación de consola: córrelo desde **Windows Terminal** (recomendado), **CMD** o **PowerShell**. En la terminal de MSYS2 (mintty) no corre, porque no es una consola de Windows. Necesita las DLL de `C:\msys64\ucrt64\bin` en el `PATH`:
 

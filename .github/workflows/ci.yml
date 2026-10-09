@@ -94,12 +94,8 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      # Sin esto, el git de Windows convierte los saltos de línea a CRLF y
-      # las pruebas que comparan contra tests/data fallan.
-      - name: Saltos de línea sin convertir
-        shell: pwsh
-        run: git config --global core.autocrlf false
-
+      # Sin cambiar core.autocrlf: .gitattributes fija los saltos de línea, y
+      # así se prueba lo que obtiene quien clona con Git for Windows.
       - name: Checkout
         uses: actions/checkout@v7
 
