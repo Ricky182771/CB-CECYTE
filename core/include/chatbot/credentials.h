@@ -22,14 +22,17 @@ struct Credentials {
 /// sin "/" final para un endpoint personalizado.
 [[nodiscard]] std::string credentials_key(std::string_view provider, std::string_view base_url);
 
-/// Lee credentials.json. Que no exista no es un error (sin keys). Si grupo u
-/// otros tienen algún permiso sobre el archivo, no se lee y se devuelve un
-/// error Config (el criterio de ssh con sus llaves). JSON inválido o de otra
-/// versión también es error Config. El mensaje nunca incluye las keys.
+/// Lee credentials.json. Que no exista no es un error (sin keys). En POSIX,
+/// si grupo u otros tienen algún permiso sobre el archivo, no se lee y se
+/// devuelve un error Config (el criterio de ssh con sus llaves); en Windows
+/// no hay esa revisión: lo protege la ACL del perfil (check_secret_file).
+/// JSON inválido o de otra versión también es error Config. El mensaje nunca
+/// incluye las keys.
 [[nodiscard]] Result<Credentials> load_credentials(const std::string& path);
 
 /// Escribe credentials.json de forma atómica, en 0600, con la carpeta en
-/// 0700. Devuelve el error Config, o nullopt.
+/// 0700 (en Windows, con la ACL heredada del perfil). Devuelve el error
+/// Config, o nullopt.
 [[nodiscard]] std::optional<ChatError> save_credentials(const std::string& path,
                                                         const Credentials& credentials);
 

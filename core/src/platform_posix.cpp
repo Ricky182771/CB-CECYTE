@@ -66,6 +66,15 @@ bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
 std::optional<std::string> known_folder(KnownFolder /*folder*/) { return std::nullopt; }
 
+SecretFileState check_secret_file(const std::string& path) {
+    struct stat info {};
+    if (::stat(path.c_str(), &info) != 0) {
+        return errno == ENOENT ? SecretFileState::Missing : SecretFileState::Unreadable;
+    }
+    return (info.st_mode & (S_IRWXG | S_IRWXO)) != 0 ? SecretFileState::OpenAccess
+                                                     : SecretFileState::Private;
+}
+
 std::optional<std::string> create_private_directory(const std::string& path,
                                                     FolderPrivacy privacy) {
     namespace fs = std::filesystem;

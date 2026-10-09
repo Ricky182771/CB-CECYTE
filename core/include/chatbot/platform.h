@@ -49,6 +49,22 @@ enum class KnownFolder {
 /// también se prueban en Linux.
 [[nodiscard]] std::string join_windows_path(std::string_view base, std::string_view tail);
 
+/// Cómo está un archivo con secretos (credentials.json).
+enum class SecretFileState {
+    Missing,    ///< No existe.
+    Private,    ///< Existe y nadie más que el dueño puede leerlo.
+    OpenAccess, ///< Solo POSIX: el grupo u otros tienen algún permiso.
+    Unreadable, ///< No se pudo revisar (por ejemplo, sin permiso en la carpeta).
+};
+
+/// Revisa un archivo con secretos antes de leerlo.
+/// - POSIX: stat; OpenAccess si el grupo u otros tienen algún permiso (el
+///   criterio de ssh con sus llaves).
+/// - Windows: solo si existe (GetFileAttributesW), nunca OpenAccess: los
+///   bits de grupo y otros que da stat en MinGW no reflejan la ACL. Lo
+///   protege la ACL del perfil del usuario (%APPDATA%).
+[[nodiscard]] SecretFileState check_secret_file(const std::string& path);
+
 /// Permisos del archivo que deja write_file_atomic. Solo aplican en POSIX: en
 /// Windows el archivo hereda la ACL de su carpeta (la del perfil del usuario).
 enum class FilePrivacy {

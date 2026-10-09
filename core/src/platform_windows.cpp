@@ -141,6 +141,16 @@ std::optional<std::string> known_folder(KnownFolder folder) {
     return found;
 }
 
+SecretFileState check_secret_file(const std::string& path) {
+    if (::GetFileAttributesW(utf8_to_utf16(path).c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return SecretFileState::Private;
+    }
+    const DWORD error = ::GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
+               ? SecretFileState::Missing
+               : SecretFileState::Unreadable;
+}
+
 std::optional<std::string> create_private_directory(const std::string& path,
                                                     FolderPrivacy /*privacy*/) {
     // Sin permisos POSIX: la carpeta hereda la ACL del perfil del usuario.
