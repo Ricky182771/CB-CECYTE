@@ -148,6 +148,33 @@ TEST_CASE("XDG_DOWNLOAD_DIR de user-dirs.dirs", "[downloads]") {
     CHECK_FALSE(read_xdg_download_dir(file.string(), "").has_value());
 }
 
+TEST_CASE("carpeta de descargas en Windows: CHAT_DOWNLOAD_DIR, Descargas o USERPROFILE",
+          "[downloads][windows]") {
+    using chatbot::cli::resolve_windows_download_dir;
+    const std::string downloads = "C:\\Users\\Ñandú\\Downloads";
+    const std::string profile = "C:\\Users\\Ñandú";
+    CHECK(resolve_windows_download_dir(std::string{"D:\\bajadas"}, downloads, profile) ==
+          "D:\\bajadas");
+    CHECK(resolve_windows_download_dir(std::string{""}, downloads, profile) == downloads);
+    CHECK(resolve_windows_download_dir(std::nullopt, std::nullopt, profile) == profile);
+    CHECK(resolve_windows_download_dir(std::nullopt, std::string{}, profile) == profile);
+    CHECK_FALSE(resolve_windows_download_dir(std::nullopt, std::nullopt, std::nullopt).has_value());
+}
+
+TEST_CASE("avisos sin carpeta de descargas y home para mostrar rutas", "[downloads][windows]") {
+    using chatbot::Os;
+    CHECK(chatbot::cli::no_download_dir_message(Os::Posix) == chatbot::cli::kNoDownloadDir);
+    const std::string_view windows = chatbot::cli::no_download_dir_message(Os::Windows);
+    CHECK(windows.find("USERPROFILE") != std::string_view::npos);
+    CHECK(windows.find("HOME") == std::string_view::npos);
+
+    // En Windows las rutas se muestran completas: no hay home que abreviar.
+    const auto env = fake_env({{"HOME", "/home/ana"}});
+    CHECK(chatbot::cli::display_home(env, Os::Posix) == "/home/ana");
+    CHECK(chatbot::cli::display_home(env, Os::Windows).empty());
+    CHECK(chatbot::cli::display_home(fake_env({}), Os::Posix).empty());
+}
+
 TEST_CASE("carpeta de descargas, en orden de prioridad", "[downloads]") {
     using chatbot::cli::resolve_download_dir;
     const chatbot_test::ScopedTempDir dir;

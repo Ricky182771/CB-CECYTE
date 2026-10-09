@@ -178,7 +178,33 @@ std::optional<std::string> build_config_path(
     return std::nullopt;
 }
 
+std::optional<std::string> build_windows_config_path(
+    const std::optional<std::string>& roaming_app_data,
+    const std::optional<std::string>& appdata) {
+    for (const std::optional<std::string>* base : {&roaming_app_data, &appdata}) {
+        if (base->has_value() && !(*base)->empty()) {
+            return join_windows_path(**base, "chatbot\\config.json");
+        }
+    }
+    return std::nullopt;
+}
+
+std::string missing_config_dir_message(Os os) {
+    if (os == Os::Windows) {
+        return "No se encontró la carpeta de configuración: Windows no dio la carpeta "
+               "AppData\\Roaming y la variable APPDATA no está definida.";
+    }
+    return "No se encontró la carpeta de configuración (define HOME o XDG_CONFIG_HOME).";
+}
+
 std::optional<std::string> default_config_path() {
+    if (current_os() == Os::Windows) {
+        const char* appdata = ::getenv("APPDATA");
+        return build_windows_config_path(
+            known_folder(KnownFolder::RoamingAppData),
+            appdata != nullptr ? std::optional<std::string>{std::string{appdata}}
+                               : std::nullopt);
+    }
     const char* xdg = ::getenv("XDG_CONFIG_HOME");
     const char* home = ::getenv("HOME");
     const std::optional<std::string> xdg_value =

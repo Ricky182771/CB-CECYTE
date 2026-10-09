@@ -118,7 +118,7 @@ ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
         return copy_block(*choice.block, clipboard, Wording::Short);
     }
     if (!download_base.has_value()) {
-        return {std::string{kNoDownloadDir}, true};
+        return {std::string{no_download_dir_message(current_os())}, true};
     }
     return save_block(*choice.block, {}, *download_base, home, Wording::Short);
 }

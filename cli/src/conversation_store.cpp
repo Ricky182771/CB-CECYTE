@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -295,6 +296,34 @@ std::optional<std::string> resolve_data_dir(const std::optional<std::string>& ch
         return *home + "/.local/share/chatbot/conversations";
     }
     return std::nullopt;
+}
+
+std::optional<std::string> resolve_windows_data_dir(
+    const std::optional<std::string>& chat_data_dir,
+    const std::optional<std::string>& local_app_data,
+    const std::optional<std::string>& localappdata) {
+    if (chat_data_dir.has_value() && !chat_data_dir->empty()) {
+        return *chat_data_dir;
+    }
+    for (const std::optional<std::string>* base : {&local_app_data, &localappdata}) {
+        if (base->has_value() && !(*base)->empty()) {
+            return join_windows_path(**base, "chatbot\\conversations");
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> default_data_dir() {
+    const auto env = [](const char* name) -> std::optional<std::string> {
+        const char* value = std::getenv(name);
+        return value != nullptr ? std::optional<std::string>{value} : std::nullopt;
+    };
+    if (current_os() == Os::Windows) {
+        return resolve_windows_data_dir(env("CHAT_DATA_DIR"),
+                                        known_folder(KnownFolder::LocalAppData),
+                                        env("LOCALAPPDATA"));
+    }
+    return resolve_data_dir(env("CHAT_DATA_DIR"), env("XDG_DATA_HOME"), env("HOME"));
 }
 
 std::string make_title(std::string_view first_user_message) {

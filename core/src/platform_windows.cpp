@@ -6,6 +6,12 @@
 #include "chatbot/platform_windows.h"
 
 #include <windows.h>
+// initguid.h antes de knownfolders.h: los FOLDERID_* se definen aquí y no
+// hace falta enlazar libuuid.
+#include <initguid.h>
+#include <knownfolders.h>
+#include <objbase.h>
+#include <shlobj.h>
 
 #include <algorithm>
 #include <climits>
@@ -111,6 +117,29 @@ std::optional<std::tm> local_time(std::time_t time) {
 bool stdio_is_terminal() { return is_console(STD_INPUT_HANDLE) && is_console(STD_OUTPUT_HANDLE); }
 
 bool stdout_is_terminal() { return is_console(STD_OUTPUT_HANDLE); }
+
+std::optional<std::string> known_folder(KnownFolder folder) {
+    const KNOWNFOLDERID* id = &FOLDERID_RoamingAppData;
+    switch (folder) {
+    case KnownFolder::RoamingAppData:
+        id = &FOLDERID_RoamingAppData;
+        break;
+    case KnownFolder::LocalAppData:
+        id = &FOLDERID_LocalAppData;
+        break;
+    case KnownFolder::Downloads:
+        id = &FOLDERID_Downloads;
+        break;
+    }
+    PWSTR path = nullptr;
+    const HRESULT result = ::SHGetKnownFolderPath(*id, KF_FLAG_DEFAULT, nullptr, &path);
+    std::optional<std::string> found;
+    if (SUCCEEDED(result) && path != nullptr && path[0] != L'\0') {
+        found = utf16_to_utf8(path);
+    }
+    ::CoTaskMemFree(path); // También si falló (la documentación lo pide).
+    return found;
+}
 
 std::optional<std::string> create_private_directory(const std::string& path,
                                                     FolderPrivacy /*privacy*/) {

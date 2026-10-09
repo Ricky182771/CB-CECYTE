@@ -3,6 +3,8 @@
 
 #include "clipboard.h"
 
+#include "chatbot/platform.h"
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -24,6 +26,35 @@ inline constexpr int kMaxNameSuffix = 99;
 /// 5. $HOME.
 /// nullopt si no hay HOME ni CHAT_DOWNLOAD_DIR.
 [[nodiscard]] std::optional<std::string> resolve_download_dir(const EnvLookup& env);
+
+/// Carpeta de descargas en Windows (función pura), sin "chatbot\", donde
+/// HOME y XDG_* no cuentan:
+/// 1. CHAT_DOWNLOAD_DIR, si está definida y no vacía;
+/// 2. la carpeta Descargas que da Windows (KnownFolder::Downloads);
+/// 3. USERPROFILE (user_profile).
+/// nullopt si no hay ninguna.
+[[nodiscard]] std::optional<std::string> resolve_windows_download_dir(
+    const std::optional<std::string>& chat_download_dir,
+    const std::optional<std::string>& downloads_folder,
+    const std::optional<std::string>& user_profile);
+
+/// Carpeta de descargas de este proceso: resolve_download_dir(env) o, en
+/// Windows, resolve_windows_download_dir con env y la carpeta Descargas.
+[[nodiscard]] std::optional<std::string> default_download_dir(const EnvLookup& env);
+
+/// Sin carpeta de descargas: el aviso de cada sistema (qué faltó).
+inline constexpr std::string_view kNoDownloadDir =
+    "No se encontró la carpeta de descargas (define HOME o CHAT_DOWNLOAD_DIR).";
+inline constexpr std::string_view kNoDownloadDirWindows =
+    "No se encontró la carpeta de descargas: Windows no dio la carpeta Descargas y la "
+    "variable USERPROFILE no está definida (define CHAT_DOWNLOAD_DIR).";
+
+/// kNoDownloadDir o kNoDownloadDirWindows.
+[[nodiscard]] std::string_view no_download_dir_message(Os os);
+
+/// home para display_path: HOME en POSIX; vacía en Windows, donde las rutas
+/// se muestran completas, sin "~".
+[[nodiscard]] std::string display_home(const EnvLookup& env, Os os);
 
 /// XDG_DOWNLOAD_DIR de un archivo user-dirs.dirs (líneas
 /// XDG_DOWNLOAD_DIR="$HOME/Descargas" o con ruta absoluta), con $HOME

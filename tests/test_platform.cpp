@@ -155,6 +155,28 @@ TEST_CASE("write_file_atomic: permisos POSIX de cada FilePrivacy y FolderPrivacy
 }
 #endif
 
+TEST_CASE("join_windows_path no repite el separador", "[plataforma][windows]") {
+    using chatbot::join_windows_path;
+    CHECK(join_windows_path("C:\\Users\\Ana", "chatbot") == "C:\\Users\\Ana\\chatbot");
+    CHECK(join_windows_path("C:\\Users\\Ana\\", "chatbot") == "C:\\Users\\Ana\\chatbot");
+    CHECK(join_windows_path("C:/Users/Ana/", "a\\b") == "C:/Users/Ana\\a\\b");
+    CHECK(join_windows_path("D:\\", "x") == "D:\\x");
+}
+
+TEST_CASE("known_folder: las carpetas de Windows; en POSIX no hay", "[plataforma][windows]") {
+    using chatbot::KnownFolder;
+    for (const KnownFolder folder :
+         {KnownFolder::RoamingAppData, KnownFolder::LocalAppData, KnownFolder::Downloads}) {
+        const std::optional<std::string> path = chatbot::known_folder(folder);
+        if (chatbot::current_os() == chatbot::Os::Windows) {
+            REQUIRE(path.has_value());
+            CHECK_FALSE(path->empty());
+        } else {
+            CHECK_FALSE(path.has_value());
+        }
+    }
+}
+
 TEST_CASE("std::random_device no es determinista", "[plataforma]") {
     // En MinGW antes de GCC 9.2, random_device daba siempre la misma
     // secuencia. Dos instancias distintas no deben coincidir en 4 valores

@@ -64,6 +64,8 @@ bool stdio_is_terminal() {
 
 bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
+std::optional<std::string> known_folder(KnownFolder /*folder*/) { return std::nullopt; }
+
 std::optional<std::string> create_private_directory(const std::string& path,
                                                     FolderPrivacy privacy) {
     namespace fs = std::filesystem;

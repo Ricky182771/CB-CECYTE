@@ -82,6 +82,19 @@ TEST_CASE("resolve_data_dir: CHAT_DATA_DIR vacío se ignora", "[almacen][ruta]")
           "/xdg/chatbot/conversations");
 }
 
+TEST_CASE("resolve_windows_data_dir: CHAT_DATA_DIR, AppData\\Local o LOCALAPPDATA",
+          "[almacen][ruta][windows]") {
+    using chatbot::cli::resolve_windows_data_dir;
+    const std::string local = "C:\\Users\\José\\AppData\\Local";
+    const std::string expected = local + "\\chatbot\\conversations";
+    CHECK(resolve_windows_data_dir(std::string{"D:\\chats"}, local, local) == "D:\\chats");
+    CHECK(resolve_windows_data_dir(std::string{""}, local, std::nullopt) == expected);
+    CHECK(resolve_windows_data_dir(std::nullopt, local + "\\", std::string{"E:\\x"}) == expected);
+    CHECK(resolve_windows_data_dir(std::nullopt, std::nullopt, local) == expected);
+    CHECK(resolve_windows_data_dir(std::nullopt, std::string{}, local) == expected);
+    CHECK_FALSE(resolve_windows_data_dir(std::nullopt, std::nullopt, std::nullopt).has_value());
+}
+
 TEST_CASE("resolve_data_dir: XDG_DATA_HOME absoluto", "[almacen][ruta]") {
     CHECK(chatbot::cli::resolve_data_dir(std::nullopt, std::string{"/xdg/"},
                                          std::string{"/home/ana"}) ==

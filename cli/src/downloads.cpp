@@ -157,6 +157,39 @@ std::optional<std::string> resolve_download_dir(const EnvLookup& env) {
     return home;
 }
 
+std::optional<std::string> resolve_windows_download_dir(
+    const std::optional<std::string>& chat_download_dir,
+    const std::optional<std::string>& downloads_folder,
+    const std::optional<std::string>& user_profile) {
+    for (const std::optional<std::string>* dir :
+         {&chat_download_dir, &downloads_folder, &user_profile}) {
+        if (dir->has_value() && !(*dir)->empty()) {
+            return **dir;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> default_download_dir(const EnvLookup& env) {
+    if (current_os() == Os::Windows) {
+        return resolve_windows_download_dir(env("CHAT_DOWNLOAD_DIR"),
+                                            known_folder(KnownFolder::Downloads),
+                                            env("USERPROFILE"));
+    }
+    return resolve_download_dir(env);
+}
+
+std::string_view no_download_dir_message(Os os) {
+    return os == Os::Windows ? kNoDownloadDirWindows : kNoDownloadDir;
+}
+
+std::string display_home(const EnvLookup& env, Os os) {
+    if (os == Os::Windows) {
+        return {};
+    }
+    return env("HOME").value_or("");
+}
+
 std::string extension_for(std::string_view language) {
     // La tabla de la especificación; cualquier otro lenguaje → ".txt".
     static constexpr std::array<std::pair<std::string_view, std::string_view>, 28> kTable{{

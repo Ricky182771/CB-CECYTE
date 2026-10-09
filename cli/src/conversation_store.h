@@ -77,6 +77,22 @@ struct LoadResult {
     const std::optional<std::string>& xdg_data_home,
     const std::optional<std::string>& home);
 
+/// Directorio de las conversaciones en Windows (función pura), donde HOME y
+/// XDG_* no cuentan:
+/// - chat_data_dir (CHAT_DATA_DIR) si está y no está vacío;
+/// - si no, <local_app_data>\chatbot\conversations, con la carpeta
+///   AppData\Local que da Windows (KnownFolder::LocalAppData);
+/// - si no la dio, con la variable LOCALAPPDATA (localappdata);
+/// - nullopt si no hay nada.
+[[nodiscard]] std::optional<std::string> resolve_windows_data_dir(
+    const std::optional<std::string>& chat_data_dir,
+    const std::optional<std::string>& local_app_data,
+    const std::optional<std::string>& localappdata);
+
+/// Directorio de las conversaciones de este proceso: resolve_data_dir con el
+/// entorno real o, en Windows, resolve_windows_data_dir.
+[[nodiscard]] std::optional<std::string> default_data_dir();
+
 /// Título a partir del primer mensaje del usuario: espacios y saltos de línea
 /// colapsados a un espacio, truncado a kTitleMaxCodePoints puntos de código
 /// sin partir un carácter UTF-8, más "…" si se truncó.

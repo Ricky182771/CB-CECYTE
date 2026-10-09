@@ -1,6 +1,7 @@
 #ifndef CHATBOT_CONFIG_H
 #define CHATBOT_CONFIG_H
 
+#include "chatbot/platform.h"
 #include "chatbot/result.h"
 
 #include <chrono>
@@ -54,8 +55,14 @@ struct ConfigOptions {
 
 /// Devuelve la ruta del archivo de configuración del entorno real:
 /// $XDG_CONFIG_HOME/chatbot/config.json, o ~/.config/chatbot/config.json
-/// si XDG_CONFIG_HOME no está. Nullopt si no se puede determinar.
+/// si XDG_CONFIG_HOME no está. En Windows, %APPDATA%\chatbot\config.json
+/// (la carpeta AppData\Roaming que da Windows o, si no, la variable
+/// APPDATA), sin mirar HOME ni XDG_*. Nullopt si no se puede determinar.
 [[nodiscard]] std::optional<std::string> default_config_path();
+
+/// Aviso para cuando default_config_path() no da ruta: qué faltó en ese
+/// sistema (HOME o XDG_CONFIG_HOME; en Windows, AppData\Roaming o APPDATA).
+[[nodiscard]] std::string missing_config_dir_message(Os os);
 
 /// Ruta de credentials.json en el entorno real: la misma carpeta que
 /// default_config_path(). Nullopt si no se puede determinar.

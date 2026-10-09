@@ -1,6 +1,7 @@
 #include "block_actions.h"
 #include "code_blocks.h"
 #include "conversation.h"
+#include "downloads.h"
 #include "temp_dir.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -196,7 +197,7 @@ TEST_CASE("run_block_action: copia o guarda el bloque con ese número", "[block_
     result = chatbot::cli::run_block_action(blocks, 1, BlockAction::Save,
                                             fake.access({program("xclip")}), std::nullopt, "");
     CHECK(result.error);
-    CHECK(result.message == chatbot::cli::kNoDownloadDir);
+    CHECK(result.message == chatbot::cli::no_download_dir_message(chatbot::current_os()));
 
     result = chatbot::cli::run_block_action(blocks, 3, BlockAction::Copy,
                                             fake.access({program("xclip")}), dir.string(), "");

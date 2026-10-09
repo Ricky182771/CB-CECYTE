@@ -33,6 +33,22 @@ enum class Os { Posix, Windows };
 /// Como stdio_is_terminal, pero solo stdout.
 [[nodiscard]] bool stdout_is_terminal();
 
+/// Carpetas conocidas de Windows (FOLDERID_*).
+enum class KnownFolder {
+    RoamingAppData, ///< %APPDATA%: config.json y credentials.json.
+    LocalAppData,   ///< %LOCALAPPDATA%: las conversaciones.
+    Downloads,      ///< La carpeta Descargas: /guardar y /exportar.
+};
+
+/// Ruta de la carpeta conocida en UTF-8 (SHGetKnownFolderPath); nullopt si
+/// Windows no la da. En POSIX, siempre nullopt.
+[[nodiscard]] std::optional<std::string> known_folder(KnownFolder folder);
+
+/// Une base y tail con una barra invertida, sin repetirla si base ya termina
+/// en una barra (\ o /). Arma rutas de Windows en funciones puras que
+/// también se prueban en Linux.
+[[nodiscard]] std::string join_windows_path(std::string_view base, std::string_view tail);
+
 /// Permisos del archivo que deja write_file_atomic. Solo aplican en POSIX: en
 /// Windows el archivo hereda la ACL de su carpeta (la del perfil del usuario).
 enum class FilePrivacy {
