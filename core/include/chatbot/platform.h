@@ -65,6 +65,32 @@ enum class SecretFileState {
 ///   protege la ACL del perfil del usuario (%APPDATA%).
 [[nodiscard]] SecretFileState check_secret_file(const std::string& path);
 
+/// Resultado de create_new_file y create_directory.
+struct CreateResult {
+    enum class Status {
+        Created,       ///< Se creó.
+        AlreadyExists, ///< Ya había algo con ese nombre; no se tocó.
+        Failed,        ///< Otro error (ver error).
+    };
+    Status status = Status::Failed;
+    std::string error; ///< Motivo en español, solo con Failed.
+};
+
+/// Crea path con content sin sobrescribir nunca, para lo que el usuario
+/// descarga (/guardar, /exportar):
+/// - POSIX: open con O_CREAT | O_EXCL | O_NOFOLLOW y 0644 menos la umask del
+///   usuario (nunca ejecutable, sin chmod).
+/// - Windows: CreateFileW con CREATE_NEW; los permisos los da la ACL de la
+///   carpeta.
+/// AlreadyExists si el nombre ya existe (también un enlace simbólico). Si la
+/// escritura falla a la mitad, borra el archivo.
+[[nodiscard]] CreateResult create_new_file(const std::string& path, std::string_view content);
+
+/// Crea una carpeta (sin sus padres) para lo que el usuario descarga: mkdir
+/// con 0755 menos la umask en POSIX; CreateDirectoryW en Windows.
+/// AlreadyExists si ya hay algo con ese nombre, sea carpeta o no.
+[[nodiscard]] CreateResult create_directory(const std::string& path);
+
 /// Permisos del archivo que deja write_file_atomic. Solo aplican en POSIX: en
 /// Windows el archivo hereda la ACL de su carpeta (la del perfil del usuario).
 enum class FilePrivacy {

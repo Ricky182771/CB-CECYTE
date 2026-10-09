@@ -141,6 +141,41 @@ std::optional<std::string> known_folder(KnownFolder folder) {
     return found;
 }
 
+CreateResult create_new_file(const std::string& path, std::string_view content) {
+    const std::wstring wide = utf8_to_utf16(path);
+    const HANDLE file = ::CreateFileW(wide.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        const DWORD error = ::GetLastError();
+        if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS) {
+            return {CreateResult::Status::AlreadyExists, {}};
+        }
+        return {CreateResult::Status::Failed, windows_error_text(error)};
+    }
+    bool ok = write_all(file, content);
+    DWORD error = ok ? 0 : ::GetLastError();
+    if (::CloseHandle(file) == 0 && ok) {
+        ok = false;
+        error = ::GetLastError();
+    }
+    if (!ok) {
+        ::DeleteFileW(wide.c_str());
+        return {CreateResult::Status::Failed, windows_error_text(error)};
+    }
+    return {CreateResult::Status::Created, {}};
+}
+
+CreateResult create_directory(const std::string& path) {
+    if (::CreateDirectoryW(utf8_to_utf16(path).c_str(), nullptr) != 0) {
+        return {CreateResult::Status::Created, {}};
+    }
+    const DWORD error = ::GetLastError();
+    if (error == ERROR_ALREADY_EXISTS) {
+        return {CreateResult::Status::AlreadyExists, {}};
+    }
+    return {CreateResult::Status::Failed, windows_error_text(error)};
+}
+
 SecretFileState check_secret_file(const std::string& path) {
     if (::GetFileAttributesW(utf8_to_utf16(path).c_str()) != INVALID_FILE_ATTRIBUTES) {
         return SecretFileState::Private;

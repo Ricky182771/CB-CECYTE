@@ -102,6 +102,43 @@ TEST_CASE("validate_file_name rechaza nombres peligrosos con un motivo", "[downl
     CHECK(validate_file_name("a\x01")->find("control") != std::string::npos);
 }
 
+TEST_CASE("validate_file_name aplica las reglas de Windows en todas las plataformas",
+          "[downloads][windows]") {
+    using chatbot::cli::validate_file_name;
+
+    // Caracteres que Windows no acepta; ":" crearía un flujo alterno de NTFS.
+    for (const char* bad : {"a<b.txt", "a>b", "suma.cpp:x", "a\"b", "a|b", "que?.md", "a*.cpp"}) {
+        INFO(bad);
+        const std::optional<std::string> reason = validate_file_name(bad);
+        REQUIRE(reason.has_value());
+        CHECK(reason->find("< > : \" | ? *") != std::string::npos);
+    }
+
+    // Nombres reservados, sin distinguir mayúsculas y también con extensión.
+    for (const char* bad : {"con", "CON", "con.cpp", "Con.tar.gz", "prn.txt", "aux", "NUL.json",
+                            "com1", "COM9.py", "lpt1.c", "Lpt9", "con .txt"}) {
+        INFO(bad);
+        const std::optional<std::string> reason = validate_file_name(bad);
+        REQUIRE(reason.has_value());
+        CHECK(reason->find("reservado en Windows") != std::string::npos);
+    }
+    // Se parecen, pero no son dispositivos.
+    for (const char* good : {"console.txt", "contacto.cpp", "com.cpp", "com10.c", "lpt0.txt",
+                             "nul-algo.md", "auxiliar.py", "mi-con.cpp", "año.con"}) {
+        INFO(good);
+        CHECK_FALSE(validate_file_name(good).has_value());
+    }
+
+    // Terminar en punto o en espacio.
+    for (const char* bad : {"notas.", "notas ", "suma.cpp "}) {
+        INFO(bad);
+        const std::optional<std::string> reason = validate_file_name(bad);
+        REQUIRE(reason.has_value());
+        CHECK(reason->find("terminar en punto ni en espacio") != std::string::npos);
+    }
+    CHECK_FALSE(validate_file_name("con espacios.txt").has_value());
+}
+
 TEST_CASE("nombre del archivo del bloque", "[downloads]") {
     using chatbot::cli::block_file_name;
     CHECK(block_file_name("", 3, "cpp") == "bloque-3.cpp");

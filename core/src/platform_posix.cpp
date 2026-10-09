@@ -19,6 +19,27 @@ namespace {
 
 std::string errno_text() { return std::strerror(errno); }
 
+/// Mensaje de errno en español para los errores comunes al descargar.
+std::string describe_errno(int error) {
+    switch (error) {
+    case EACCES:
+    case EPERM:
+        return "permiso denegado";
+    case ENOENT:
+        return "la carpeta no existe";
+    case ENOTDIR:
+        return "una parte de la ruta no es una carpeta";
+    case ENOSPC:
+        return "no queda espacio en el disco";
+    case EROFS:
+        return "el sistema de archivos es de solo lectura";
+    case ENAMETOOLONG:
+        return "el nombre es demasiado largo";
+    default:
+        return std::strerror(error);
+    }
+}
+
 bool write_all(int fd, std::string_view data) {
     std::size_t written = 0;
     while (written < data.size()) {
@@ -65,6 +86,36 @@ bool stdio_is_terminal() {
 bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
 std::optional<std::string> known_folder(KnownFolder /*folder*/) { return std::nullopt; }
+
+CreateResult create_new_file(const std::string& path, std::string_view content) {
+    // 0644 menos la umask del usuario: nunca ejecutable ni más abierto.
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if (fd < 0) {
+        if (errno == EEXIST) {
+            return {CreateResult::Status::AlreadyExists, {}};
+        }
+        return {CreateResult::Status::Failed, describe_errno(errno)};
+    }
+    bool ok = write_all(fd, content);
+    const int error = ok ? 0 : errno;
+    ok = ::close(fd) == 0 && ok;
+    if (!ok) {
+        ::unlink(path.c_str());
+        return {CreateResult::Status::Failed, describe_errno(error != 0 ? error : EIO)};
+    }
+    return {CreateResult::Status::Created, {}};
+}
+
+CreateResult create_directory(const std::string& path) {
+    // 0755 menos la umask del usuario: si la umask es más estricta, se respeta.
+    if (::mkdir(path.c_str(), 0755) == 0) {
+        return {CreateResult::Status::Created, {}};
+    }
+    if (errno == EEXIST) {
+        return {CreateResult::Status::AlreadyExists, {}};
+    }
+    return {CreateResult::Status::Failed, describe_errno(errno)};
+}
 
 SecretFileState check_secret_file(const std::string& path) {
     struct stat info {};

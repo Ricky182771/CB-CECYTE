@@ -68,8 +68,12 @@ inline constexpr std::string_view kNoDownloadDirWindows =
 
 /// Revisa un nombre que dio el usuario: solo el nombre base, sin "/", "\",
 /// "..", caracteres de control, sin empezar con "." y de a lo más
-/// kMaxFileNameBytes bytes de UTF-8 válido. Devuelve el motivo (para
-/// mostrarlo) o nullopt si es válido.
+/// kMaxFileNameBytes bytes de UTF-8 válido. Además, en todas las
+/// plataformas, las reglas de Windows (para poder copiar lo guardado entre
+/// sistemas): sin < > : " | ? *, sin terminar en "." ni en espacio y sin los
+/// nombres reservados CON, PRN, AUX, NUL, COM1 a COM9 y LPT1 a LPT9 (sin
+/// distinguir mayúsculas, también con extensión: "con.cpp"). Devuelve el
+/// motivo (para mostrarlo) o nullopt si es válido.
 [[nodiscard]] std::optional<std::string> validate_file_name(std::string_view name);
 
 /// Nombre final del bloque: el del usuario (ya validado), con la extensión
@@ -86,13 +90,15 @@ struct WriteResult {
     std::string error; ///< Vacío si salió bien.
 };
 
-/// Crea <base>/chatbot con 0755 (menos la umask) si no existe. Devuelve la
-/// ruta o el error.
+/// Crea <base>/chatbot (chatbot::create_directory: 0755 menos la umask en
+/// POSIX) si no existe. Devuelve la ruta o el error.
 [[nodiscard]] WriteResult ensure_download_dir(const std::string& base);
 
-/// Escribe content en dir/name sin sobrescribir nunca (O_CREAT | O_EXCL):
-/// si el nombre existe, prueba "nombre-2.ext" hasta "-99". Permisos 0644
-/// menos la umask (nunca ejecutable). Si falla a la mitad, borra lo que creó.
+/// Escribe content en dir/name sin sobrescribir nunca
+/// (chatbot::create_new_file: O_CREAT | O_EXCL en POSIX, CREATE_NEW en
+/// Windows): si el nombre existe, prueba "nombre-2.ext" hasta "-99". En
+/// POSIX, permisos 0644 menos la umask (nunca ejecutable). Si falla a la
+/// mitad, borra lo que creó. El separador es "/" en POSIX y "\" en Windows.
 [[nodiscard]] WriteResult write_new_file(const std::string& dir, std::string_view name,
                                          std::string_view content);
 

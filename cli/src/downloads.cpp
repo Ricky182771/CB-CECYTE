@@ -5,14 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cerrno>
-#include <cstring>
+#include <exception>
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 #include <utility>
-
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace chatbot::cli {
 
@@ -24,8 +21,20 @@ std::optional<std::string> non_empty(const EnvLookup& env, std::string_view name
 }
 
 bool is_dir(const std::string& path) {
-    struct stat info{};
-    return ::stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+    try {
+        std::error_code error;
+        return std::filesystem::is_directory(std::filesystem::path{path}, error);
+    } catch (const std::exception&) {
+        return false; // En Windows, fs::path lanza si la ruta no es UTF-8 válido.
+    }
+}
+
+/// dir + separador + name: "/" en POSIX, "\\" en Windows.
+std::string join_path(const std::string& dir, std::string_view name) {
+    if (current_os() == Os::Windows) {
+        return join_windows_path(dir, name);
+    }
+    return dir + "/" + std::string{name};
 }
 
 std::string lower(std::string_view text) {
@@ -35,25 +44,22 @@ std::string lower(std::string_view text) {
     return out;
 }
 
-/// Mensaje de errno en español para los errores comunes.
-std::string describe_errno(int error) {
-    switch (error) {
-    case EACCES:
-    case EPERM:
-        return "permiso denegado";
-    case ENOENT:
-        return "la carpeta no existe";
-    case ENOTDIR:
-        return "una parte de la ruta no es una carpeta";
-    case ENOSPC:
-        return "no queda espacio en el disco";
-    case EROFS:
-        return "el sistema de archivos es de solo lectura";
-    case ENAMETOOLONG:
-        return "el nombre es demasiado largo";
-    default:
-        return std::strerror(error);
+/// true si name es un dispositivo reservado de Windows (CON, PRN, AUX, NUL,
+/// COM1 a COM9, LPT1 a LPT9) sin distinguir mayúsculas, también con
+/// extensión ("con.cpp", "Aux.tar.gz"): Windows mira lo que va antes del
+/// primer punto, sin los espacios del final ("con .txt").
+bool is_reserved_windows_name(std::string_view name) {
+    std::string_view stem = name.substr(0, name.find('.'));
+    while (!stem.empty() && stem.back() == ' ') {
+        stem.remove_suffix(1);
     }
+    const std::string device = lower(stem);
+    if (device == "con" || device == "prn" || device == "aux" || device == "nul") {
+        return true;
+    }
+    return device.size() == 4 &&
+           (device.compare(0, 3, "com") == 0 || device.compare(0, 3, "lpt") == 0) &&
+           device[3] >= '1' && device[3] <= '9';
 }
 
 /// Nombre con sufijo: "suma.cpp" → "suma-2.cpp"; sin extensión, "suma-2".
@@ -64,21 +70,6 @@ std::string with_suffix(std::string_view name, int suffix) {
         return std::string{name} + tag;
     }
     return std::string{name.substr(0, dot)} + tag + std::string{name.substr(dot)};
-}
-
-/// Escribe todo content en fd.
-bool write_all(int fd, std::string_view content) {
-    while (!content.empty()) {
-        const ssize_t written = ::write(fd, content.data(), content.size());
-        if (written < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return false;
-        }
-        content.remove_prefix(static_cast<std::size_t>(written));
-    }
-    return true;
 }
 
 } // namespace
@@ -236,6 +227,20 @@ std::optional<std::string> validate_file_name(std::string_view name) {
             return "El nombre no puede llevar caracteres de control.";
         }
     }
+    // Reglas de Windows en todas las plataformas: lo guardado se puede
+    // copiar de un sistema a otro.
+    if (name.find_first_of("<>:\"|?*") != std::string_view::npos) {
+        // ":" además crearía un flujo alterno de NTFS ("suma.cpp:x").
+        return "El nombre no puede llevar < > : \" | ? * (Windows no los acepta).";
+    }
+    if (name.back() == '.' || name.back() == ' ') {
+        return "El nombre no puede terminar en punto ni en espacio (Windows los quita).";
+    }
+    if (is_reserved_windows_name(name)) {
+        return "El nombre \"" + std::string{name} +
+               "\" está reservado en Windows (CON, PRN, AUX, NUL, COM1 a COM9 y LPT1 a LPT9, "
+               "también con extensión).";
+    }
     return std::nullopt;
 }
 
@@ -260,44 +265,38 @@ std::string with_final_newline(std::string_view text) {
 }
 
 WriteResult ensure_download_dir(const std::string& base) {
-    const std::string dir = base + "/chatbot";
-    // 0755 menos la umask del usuario: si la umask es más estricta, se respeta.
-    if (::mkdir(dir.c_str(), 0755) == 0) {
+    const std::string dir = join_path(base, "chatbot");
+    // 0755 menos la umask del usuario en POSIX; la ACL de base en Windows.
+    const CreateResult created = create_directory(dir);
+    switch (created.status) {
+    case CreateResult::Status::Created:
         return {dir, ""};
-    }
-    const int error = errno;
-    if (error == EEXIST && is_dir(dir)) {
-        return {dir, ""};
-    }
-    if (error == EEXIST) {
+    case CreateResult::Status::AlreadyExists:
+        if (is_dir(dir)) {
+            return {dir, ""};
+        }
         return {"", "No se pudo crear " + dir + ": ya existe y no es una carpeta"};
+    case CreateResult::Status::Failed:
+        break;
     }
-    return {"", "No se pudo crear " + dir + ": " + describe_errno(error)};
+    return {"", "No se pudo crear " + dir + ": " + created.error};
 }
 
 WriteResult write_new_file(const std::string& dir, std::string_view name,
                            std::string_view content) {
     for (int attempt = 1; attempt <= kMaxNameSuffix; ++attempt) {
         const std::string candidate =
-            dir + "/" + (attempt == 1 ? std::string{name} : with_suffix(name, attempt));
-        const int fd =
-            ::open(candidate.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0644);
-        if (fd < 0) {
-            if (errno == EEXIST) {
-                continue;
-            }
-            return {"", "No se pudo escribir " + candidate + ": " + describe_errno(errno)};
+            join_path(dir, attempt == 1 ? std::string{name} : with_suffix(name, attempt));
+        const CreateResult created = create_new_file(candidate, content);
+        switch (created.status) {
+        case CreateResult::Status::Created:
+            return {candidate, ""};
+        case CreateResult::Status::AlreadyExists:
+            continue;
+        case CreateResult::Status::Failed:
+            break;
         }
-        // 0644 menos la umask del usuario: nunca ejecutable ni más abierto.
-        bool ok = write_all(fd, content);
-        const int error = ok ? 0 : errno;
-        ok = ::close(fd) == 0 && ok;
-        if (!ok) {
-            ::unlink(candidate.c_str());
-            return {"", "No se pudo escribir " + candidate + ": " +
-                            describe_errno(error != 0 ? error : EIO)};
-        }
-        return {candidate, ""};
+        return {"", "No se pudo escribir " + candidate + ": " + created.error};
     }
     return {"", "Ya existen " + std::string{name} + " y sus copias hasta -" +
                     std::to_string(kMaxNameSuffix) + " en " + dir + "."};
