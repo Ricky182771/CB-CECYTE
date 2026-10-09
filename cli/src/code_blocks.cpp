@@ -3,6 +3,7 @@
 #include "markdown.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
 namespace chatbot::cli {
@@ -25,7 +26,28 @@ void collect(const std::vector<md::Block>& list, std::vector<CodeBlock>& out) {
     }
 }
 
+/// Marca los bloques de una entrada con cómo terminó.
+void mark(std::vector<CodeBlock>& blocks, IncompleteReason reason) {
+    for (CodeBlock& block : blocks) {
+        block.reason = reason;
+        block.complete = reason == IncompleteReason::None;
+    }
+}
+
 } // namespace
+
+IncompleteReason incomplete_reason(const Entry& entry) {
+    if (entry.cancelled) {
+        return IncompleteReason::Cancelled;
+    }
+    if (entry.incomplete) {
+        return IncompleteReason::Error;
+    }
+    if (entry.in_progress) {
+        return IncompleteReason::InProgress;
+    }
+    return IncompleteReason::None;
+}
 
 std::vector<CodeBlock> code_blocks_of(const md::Document& document) {
     std::vector<CodeBlock> blocks;
@@ -40,7 +62,9 @@ std::vector<CodeBlock> collect_code_blocks(const std::vector<Entry>& entries) {
         if (entries[i].kind != EntryKind::Assistant) {
             continue;
         }
-        for (CodeBlock& block : code_blocks_of(md::parse(entries[i].text))) {
+        std::vector<CodeBlock> found = code_blocks_of(md::parse(entries[i].text));
+        mark(found, incomplete_reason(entries[i]));
+        for (CodeBlock& block : found) {
             block.number = static_cast<int>(blocks.size()) + 1;
             block.entry = i;
             blocks.push_back(std::move(block));
@@ -107,6 +131,24 @@ std::string describe_code_block(const CodeBlock& block) {
     return out;
 }
 
+std::string incomplete_warning(const CodeBlock& block) {
+    std::string_view why;
+    switch (block.complete ? IncompleteReason::None : block.reason) {
+    case IncompleteReason::None:
+        return {};
+    case IncompleteReason::Cancelled:
+        why = "la respuesta se canceló";
+        break;
+    case IncompleteReason::Error:
+        why = "la respuesta se cortó por un error";
+        break;
+    case IncompleteReason::InProgress:
+        why = "la respuesta aún no termina";
+        break;
+    }
+    return " Ojo: el bloque está incompleto (" + std::string{why} + ").";
+}
+
 void CodeBlockIndex::update(const std::vector<Entry>& entries) {
     bool changed = cache_.size() != entries.size();
     cache_.resize(entries.size());
@@ -119,6 +161,15 @@ void CodeBlockIndex::update(const std::vector<Entry>& entries) {
             cached.source = assistant ? entry.text : std::string{};
             cached.blocks = assistant ? code_blocks_of(md::parse(entry.text))
                                       : std::vector<CodeBlock>{};
+            cached.reason = IncompleteReason::None;
+            changed = true;
+        }
+        // Al terminar la respuesta cambia cómo terminó, no su texto: no
+        // hace falta volver a parsear.
+        const IncompleteReason reason = incomplete_reason(entry);
+        if (assistant && cached.reason != reason) {
+            cached.reason = reason;
+            mark(cached.blocks, reason);
             changed = true;
         }
     }

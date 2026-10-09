@@ -344,9 +344,10 @@ int main() {
         }
         return dir.path;
     };
-    // Escribe un archivo nuevo en la carpeta de descargas y avisa dónde quedó.
+    // Escribe un archivo nuevo en la carpeta de descargas y avisa dónde
+    // quedó; warning (p. ej. incomplete_warning) va al final del aviso.
     const auto write_download = [&](std::string_view name, std::string_view content,
-                                    std::string_view done) {
+                                    std::string_view done, const std::string& warning = {}) {
         const std::optional<std::string> dir = download_dir();
         if (!dir.has_value()) {
             return;
@@ -358,7 +359,8 @@ int main() {
         } else {
             conversation.add_notice(std::string{done} + " " +
                                     chatbot::cli::display_path(written.path,
-                                                               env_value("HOME").value_or("")));
+                                                               env_value("HOME").value_or("")) +
+                                    (warning.empty() ? "" : "." + warning));
             input_text.clear();
         }
         scroll.to_bottom();
@@ -416,7 +418,8 @@ int main() {
             }
             write_download(
                 chatbot::cli::block_file_name(command.file_name, block.number, block.info),
-                chatbot::cli::with_final_newline(block.code), "Guardado en");
+                chatbot::cli::with_final_newline(block.code), "Guardado en",
+                chatbot::cli::incomplete_warning(block));
             return;
         }
         // Copy.
@@ -441,9 +444,10 @@ int main() {
         } else if (copied.fallback) {
             conversation.add_notice("Copiado " + what +
                                     " con OSC 52; si tu terminal no lo soporta, usa /guardar " +
-                                    number + ".");
+                                    number + "." + chatbot::cli::incomplete_warning(block));
         } else {
-            conversation.add_notice("Copiado " + what + " con " + copied.method + ".");
+            conversation.add_notice("Copiado " + what + " con " + copied.method + "." +
+                                    chatbot::cli::incomplete_warning(block));
         }
         input_text.clear();
         scroll.to_bottom();

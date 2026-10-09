@@ -108,6 +108,8 @@ TEST_CASE("CodeBlockIndex da lo mismo que collect_code_blocks y reusa la caché"
             CHECK(index.blocks()[i].info == expected[i].info);
             CHECK(index.blocks()[i].code == expected[i].code);
             CHECK(index.blocks()[i].entry == expected[i].entry);
+            CHECK(index.blocks()[i].complete == expected[i].complete);
+            CHECK(index.blocks()[i].reason == expected[i].reason);
         }
         CHECK(index.first_numbers() ==
               chatbot::cli::first_code_numbers(expected, entries.size()));
@@ -178,4 +180,58 @@ TEST_CASE("describe_code_block cuenta las líneas", "[code_blocks]") {
     CHECK(describe_code_block(block) == "el bloque #3 (1 línea)");
     block.info = "c\x1b[2J";
     CHECK(describe_code_block(block).find('\x1b') == std::string::npos);
+}
+
+TEST_CASE("un bloque es incompleto si su respuesta se canceló, falló o sigue llegando",
+          "[code_blocks]") {
+    using chatbot::cli::IncompleteReason;
+    std::vector<Entry> entries = sample();
+    for (const CodeBlock& block : collect_code_blocks(entries)) {
+        CHECK(block.complete);
+        CHECK(block.reason == IncompleteReason::None);
+        CHECK(chatbot::cli::incomplete_warning(block).empty());
+    }
+    entries.push_back(make(EntryKind::Assistant, "```c\nint", true));
+    CodeBlockIndex index;
+    index.update(entries);
+    REQUIRE(index.blocks().size() == 6);
+    CHECK_FALSE(index.blocks().back().complete);
+    CHECK(index.blocks().back().reason == IncompleteReason::InProgress);
+    CHECK(chatbot::cli::incomplete_warning(index.blocks().back()) ==
+          " Ojo: el bloque está incompleto (la respuesta aún no termina).");
+    CHECK(index.blocks().front().complete); // Los anteriores no cambian.
+
+    // Termina con el mismo texto: el índice lo nota sin que cambie el texto.
+    entries.back().in_progress = false;
+    entries.back().cancelled = true;
+    index.update(entries);
+    CHECK_FALSE(index.blocks().back().complete);
+    CHECK(index.blocks().back().reason == IncompleteReason::Cancelled);
+    CHECK(chatbot::cli::incomplete_warning(index.blocks().back()) ==
+          " Ojo: el bloque está incompleto (la respuesta se canceló).");
+
+    entries.back().cancelled = false;
+    entries.back().incomplete = true;
+    index.update(entries);
+    CHECK(index.blocks().back().reason == IncompleteReason::Error);
+    CHECK(chatbot::cli::incomplete_warning(index.blocks().back()) ==
+          " Ojo: el bloque está incompleto (la respuesta se cortó por un error).");
+    CHECK(collect_code_blocks(entries).back().reason == IncompleteReason::Error);
+
+    entries.back().incomplete = false;
+    index.update(entries);
+    CHECK(index.blocks().back().complete);
+    CHECK(chatbot::cli::incomplete_warning(index.blocks().back()).empty());
+}
+
+TEST_CASE("incomplete_reason: cancelada gana a error y a en curso", "[code_blocks]") {
+    using chatbot::cli::IncompleteReason;
+    using chatbot::cli::incomplete_reason;
+    Entry entry = make(EntryKind::Assistant, "x", true);
+    CHECK(incomplete_reason(entry) == IncompleteReason::InProgress);
+    entry.incomplete = true;
+    CHECK(incomplete_reason(entry) == IncompleteReason::Error);
+    entry.cancelled = true;
+    CHECK(incomplete_reason(entry) == IncompleteReason::Cancelled);
+    CHECK(incomplete_reason(make(EntryKind::Assistant, "x")) == IncompleteReason::None);
 }
