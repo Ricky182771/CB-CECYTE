@@ -5,6 +5,7 @@
 #include "chatbot/chat_client.h"
 #include "chatbot/result.h"
 #include "chatbot/types.h"
+#include "chatbot/web_search.h"
 
 #include <cstddef>
 #include <functional>
@@ -27,6 +28,7 @@ public:
     using Post = std::function<void(Task)>;
     using OnDelta = std::function<void(std::string)>;
     using OnDone = std::function<void(Result<CompletionInfo>, std::size_t dropped)>;
+    using OnSearchDone = std::function<void(Result<SearchResponse>)>;
 
     /// El cliente debe vivir más que el runner. history_limit_bytes se pasa a
     /// trim_history (0 = sin límite).
@@ -45,6 +47,20 @@ public:
     /// on_done se llama exactamente una vez por petición, con los mensajes
     /// omitidos por el recorte del intento que se usó al final.
     bool start(std::vector<Message> history, OnDelta on_delta, OnDone on_done);
+
+    /// Lanza una búsqueda web seguida de una petición de completado.
+    /// Devuelve false si ya hay una en curso. on_search_done se llama con el
+    /// resultado de la búsqueda (éxito o error); si la búsqueda falla, no se
+    /// ejecuta la petición de completado y on_done recibe el error de búsqueda
+    /// mapeado a un ChatError. Si la búsqueda tiene éxito, se agrega el contexto
+    /// al historial y se ejecuta la petición normal.
+    bool start_with_search(std::vector<Message> history,
+                          std::string query,
+                          SearchProvider& search_provider,
+                          std::string_view today,
+                          OnSearchDone on_search_done,
+                          OnDelta on_delta,
+                          OnDone on_done);
 
     /// Cancela la petición en curso, si la hay. Mientras busy() sea true, la
     /// cancelación siempre gana: aunque la respuesta ya haya terminado en el

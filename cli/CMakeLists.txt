@@ -42,6 +42,7 @@ set_target_properties(md4c PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${MD
 # sin FTXUI, para poder probarla sin terminal.
 find_package(Threads REQUIRED)
 add_library(chatbot_cli_lib STATIC
+    src/command_parser.cpp
     src/conversation.cpp
     src/conversation_list.cpp
     src/conversation_store.cpp

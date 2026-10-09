@@ -84,6 +84,13 @@ struct ConfigOptions {
 /// la key es opcional.
 [[nodiscard]] bool is_local_base_url(std::string_view url);
 
+/// Carga la key de búsqueda web con precedencia: CHAT_SEARCH_API_KEY (entorno)
+/// > credentials.json["search:tavily"]. Devuelve cadena vacía si no está
+/// configurada (credentials.json no existe o no tiene la llave). Propaga errores
+/// de load_credentials (permisos abiertos, JSON inválido) como error Config.
+[[nodiscard]] Result<std::string> load_search_api_key(const EnvLookup& env,
+                                                       const std::string& credentials_path);
+
 /// Valores que la pantalla de configuración guarda en config.json.
 struct ConfigFileValues {
     std::string provider;

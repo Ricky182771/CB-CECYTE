@@ -527,4 +527,29 @@ std::optional<ChatError> save_system_prompt(const std::string& path,
     });
 }
 
+Result<std::string> load_search_api_key(const EnvLookup& env,
+                                        const std::string& credentials_path) {
+    // Primero revisa la variable de entorno.
+    const std::string_view env_key = env("CHAT_SEARCH_API_KEY");
+    if (!env_key.empty()) {
+        return std::string{env_key};
+    }
+
+    // Si no está, intenta cargar de credentials.json.
+    const Result<Credentials> credentials = load_credentials(credentials_path);
+    if (credentials.is_error()) {
+        // Propagar el error, excepto si el archivo no existe (eso no es un error).
+        // load_credentials devuelve error Config solo si el archivo existe con
+        // permisos incorrectos o JSON inválido.
+        return credentials.error();
+    }
+
+    const auto it = credentials.value().keys.find("search:tavily");
+    if (it != credentials.value().keys.end()) {
+        return it->second;
+    }
+
+    return std::string{};  // No configurada (cadena vacía).
+}
+
 } // namespace chatbot
