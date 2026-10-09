@@ -4,6 +4,7 @@
 #include "chatbot/result.h"
 #include "chatbot/cancel_token.h"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,15 +36,31 @@ public:
         const CancelToken* cancel = nullptr) = 0;
 };
 
-/// Formatea los resultados de búsqueda como contexto para el modelo.
+/// Máximo de bytes de content por resultado en el bloque de contexto.
+inline constexpr std::size_t kSearchContentMaxBytes = 1200;
+/// Máximo de bytes de content, sumando todos los resultados.
+inline constexpr std::size_t kSearchTotalMaxBytes = 6000;
+
+/// Deja los resultados como entran al bloque de contexto: content sin
+/// controles C0 (salvo \n; \t se vuelve espacio), DEL ni C1, con cada byte
+/// inválido como U+FFFD, y recortado a kSearchContentMaxBytes por resultado y
+/// kSearchTotalMaxBytes en total, sin partir caracteres UTF-8; los resultados
+/// que ya no caben se quitan. query, title, url y published_date no cambian. Aplicarla otra vez
+/// al resultado no cambia nada: es lo que se guarda con la conversación.
+[[nodiscard]] SearchResponse trim_search_response(const SearchResponse& response);
+
+/// Formatea los resultados de búsqueda como contexto para el modelo. Recorta
+/// con trim_search_response; en title, url, published_date, today y la
+/// consulta, además, \n se vuelve espacio. La cadena de cierre del bloque se
+/// neutraliza en todos los campos.
 ///
 /// @param response Los resultados de la búsqueda.
 /// @param today La fecha de hoy en formato legible (por ejemplo, "6 de octubre de 2026").
 /// @param nonce Cadena aleatoria para evitar inyección de cierre de etiqueta.
 /// @return El bloque de contexto formateado.
-std::string format_search_context(const SearchResponse& response,
-                                  std::string_view today,
-                                  std::string_view nonce);
+[[nodiscard]] std::string format_search_context(const SearchResponse& response,
+                                                std::string_view today,
+                                                std::string_view nonce);
 
 }  // namespace chatbot
 

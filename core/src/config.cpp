@@ -544,7 +544,7 @@ Result<std::string> load_search_api_key(const EnvLookup& env,
         return credentials.error();
     }
 
-    const auto it = credentials.value().keys.find("search:tavily");
+    const auto it = credentials.value().keys.find(std::string{kSearchCredentialsKey});
     if (it != credentials.value().keys.end()) {
         return it->second;
     }

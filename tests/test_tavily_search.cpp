@@ -300,6 +300,48 @@ TEST_CASE("TavilySearch maneja cancelación", "[tavily_search]") {
     REQUIRE(result.error().kind == ErrorKind::Cancelled);
 }
 
+TEST_CASE("TavilySearch: respuesta cancelada sin token → Cancelled", "[tavily_search]") {
+    // El transporte puede abortar (cancelled == true, status 0) sin que el
+    // token esté marcado: nunca debe salir "Error HTTP 0".
+    auto transport = std::make_unique<FakeTransport>();
+    HttpResponse resp;
+    resp.cancelled = true;
+    transport->responses.push_back(resp);
+    TavilySearch search{"test-key", std::move(transport)};
+
+    const auto result = search.search("test", nullptr);
+    REQUIRE(result.is_error());
+    CHECK(result.error().kind == ErrorKind::Cancelled);
+    CHECK(result.error().message.find("HTTP") == std::string::npos);
+}
+
+TEST_CASE("TavilySearch: status 0 sin texto de error → Network", "[tavily_search]") {
+    auto transport = std::make_unique<FakeTransport>();
+    transport->responses.push_back(HttpResponse{}); // status 0, error vacío.
+    TavilySearch search{"test-key", std::move(transport)};
+
+    const auto result = search.search("test", nullptr);
+    REQUIRE(result.is_error());
+    CHECK(result.error().kind == ErrorKind::Network);
+    CHECK(result.error().http_status == 0);
+    CHECK_FALSE(result.error().message.empty());
+    CHECK(result.error().message.find("HTTP") == std::string::npos);
+}
+
+TEST_CASE("TavilySearch: status 0 por tiempo agotado sin texto → Timeout", "[tavily_search]") {
+    auto transport = std::make_unique<FakeTransport>();
+    HttpResponse resp;
+    resp.timed_out = true;
+    transport->responses.push_back(resp);
+    TavilySearch search{"test-key", std::move(transport)};
+
+    const auto result = search.search("test", nullptr);
+    REQUIRE(result.is_error());
+    CHECK(result.error().kind == ErrorKind::Timeout);
+    CHECK_FALSE(result.error().message.empty());
+    CHECK(result.error().message.find("HTTP") == std::string::npos);
+}
+
 TEST_CASE("TavilySearch maneja errores de red", "[tavily_search]") {
     SECTION("Error de red → Network") {
         auto transport = std::make_unique<FakeTransport>();

@@ -3,9 +3,10 @@
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
+#include <cstddef>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace chatbot {
@@ -18,7 +19,12 @@ std::string truncate_message(std::string message, std::size_t max_length = 200) 
     if (message.size() <= max_length) {
         return message;
     }
-    message.resize(max_length);
+    // Sin partir un carácter UTF-8: retrocede sobre los bytes de continuación.
+    std::size_t end = max_length;
+    while (end > 0 && (static_cast<unsigned char>(message[end]) & 0xC0) == 0x80) {
+        --end;
+    }
+    message.resize(end);
     message += "…";
     return message;
 }
@@ -103,17 +109,22 @@ public:
         // Enviar la petición.
         const HttpResponse response = transport_->send(request);
 
-        // Verificar cancelación.
-        if (cancel && cancel->is_cancelled()) {
-            return ChatError{ErrorKind::Cancelled, 0, "Búsqueda cancelada", std::nullopt};
+        // Cancelación: la del token gana aunque la petición haya terminado.
+        if (response.cancelled || (cancel != nullptr && cancel->is_cancelled())) {
+            return ChatError{ErrorKind::Cancelled, 0, "Búsqueda cancelada.", std::nullopt};
         }
 
-        // Manejar errores de transporte.
-        if (!response.error.empty()) {
-            if (response.timed_out) {
-                return ChatError{ErrorKind::Timeout, 0, response.error, std::nullopt};
+        // Sin respuesta HTTP (status 0): fallo de red o tiempo agotado, nunca
+        // "Error HTTP 0", aunque el transporte no haya dado una descripción.
+        if (response.status == 0) {
+            const ErrorKind kind = response.timed_out ? ErrorKind::Timeout : ErrorKind::Network;
+            std::string message = response.error;
+            if (message.empty()) {
+                message = response.timed_out
+                              ? "Se agotó el tiempo de espera del servicio de búsqueda."
+                              : "No se pudo conectar con el servicio de búsqueda.";
             }
-            return ChatError{ErrorKind::Network, 0, response.error, std::nullopt};
+            return ChatError{kind, 0, std::move(message), std::nullopt};
         }
 
         // Manejar errores HTTP.

@@ -1,8 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "chatbot/utf8.h"
 #include "chatbot/web_search.h"
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 using namespace chatbot;
 
@@ -134,44 +137,134 @@ TEST_CASE("format_search_context neutraliza el cierre en todos los campos", "[we
     }
 }
 
-TEST_CASE("format_search_context recorta el total a 6000 bytes", "[web_search]") {
+namespace {
+
+/// Bytes de content de cada resultado en el bloque: cuenta los caracteres
+/// marcadores (3 bytes cada uno), que no aparecen en el texto de formato.
+std::size_t count_marker_bytes(const std::string& block, const std::string& marker) {
+    std::size_t bytes = 0;
+    for (std::size_t pos = block.find(marker); pos != std::string::npos;
+         pos = block.find(marker, pos + marker.size())) {
+        bytes += marker.size();
+    }
+    return bytes;
+}
+
+/// content de n bytes hecho de un marcador de 3 bytes.
+std::string marker_content(const std::string& marker, std::size_t bytes) {
+    std::string content;
+    while (content.size() + marker.size() <= bytes) {
+        content += marker;
+    }
+    return content;
+}
+
+const std::vector<std::string> kMarkers = {"①", "②", "③", "④", "⑤", "⑥", "⑦"};
+
+} // namespace
+
+TEST_CASE("format_search_context: 5 resultados de 1200 bytes dan exactamente 6000",
+          "[web_search]") {
+    // El límite total se mide sobre content ya limpio y antes de neutralizar
+    // el cierre (que agrega 3 bytes por cada cierre que encuentra).
     SearchResponse response;
     response.query = "test";
-
-    // Varios resultados con contenido grande (usando caracteres únicos que no
-    // aparecen en el texto de formato: ①②③④⑤⑥⑦⑧⑨⑩).
-    const char* unique_chars[] = {"①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"};
-    for (int i = 0; i < 10; ++i) {
-        std::string content;
-        // Cada carácter único es de 3 bytes UTF-8, así que necesitamos 400 repeticiones
-        // para llegar a 1200 bytes.
-        for (int j = 0; j < 400; ++j) {
-            content += unique_chars[i];
-        }
-        response.results.push_back({
-            "Título " + std::to_string(i),
-            "https://ejemplo.com/" + std::to_string(i),
-            content,
-            ""
-        });
+    for (std::size_t i = 0; i < 5; ++i) {
+        response.results.push_back({"Título " + std::to_string(i + 1),
+                                    "https://ejemplo.com/" + std::to_string(i + 1),
+                                    marker_content(kMarkers[i], 1200), ""});
     }
 
-    const std::string result = format_search_context(response, "hoy", "nonce");
+    const std::string block = format_search_context(response, "hoy", "nonce");
 
-    // Contar los bytes de contenido (solo los caracteres únicos).
-    // NOTA: El límite de 6000 bytes se mide ANTES de neutralizar el cierre
-    // (escape_closing_tag), por lo que el resultado final puede tener unos
-    // pocos bytes extra si algún contenido incluía la cadena de cierre.
-    std::size_t total_content_bytes = 0;
-    for (int i = 0; i < 10; ++i) {
-        std::size_t pos = 0;
-        while ((pos = result.find(unique_chars[i], pos)) != std::string::npos) {
-            total_content_bytes += 3;  // Cada carácter único es de 3 bytes.
-            pos += 3;
+    std::size_t total = 0;
+    for (std::size_t i = 0; i < 5; ++i) {
+        INFO("resultado " << i + 1);
+        CHECK(count_marker_bytes(block, kMarkers[i]) == 1200);
+        CHECK(block.find("\n" + response.results[i].content + "\n\n") != std::string::npos);
+        total += count_marker_bytes(block, kMarkers[i]);
+    }
+    CHECK(total == 6000);
+    CHECK(block.find("[5] Título 5") != std::string::npos);
+}
+
+TEST_CASE("format_search_context: un byte más que el límite total se recorta",
+          "[web_search]") {
+    SECTION("un sexto resultado ya no entra") {
+        SearchResponse response;
+        response.query = "test";
+        for (std::size_t i = 0; i < 6; ++i) {
+            response.results.push_back({"Título " + std::to_string(i + 1),
+                                        "https://ejemplo.com/" + std::to_string(i + 1),
+                                        marker_content(kMarkers[i], 1200), ""});
         }
+        const std::string block = format_search_context(response, "hoy", "nonce");
+        std::size_t total = 0;
+        for (std::size_t i = 0; i < 5; ++i) {
+            CHECK(count_marker_bytes(block, kMarkers[i]) == 1200);
+            total += count_marker_bytes(block, kMarkers[i]);
+        }
+        CHECK(total == 6000);
+        CHECK(count_marker_bytes(block, kMarkers[5]) == 0);
+        CHECK(block.find("[6]") == std::string::npos);
     }
 
-    REQUIRE(total_content_bytes <= 6000);
+    SECTION("el resultado que cruza el límite se corta sin partir caracteres") {
+        // 5 × 1101 = 5505; el sexto (1101) solo tiene 495 bytes de espacio.
+        SearchResponse response;
+        response.query = "test";
+        for (std::size_t i = 0; i < 6; ++i) {
+            response.results.push_back({"T" + std::to_string(i + 1), "https://ejemplo.com",
+                                        marker_content(kMarkers[i], 1101), ""});
+        }
+        REQUIRE(response.results[0].content.size() == 1101);
+        const std::string block = format_search_context(response, "hoy", "nonce");
+        std::size_t total = 0;
+        for (std::size_t i = 0; i < 5; ++i) {
+            CHECK(count_marker_bytes(block, kMarkers[i]) == 1101);
+            total += count_marker_bytes(block, kMarkers[i]);
+        }
+        CHECK(count_marker_bytes(block, kMarkers[5]) == 495);
+        total += count_marker_bytes(block, kMarkers[5]);
+        CHECK(total == 6000);
+        CHECK(utf8::is_valid(block));
+    }
+}
+
+TEST_CASE("format_search_context recorta por resultado en el límite exacto y uno más",
+          "[web_search]") {
+    SearchResponse response;
+    response.query = "test";
+    response.results = {{"A", "https://ejemplo.com/a", std::string(1200, 'a'), ""},
+                        {"B", "https://ejemplo.com/b", std::string(1201, 'b'), ""}};
+
+    const SearchResponse trimmed = trim_search_response(response);
+    REQUIRE(trimmed.results.size() == 2);
+    CHECK(trimmed.results[0].content == std::string(1200, 'a'));
+    CHECK(trimmed.results[1].content == std::string(1200, 'b'));
+
+    const std::string block = format_search_context(response, "hoy", "nonce");
+    CHECK(block.find("\n" + std::string(1200, 'a') + "\n\n") != std::string::npos);
+    CHECK(block.find("\n" + std::string(1200, 'b') + "\n\n") != std::string::npos);
+    CHECK(block.find(std::string(1201, 'b')) == std::string::npos);
+}
+
+TEST_CASE("trim_search_response: aplicarla dos veces da lo mismo", "[web_search]") {
+    SearchResponse response;
+    response.query = "consulta";
+    for (std::size_t i = 0; i < 6; ++i) {
+        response.results.push_back({"Título\n" + std::to_string(i), "https://ejemplo.com",
+                                    "Ñ\x01\xC2\x85\xFF" + marker_content(kMarkers[i], 1300),
+                                    "2026-10-08"});
+    }
+    const SearchResponse once = trim_search_response(response);
+    const SearchResponse twice = trim_search_response(once);
+    REQUIRE(once.results.size() == twice.results.size());
+    for (std::size_t i = 0; i < once.results.size(); ++i) {
+        CHECK(once.results[i].content == twice.results[i].content);
+        CHECK(once.results[i].title == response.results[i].title); // Sin cambios.
+    }
+    CHECK(format_search_context(once, "hoy", "n") == format_search_context(response, "hoy", "n"));
 }
 
 TEST_CASE("format_search_context no parte caracteres UTF-8", "[web_search]") {
@@ -218,17 +311,45 @@ TEST_CASE("format_search_context elimina controles", "[web_search]") {
         REQUIRE(result.find("\x01") == std::string::npos);
     }
 
+    SECTION("el tabulador se vuelve espacio") {
+        response.results = {{"Título", "https://ejemplo.com", "palabra\totra", ""}};
+        const std::string result = format_search_context(response, "hoy", "nonce");
+        CHECK(result.find("\npalabra otra\n") != std::string::npos);
+        CHECK(result.find('\t') == std::string::npos);
+        CHECK(trim_search_response(response).results[0].content == "palabra otra");
+    }
+
     SECTION("\\n se conserva") {
         response.results = {{"Título", "https://ejemplo.com", "Línea 1\nLínea 2", ""}};
         const std::string result = format_search_context(response, "hoy", "nonce");
         REQUIRE(result.find("Línea 1\nLínea 2") != std::string::npos);
     }
 
-    SECTION("DEL (0x7F) y C1 (0x80-0x9F)") {
-        response.results = {{"Título", "https://ejemplo.com", "Hola\x7F\x80\x9Fmundo", ""}};
+    SECTION("DEL (0x7F) y C1 (U+0080–U+009F, como caracteres)") {
+        response.results = {
+            {"Tí\xC2\x9Btulo", "https://ejemplo.com", "Hola\x7F\xC2\x80\xC2\x9Fmundo", ""}};
         const std::string result = format_search_context(response, "hoy", "nonce");
-        REQUIRE(result.find("Holamundo") != std::string::npos);
-        REQUIRE(result.find("\x7F") == std::string::npos);
+        CHECK(result.find("Holamundo") != std::string::npos);
+        CHECK(result.find("[1] Título — ") != std::string::npos);
+        CHECK(result.find("\x7F") == std::string::npos);
+        CHECK(result.find("\xC2\x80") == std::string::npos);
+        CHECK(result.find("\xC2\x9F") == std::string::npos);
+        CHECK(result.find("\xC2\x9B") == std::string::npos);
+    }
+
+    SECTION("secuencias inválidas → U+FFFD") {
+        // 0x80 y 0x9F sueltos, un inicio de 3 bytes sin terminar y una
+        // sobrelarga ("/" en 2 bytes). Cada byte inválido da un U+FFFD.
+        const std::string bad = std::string{"a"} + "\x80" + "b" + "\x9F" + "c" + "\xE2\x80" +
+                                "d" + "\xC0\xAF" + "e";
+        response.results = {{std::string{"Mal"} + "\xFF" + "título", "https://ejemplo.com", bad,
+                             ""}};
+        const std::string result = format_search_context(response, "hoy", "nonce");
+        const std::string r{utf8::kReplacement};
+        CHECK(result.find("a" + r + "b" + r + "c" + r + r + "d" + r + r + "e") !=
+              std::string::npos);
+        CHECK(result.find("[1] Mal" + r + "título — ") != std::string::npos);
+        CHECK(utf8::is_valid(result));
     }
 }
 
@@ -278,4 +399,26 @@ TEST_CASE("format_search_context previene inyección de instrucciones", "[web_se
     REQUIRE(injection != std::string::npos);
     REQUIRE(injection > opening);
     REQUIRE(injection < closing);
+}
+
+TEST_CASE("format_search_context conserva letras acentuadas y signos", "[web_search]") {
+    // Ñ, É y Á terminan en bytes 0x81–0x91, y —, “, ” y … tienen bytes de
+    // continuación entre 0x80 y 0x9F: limpiar byte por byte los rompía.
+    const std::string text = "NIÑOS en MÉXICO — “Á” …";
+    SearchResponse response;
+    response.query = text;
+    response.results = {{text, "https://ejemplo.com/niños", text, text}};
+
+    const std::string block = format_search_context(response, text, "nonce");
+
+    CHECK(block.find("Fecha de hoy: " + text + ".\n") != std::string::npos);
+    CHECK(block.find("[1] " + text + " — https://ejemplo.com/niños — " + text + "\n" + text +
+                     "\n\n") != std::string::npos);
+    CHECK(block.find("Pregunta del usuario: " + text + "\n") != std::string::npos);
+    CHECK(block.find("\xEF\xBF\xBD") == std::string::npos); // Ningún U+FFFD.
+    CHECK(utf8::is_valid(block));
+
+    const SearchResponse trimmed = trim_search_response(response);
+    REQUIRE(trimmed.results.size() == 1);
+    CHECK(trimmed.results[0].content == text);
 }

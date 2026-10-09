@@ -1,11 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "chatbot/config.h"
+#include "chatbot/credentials.h"
 #include "fake_transport.hpp"
+#include "temp_dir.hpp"
 
 #include <sys/stat.h>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 using namespace chatbot;
@@ -135,4 +138,43 @@ TEST_CASE("load_search_api_key: carga del archivo si el entorno no está", "[sea
     REQUIRE(result.value() == "key-from-file");
 
     std::filesystem::remove_all(temp_dir);
+}
+
+TEST_CASE("search:tavily se conserva junto a las demás keys y nunca va en config.json",
+          "[search_config]") {
+    const chatbot_test::ScopedTempDir temp;
+    const std::string creds_path = (temp.path() / "chatbot" / "credentials.json").string();
+    const std::string config_path = (temp.path() / "chatbot" / "config.json").string();
+
+    // Primero la key de búsqueda, luego la del modelo, como lo hace main.cpp:
+    // leer, cambiar una llave y volver a escribir.
+    Credentials first;
+    first.keys[std::string{kSearchCredentialsKey}] = "tvly-clave-ficticia-de-busqueda";
+    REQUIRE_FALSE(save_credentials(creds_path, first).has_value());
+    Result<Credentials> loaded = load_credentials(creds_path);
+    REQUIRE(loaded.is_ok());
+    Credentials second = loaded.value();
+    second.keys["nvidia"] = "nvapi-clave-ficticia-del-modelo";
+    REQUIRE_FALSE(save_credentials(creds_path, second).has_value());
+    REQUIRE_FALSE(save_config_file(config_path, {"nvidia", "https://integrate.api.nvidia.com/v1",
+                                                 "modelo-de-prueba"})
+                      .has_value());
+
+    loaded = load_credentials(creds_path);
+    REQUIRE(loaded.is_ok());
+    CHECK(loaded.value().keys.at("search:tavily") == "tvly-clave-ficticia-de-busqueda");
+    CHECK(loaded.value().keys.at("nvidia") == "nvapi-clave-ficticia-del-modelo");
+
+    const FakeEnv env; // Sin CHAT_SEARCH_API_KEY.
+    const Result<std::string> key = load_search_api_key(env, creds_path);
+    REQUIRE(key.is_ok());
+    CHECK(key.value() == "tvly-clave-ficticia-de-busqueda");
+
+    std::ifstream config_file{config_path};
+    const std::string config_text{std::istreambuf_iterator<char>{config_file},
+                                  std::istreambuf_iterator<char>{}};
+    REQUIRE_FALSE(config_text.empty());
+    CHECK(config_text.find("tvly-") == std::string::npos);
+    CHECK(config_text.find("search") == std::string::npos);
+    CHECK(config_text.find("nvapi-") == std::string::npos);
 }
