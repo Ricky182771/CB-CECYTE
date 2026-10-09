@@ -183,6 +183,11 @@ TEST_CASE("InvalidRequest tiene etiqueta en español", "[mapeo][invalid]") {
           "petición inválida");
 }
 
+TEST_CASE("NoSearchResults tiene etiqueta en español", "[mapeo]") {
+    CHECK(std::string{chatbot::error_kind_label(ErrorKind::NoSearchResults)} ==
+          "búsqueda sin resultados");
+}
+
 TEST_CASE("InvalidRequest en streaming no se reintenta", "[mapeo][invalid]") {
     auto harness = make_client();
     harness.transport->responses.push_back(HttpResponse{400, "{}", std::nullopt, false, ""});

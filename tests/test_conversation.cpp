@@ -741,7 +741,7 @@ TEST_CASE("Conversation: sin resultados es un aviso, no un error",
     Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("/buscar nada").has_value());
     const std::string restored = conversation.finish_error(chatbot::ChatError{
-        chatbot::ErrorKind::BadResponse, 0, std::string{chatbot::cli::kNoSearchResults},
+        chatbot::ErrorKind::NoSearchResults, 0, std::string{chatbot::cli::kNoSearchResults},
         std::nullopt});
     CHECK(restored == "/buscar nada");
     REQUIRE(conversation.entries().size() == 2);
@@ -749,6 +749,28 @@ TEST_CASE("Conversation: sin resultados es un aviso, no un error",
     CHECK(conversation.entries()[1].text == "La búsqueda no encontró resultados.");
     CHECK_FALSE(conversation.busy());
     REQUIRE(conversation.history().size() == 1);
+}
+
+TEST_CASE("Conversation: sin resultados se detecta por el tipo, no por el texto",
+          "[conversacion][busqueda]") {
+    SECTION("NoSearchResults con otro texto sigue siendo aviso") {
+        Conversation conversation{kDefaultSystemPrompt};
+        REQUIRE(conversation.submit("/buscar nada").has_value());
+        (void)conversation.finish_error(chatbot::ChatError{
+            chatbot::ErrorKind::NoSearchResults, 0, "Otro texto cualquiera.", std::nullopt});
+        REQUIRE(conversation.entries().size() == 2);
+        CHECK(conversation.entries()[1].kind == EntryKind::Notice);
+        CHECK(conversation.entries()[1].text == "Otro texto cualquiera.");
+    }
+    SECTION("BadResponse con el texto de kNoSearchResults es un error") {
+        Conversation conversation{kDefaultSystemPrompt};
+        REQUIRE(conversation.submit("/buscar nada").has_value());
+        (void)conversation.finish_error(chatbot::ChatError{
+            chatbot::ErrorKind::BadResponse, 0, std::string{chatbot::cli::kNoSearchResults},
+            std::nullopt});
+        REQUIRE(conversation.entries().size() == 2);
+        CHECK(conversation.entries()[1].kind == EntryKind::Error);
+    }
 }
 
 TEST_CASE("Conversation: attach_search sin petición en curso no hace nada",

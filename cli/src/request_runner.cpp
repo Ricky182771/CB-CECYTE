@@ -84,7 +84,7 @@ bool RequestRunner::start_with_search(std::vector<Message> history, std::string 
         }
         if (found.value().results.empty()) {
             post_done(post, state, on_done,
-                      ChatError{ErrorKind::BadResponse, 0, std::string{kNoSearchResults},
+                      ChatError{ErrorKind::NoSearchResults, 0, std::string{kNoSearchResults},
                                 std::nullopt},
                       0);
             return;

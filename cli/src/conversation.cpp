@@ -218,7 +218,7 @@ std::string Conversation::finish_error(const ChatError& error) {
     }
     pending_search_.reset();
     Entry* answer = current_answer();
-    if (error.kind == ErrorKind::BadResponse && error.message == kNoSearchResults) {
+    if (error.kind == ErrorKind::NoSearchResults) {
         // No se llamó al modelo: no hay respuesta parcial ni es un error.
         entries_.push_back(
             Entry{EntryKind::Notice, error.message, false, false, false, {}, {}});

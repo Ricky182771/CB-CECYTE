@@ -519,6 +519,7 @@ TEST_CASE("RequestRunner: búsqueda sin resultados no llama al modelo",
     RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
 
     auto search_transport = std::make_unique<chatbot_test::FakeTransport>();
+    chatbot_test::FakeTransport* search_raw = search_transport.get();
     SECTION("results vacío") {
         search_transport->responses.push_back(tavily_response(nlohmann::json::array()));
     }
@@ -536,9 +537,12 @@ TEST_CASE("RequestRunner: búsqueda sin resultados no llama al modelo",
     CHECK(search.calls == 0);
     REQUIRE(harness.outcome.result.has_value());
     REQUIRE(harness.outcome.result->is_error());
+    CHECK(harness.outcome.result->error().kind == ErrorKind::NoSearchResults);
     CHECK(harness.outcome.result->error().message == "La búsqueda no encontró resultados.");
     CHECK(harness.outcome.done_calls == 1);
     CHECK(model->requests.empty());
+    // Nunca se reintenta: una sola búsqueda.
+    CHECK(search_raw->requests.size() == 1);
 }
 
 TEST_CASE("RequestRunner: cancelar durante la búsqueda no llama al modelo",

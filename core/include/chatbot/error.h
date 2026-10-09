@@ -19,6 +19,7 @@ enum class ErrorKind {
     BadResponse,   ///< Cuerpo inesperado o no interpretable.
     InvalidRequest, ///< 400 / 413 / 422 (p. ej. contexto demasiado largo).
     Cancelled,     ///< Cancelado por el usuario.
+    NoSearchResults, ///< La búsqueda web no trajo resultados (no es una falla).
 };
 
 /// Error tipado que nunca viaja como excepción por la API pública.
