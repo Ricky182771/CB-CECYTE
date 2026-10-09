@@ -184,7 +184,7 @@ Teclas:
 
 | Tecla | Acción |
 |---|---|
-| Enter | Envía el mensaje (no hace nada mientras hay una respuesta en curso) |
+| Enter | Envía el mensaje (no hace nada mientras hay una respuesta en curso) o ejecuta un comando (`/buscar`, `/copiar`, `/guardar`, `/exportar`) |
 | Esc | Cancela la respuesta en curso; el texto regresa a la caja |
 | PgUp / PgDn | Sube o baja una pantalla del historial |
 | Rueda del ratón | Sube o baja unas 3 líneas (del historial, o de la barra si el puntero está sobre ella) |
@@ -218,7 +218,7 @@ Se muestra:
 - Párrafos, encabezados (`#` a `######`), citas (también anidadas) y líneas horizontales (`---`).
 - **Negritas**, *cursivas*, ~~tachado~~, `==resaltado==` y `código en línea`.
 - Listas con viñetas y numeradas, anidadas, y listas de tareas (`- [ ]` y `- [x]`).
-- Bloques de código con el lenguaje como título. Las líneas largas se parten, sin colores de sintaxis.
+- Bloques de código con su número y el lenguaje como título (`#3 · cpp`, o `#3` si no dice el lenguaje). Las líneas largas se parten, sin colores de sintaxis. El número sirve para `/copiar` y `/guardar`.
 - Tablas con alineación por columna. Si no caben, el texto se ajusta dentro de las celdas; si ni así caben, cada fila se muestra como una tarjeta `Encabezado: valor`.
 - Enlaces: el texto subrayado y la dirección al lado. En las terminales que lo soportan, el enlace se abre con Shift+clic.
 - Imágenes como `[imagen: descripción]` con su dirección, porque la terminal no muestra imágenes.
@@ -236,3 +236,44 @@ Para ver cómo se muestra un archivo markdown sin usar la API:
 ```
 
 `--width` es el ancho en columnas (80 si no lo pones). `--theme` elige el tema (`catppuccin-mocha` si no lo pones, o `terminal`) y `--background theme|terminal` el fondo. Si la salida es una terminal, se ve con colores y estilos; si la rediriges a un archivo, sale como texto plano.
+
+### Copiar, guardar y exportar
+
+Los bloques de código de las respuestas se numeran desde 1 en toda la conversación, en el orden en que aparecen; el número va en el título del bloque (`#3 · cpp`). Estos comandos no se envían al modelo ni entran al historial: el resultado aparece como un aviso en la conversación.
+
+| Comando | Qué hace |
+|---|---|
+| `/copiar` | Copia el último bloque de código de la conversación |
+| `/copiar 3` | Copia el bloque #3 |
+| `/guardar` o `/guardar 3` | Guarda el último bloque, o el #3, como `bloque-3.cpp` (la extensión sale del lenguaje) |
+| `/guardar 3 suma.cpp` | Lo guarda con ese nombre (si no le pones extensión, se agrega la del lenguaje) |
+| `/exportar` | Exporta la conversación a Markdown, como `conversacion-<id>.md` |
+
+- Solo en minúsculas y con los argumentos separados por espacios. Cualquier otro texto que empiece con `/` (por ejemplo `/copiarx`) se envía como un mensaje normal.
+- Con una respuesta en curso, la línea de estado dice `Espera a que termine la respuesta`. Si no hay bloques, el número no existe o sobran argumentos, la línea de estado explica cómo se usa y el texto se queda en la caja.
+- `/guardar` y `/exportar` nunca sobrescriben: si el archivo ya existe, usan `suma-2.cpp`, `suma-3.cpp`… (hasta `-99`). Los archivos quedan con permisos 0644, nunca como ejecutables (tampoco los `.sh`).
+- El nombre que das es solo el nombre del archivo: no puede llevar `/`, `\`, `..` ni caracteres de control, ni empezar con `.`, y mide como máximo 100 bytes.
+- El archivo exportado tiene el título, la fecha y el modelo, y cada pregunta (`## Tú`, tal como la escribiste, también el `/buscar …`) con su respuesta (`## Asistente`) y, si hubo búsqueda, sus fuentes (`### Fuentes`). Nunca incluye las instrucciones del sistema, los resultados de búsqueda que recibió el modelo, keys, avisos ni errores.
+
+**Cómo se copia**, en este orden:
+
+1. Si estás conectado por SSH (`SSH_CONNECTION` o `SSH_TTY`), primero con la secuencia OSC 52 de la terminal, para que llegue al portapapeles de tu máquina local.
+2. Con un programa del sistema que esté en tu `PATH`: `termux-clipboard-set` en Termux (paquete `termux-api` y la app Termux:API), `wl-copy` en Wayland, o `xclip` o `xsel` en X11. En Fedora: `sudo dnf install wl-clipboard` (Wayland) o `sudo dnf install xclip` (X11).
+3. Si nada de eso funciona, con OSC 52, y el aviso dice `si tu terminal no lo soporta, usa /guardar`. Kitty, WezTerm, foot, Alacritty y Ghostty soportan OSC 52; dentro de tmux se envía envuelta para tmux, y puede hacer falta `set -g allow-passthrough on` o `set -g set-clipboard on` en tu `~/.tmux.conf`.
+
+OSC 52 solo manda bloques de hasta 100 000 bytes; para uno más grande, usa `/guardar`.
+
+**Dónde se guarda:** en la carpeta `chatbot/` (se crea con permisos 0755) dentro de la primera de estas que aplique:
+
+1. `CHAT_DOWNLOAD_DIR`, si la defines;
+2. tu carpeta de descargas de `~/.config/user-dirs.dirs` (`XDG_DOWNLOAD_DIR`, la que configura tu escritorio), si existe;
+3. en Termux, `~/storage/downloads` (después de correr `termux-setup-storage`);
+4. `~/Descargas` o `~/Downloads`, la que exista;
+5. tu carpeta personal (`~`).
+
+Para cambiarla, define la variable antes de abrir el chatbot:
+
+```bash
+CHAT_DOWNLOAD_DIR=~/proyectos/escuela ./build/release/cli/chatbot
+```
+
