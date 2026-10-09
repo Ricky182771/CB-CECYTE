@@ -44,6 +44,7 @@ add_executable(chatbot_tests
     test_sse.cpp
     test_streaming.cpp
     test_system_prompt.cpp
+    test_system_prompt_invariants.cpp
     test_tavily_search.cpp
     test_web_search.cpp)
 
