@@ -1,5 +1,6 @@
-# Integración continua: compila y corre las pruebas con GCC y Clang en cada
-# PR y en cada push a main. Nunca usa una API key ni llama a una API real:
+# Integración continua: compila y corre las pruebas con GCC y Clang en Linux
+# y con GCC de MSYS2 en Windows, en cada PR y en cada push a main. Nunca usa
+# una API key ni llama a una API real:
 # las pruebas usan FakeTransport y el único arranque del ejecutable es sin key.
 name: CI
 
@@ -77,3 +78,91 @@ jobs:
           fi
           grep -q "error de configuración" errores.txt
           grep -q "CHAT_API_KEY" errores.txt
+
+  # Windows con MSYS2 UCRT64 y GCC, con los mismos flags y -Werror. Solo dev y
+  # release: asan y tsan son de Linux. Sin CHATBOT_STRICT_PERF: los tiempos de
+  # los runners de Windows varían demasiado (la latencia de cancelación < 2 s
+  # se exige igual, siempre).
+  windows:
+    name: windows / ${{ matrix.preset }}
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [dev, release]
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      # Sin esto, el git de Windows convierte los saltos de línea a CRLF y
+      # las pruebas que comparan contra tests/data fallan.
+      - name: Saltos de línea sin convertir
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # FTXUI y md4c se descargan solos por FetchContent al configurar.
+      - name: Instalar MSYS2 (UCRT64) y dependencias
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-catch
+
+      # Versión de libcurl y su backend TLS (curl_version_info), para el
+      # informe: CURLSSLOPT_NATIVE_CA necesita OpenSSL o Schannel.
+      - name: Versión de curl
+        run: curl -V
+
+      - name: Configurar
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Compilar
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Pruebas
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      # Sin CHAT_API_KEY debe salir con código 1 y el error de configuración.
+      # stdin es NUL: GetConsoleMode falla y no se abre la interfaz. El
+      # timeout evita que la CI se cuelgue si algún día no fuera así.
+      - name: Arranque sin API key
+        run: |
+          status=0
+          env -u CHAT_API_KEY timeout 60 ./build/${{ matrix.preset }}/cli/chatbot.exe \
+            < /dev/null > salida.txt 2> errores.txt || status=$?
+          cat errores.txt
+          if [ "$status" -ne 1 ]; then
+            echo "Se esperaba el código de salida 1 y fue $status"
+            exit 1
+          fi
+          grep -q "error de configuración" errores.txt
+          grep -q "CHAT_API_KEY" errores.txt
+
+      # chatbot.exe de release con las DLL de /ucrt64/bin que reporta ldd,
+      # para probarlo en una PC sin MSYS2.
+      - name: Empaquetar
+        if: matrix.preset == 'release'
+        run: |
+          mkdir -p chatbot-windows-x64
+          cp build/release/cli/chatbot.exe chatbot-windows-x64/
+          ldd build/release/cli/chatbot.exe | awk '$3 ~ "^/ucrt64/bin/" { print $3 }' |
+            sort -u | xargs -r -I{} cp {} chatbot-windows-x64/
+          ls -l chatbot-windows-x64
+
+      - name: Subir el artefacto
+        if: matrix.preset == 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: chatbot-windows-x64
+          path: chatbot-windows-x64
+          if-no-files-found: error
