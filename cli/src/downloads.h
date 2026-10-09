@@ -55,12 +55,13 @@ struct WriteResult {
     std::string error; ///< Vacío si salió bien.
 };
 
-/// Crea <base>/chatbot con 0755 si no existe. Devuelve la ruta o el error.
+/// Crea <base>/chatbot con 0755 (menos la umask) si no existe. Devuelve la
+/// ruta o el error.
 [[nodiscard]] WriteResult ensure_download_dir(const std::string& base);
 
 /// Escribe content en dir/name sin sobrescribir nunca (O_CREAT | O_EXCL):
 /// si el nombre existe, prueba "nombre-2.ext" hasta "-99". Permisos 0644
-/// (nunca ejecutable). Si falla a la mitad, borra lo que creó.
+/// menos la umask (nunca ejecutable). Si falla a la mitad, borra lo que creó.
 [[nodiscard]] WriteResult write_new_file(const std::string& dir, std::string_view name,
                                          std::string_view content);
 

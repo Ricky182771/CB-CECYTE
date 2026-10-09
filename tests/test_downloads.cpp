@@ -41,6 +41,21 @@ unsigned mode_of(const std::string& path) {
     return static_cast<unsigned>(info.st_mode) & 07777U;
 }
 
+/// true si mode no da ningún permiso fuera de allowed (la umask solo quita).
+bool within(unsigned mode, unsigned allowed) { return (mode & ~allowed) == 0U; }
+
+/// Cambia la umask del proceso mientras vive y luego la restaura.
+class ScopedUmask {
+public:
+    explicit ScopedUmask(mode_t mask) : old_(::umask(mask)) {}
+    ~ScopedUmask() { ::umask(old_); }
+    ScopedUmask(const ScopedUmask&) = delete;
+    ScopedUmask& operator=(const ScopedUmask&) = delete;
+
+private:
+    mode_t old_;
+};
+
 } // namespace
 
 TEST_CASE("extensión por lenguaje", "[downloads]") {
@@ -193,12 +208,14 @@ TEST_CASE("carpeta de descargas, en orden de prioridad", "[downloads]") {
     }
 }
 
-TEST_CASE("ensure_download_dir crea chatbot/ con 0755", "[downloads]") {
+TEST_CASE("ensure_download_dir crea chatbot/ con 0755 o menos", "[downloads]") {
     const chatbot_test::ScopedTempDir dir;
     const chatbot::cli::WriteResult created = chatbot::cli::ensure_download_dir(dir.string());
     REQUIRE(created.error.empty());
     CHECK(created.path == dir.string() + "/chatbot");
-    CHECK(mode_of(created.path) == 0755U);
+    // La umask del usuario puede quitar permisos, nunca agregarlos.
+    CHECK(within(mode_of(created.path), 0755U));
+    CHECK((mode_of(created.path) & 0700U) == 0700U);
     // Si ya existe, se usa tal cual.
     CHECK(chatbot::cli::ensure_download_dir(dir.string()).error.empty());
 
@@ -209,7 +226,7 @@ TEST_CASE("ensure_download_dir crea chatbot/ con 0755", "[downloads]") {
         chatbot::cli::ensure_download_dir((other.path() / "no-existe").string()).error.empty());
 }
 
-TEST_CASE("write_new_file nunca sobrescribe y deja 0644", "[downloads]") {
+TEST_CASE("write_new_file nunca sobrescribe y deja 0644 o menos", "[downloads]") {
     using chatbot::cli::write_new_file;
     const chatbot_test::ScopedTempDir dir;
 
@@ -217,7 +234,8 @@ TEST_CASE("write_new_file nunca sobrescribe y deja 0644", "[downloads]") {
     REQUIRE(first.error.empty());
     CHECK(first.path == dir.string() + "/suma.cpp");
     CHECK(read_text(first.path) == "uno\n");
-    CHECK(mode_of(first.path) == 0644U);
+    CHECK(within(mode_of(first.path), 0644U));
+    CHECK((mode_of(first.path) & 0600U) == 0600U);
 
     const auto second = write_new_file(dir.string(), "suma.cpp", "dos\n");
     REQUIRE(second.error.empty());
@@ -234,7 +252,19 @@ TEST_CASE("write_new_file nunca sobrescribe y deja 0644", "[downloads]") {
 
     // Un .sh nunca queda ejecutable.
     const auto script = write_new_file(dir.string(), "script.sh", "echo hola\n");
-    CHECK(mode_of(script.path) == 0644U);
+    CHECK(within(mode_of(script.path), 0644U));
+    CHECK((mode_of(script.path) & 0111U) == 0U);
+}
+
+TEST_CASE("la carpeta y los archivos respetan la umask del usuario", "[downloads]") {
+    const chatbot_test::ScopedTempDir dir;
+    const ScopedUmask strict(077);
+    const chatbot::cli::WriteResult created = chatbot::cli::ensure_download_dir(dir.string());
+    REQUIRE(created.error.empty());
+    CHECK(mode_of(created.path) == 0700U);
+    const auto written = chatbot::cli::write_new_file(created.path, "a.txt", "x\n");
+    REQUIRE(written.error.empty());
+    CHECK(mode_of(written.path) == 0600U);
 }
 
 TEST_CASE("write_new_file se rinde después de -99", "[downloads]") {

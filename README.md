@@ -251,7 +251,7 @@ Los bloques de código de las respuestas se numeran desde 1 en toda la conversac
 
 - Solo en minúsculas y con los argumentos separados por espacios. Cualquier otro texto que empiece con `/` (por ejemplo `/copiarx`) se envía como un mensaje normal.
 - Con una respuesta en curso, la línea de estado dice `Espera a que termine la respuesta`. Si no hay bloques, el número no existe o sobran argumentos, la línea de estado explica cómo se usa y el texto se queda en la caja.
-- `/guardar` y `/exportar` nunca sobrescriben: si el archivo ya existe, usan `suma-2.cpp`, `suma-3.cpp`… (hasta `-99`). Los archivos quedan con permisos 0644, nunca como ejecutables (tampoco los `.sh`).
+- `/guardar` y `/exportar` nunca sobrescriben: si el archivo ya existe, usan `suma-2.cpp`, `suma-3.cpp`… (hasta `-99`). Los archivos se crean con permisos 0644 (o menos, según tu `umask`), nunca como ejecutables (tampoco los `.sh`).
 - El nombre que das es solo el nombre del archivo: no puede llevar `/`, `\`, `..` ni caracteres de control, ni empezar con `.`, y mide como máximo 100 bytes.
 - El archivo exportado tiene el título, la fecha y el modelo, y cada pregunta (`## Tú`, tal como la escribiste, también el `/buscar …`) con su respuesta (`## Asistente`) y, si hubo búsqueda, sus fuentes (`### Fuentes`). Nunca incluye las instrucciones del sistema, los resultados de búsqueda que recibió el modelo, keys, avisos ni errores.
 
@@ -263,7 +263,7 @@ Los bloques de código de las respuestas se numeran desde 1 en toda la conversac
 
 OSC 52 solo manda bloques de hasta 100 000 bytes; para uno más grande, usa `/guardar`.
 
-**Dónde se guarda:** en la carpeta `chatbot/` (se crea con permisos 0755) dentro de la primera de estas que aplique:
+**Dónde se guarda:** en la carpeta `chatbot/` (se crea con permisos 0755, o menos según tu `umask`) dentro de la primera de estas que aplique:
 
 1. `CHAT_DOWNLOAD_DIR`, si la defines;
 2. tu carpeta de descargas de `~/.config/user-dirs.dirs` (`XDG_DOWNLOAD_DIR`, la que configura tu escritorio), si existe;
