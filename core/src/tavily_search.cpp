@@ -1,5 +1,6 @@
 #include "chatbot/tavily_search.h"
 #include "chatbot/error.h"
+#include "published_date.h"
 
 #include <nlohmann/json.hpp>
 
@@ -95,7 +96,8 @@ public:
             {"max_results", 5},
             {"topic", "general"},
             {"safe_search", true},
-            {"country", "mexico"}
+            {"country", "mexico"},
+            {"include_published_date", true}
         };
 
         HttpRequest request;
@@ -178,8 +180,10 @@ public:
             if (item.contains("title") && item["title"].is_string()) {
                 result.title = item["title"].get<std::string>();
             }
+            // Llega como RFC 1123 ("Tue, 11 Mar 2025 17:00:00 GMT") o null.
             if (item.contains("published_date") && item["published_date"].is_string()) {
-                result.published_date = item["published_date"].get<std::string>();
+                result.published_date =
+                    normalize_published_date(item["published_date"].get<std::string>());
             }
 
             search_response.results.push_back(std::move(result));

@@ -275,6 +275,22 @@ TEST_CASE("historial: fuentes de una búsqueda con hipervínculos y texto filtra
     }
 }
 
+TEST_CASE("historial: fuentes con y sin fecha de publicación", "[historial][busqueda]") {
+    Entry sources;
+    sources.kind = EntryKind::Sources;
+    sources.sources = {
+        {"Con fecha", "https://ejemplo.com/1", "c", "2026-10-04"},
+        {"Sin fecha", "https://ejemplo.com/2", "c", ""},
+        {"", "https://ejemplo.com/3", "c", "2026-10-05"},
+    };
+    HistoryView view;
+    const std::string text = draw(view, {sources}, 80);
+    CHECK(text.find("[1] Con fecha — 2026-10-04 (https://ejemplo.com/1)") != std::string::npos);
+    CHECK(text.find("[2] Sin fecha (https://ejemplo.com/2)") != std::string::npos);
+    CHECK(text.find("[3] https://ejemplo.com/3 — 2026-10-05") != std::string::npos);
+    CHECK(text.find("(https://ejemplo.com/3)") == std::string::npos);
+}
+
 TEST_CASE("historial: la caché vuelve a dibujar si cambian las fuentes",
           "[historial][busqueda]") {
     Entry sources;
@@ -286,7 +302,11 @@ TEST_CASE("historial: la caché vuelve a dibujar si cambian las fuentes",
     (void)draw(view, {sources}, 40);
     CHECK(view.draw_count() == drawn);
     sources.sources[0].url = "https://ejemplo.com/2";
-    const std::string text = draw(view, {sources}, 40);
+    std::string text = draw(view, {sources}, 40);
     CHECK(view.draw_count() == drawn + 1);
     CHECK(text.find("https://ejemplo.com/2") != std::string::npos);
+    sources.sources[0].published_date = "2026-10-04";
+    text = draw(view, {sources}, 40);
+    CHECK(view.draw_count() == drawn + 2);
+    CHECK(text.find("2026-10-04") != std::string::npos);
 }
