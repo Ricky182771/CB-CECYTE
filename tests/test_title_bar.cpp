@@ -7,6 +7,7 @@
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
+#include <ftxui/screen/terminal.hpp>
 
 #include <string>
 
@@ -19,13 +20,13 @@ struct Drawn {
     ftxui::Box box;
 };
 
-Drawn draw_bar(std::string_view title, int width, chatbot::cli::ExportButton button = {true, false}) {
+Drawn draw_bar(std::string_view title, int width, chatbot::cli::ExportButton button = {true, false},
+               const chatbot::cli::Palette& palette = chatbot::cli::terminal_palette()) {
     Drawn drawn;
     drawn.screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                          ftxui::Dimension::Fixed(1));
-    ftxui::Render(drawn.screen, chatbot::cli::title_bar(title, width,
-                                                        chatbot::cli::terminal_palette(), button,
-                                                        drawn.box));
+    ftxui::Render(drawn.screen,
+                  chatbot::cli::title_bar(title, width, palette, button, drawn.box));
     for (int x = 0; x < width; ++x) {
         const auto& character = drawn.screen.CellAt(x, 0).character;
         if (character.empty() && x > 0 &&
@@ -92,6 +93,7 @@ TEST_CASE("título: [Exportar] atenuado sin respuestas y con hover si hay", "[ti
     bar = draw_bar(title, 40, {true, false});
     CHECK(bar.screen.CellAt(bar.box.x_min, 0).character == "[");
     CHECK_FALSE(bar.screen.CellAt(bar.box.x_min, 0).inverted);
+    CHECK_FALSE(bar.screen.CellAt(bar.box.x_min, 0).dim); // Activo: se distingue.
     bar = draw_bar(title, 40, {true, true});
     for (int x = bar.box.x_min; x <= bar.box.x_max; ++x) {
         CHECK(bar.screen.CellAt(x, 0).inverted);
@@ -110,4 +112,17 @@ TEST_CASE("título: solo se recorta sin ayuda y respeta UTF-8", "[titulo]") {
     CHECK(row.find("…") != std::string::npos);
     CHECK(row.find("�") == std::string::npos);
     CHECK(ftxui::string_width(row) == width);
+}
+
+TEST_CASE("título: [Exportar] activo y atenuado se distinguen en cada tema", "[titulo][tema]") {
+    ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::TrueColor);
+    for (const chatbot::cli::Theme& theme : chatbot::cli::themes()) {
+        INFO("tema " << theme.id);
+        const chatbot::cli::Palette palette(theme);
+        const Drawn on = draw_bar("Chatbot", 40, {true, false}, palette);
+        const Drawn off = draw_bar("Chatbot", 40, {false, false}, palette);
+        const ftxui::Cell& a = on.screen.CellAt(on.box.x_min, 0);
+        const ftxui::Cell& b = off.screen.CellAt(off.box.x_min, 0);
+        CHECK((a.foreground_color != b.foreground_color || a.dim != b.dim));
+    }
 }

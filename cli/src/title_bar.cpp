@@ -43,9 +43,12 @@ ftxui::Element title_bar(std::string_view title, int width, const Palette& palet
     ftxui::Elements row{ftxui::text(clean) | ftxui::bold, ftxui::filler(),
                         ftxui::text(std::string{help}) | palette.ink(&Theme::notice)};
     if (show_button) {
-        // Sin respuestas, atenuado (el color del texto de ejemplo de la caja).
+        // Activo, en el color del texto (más visible que la ayuda, que va en
+        // notice); sin respuestas, atenuado con el del texto de ejemplo de la
+        // caja. notice no sirve para distinguirlos: en los dos temas es igual
+        // a input_placeholder.
         ftxui::Element label = ftxui::text(std::string{kExportLabel}) |
-                               palette.ink(button.enabled ? &Theme::notice
+                               palette.ink(button.enabled ? &Theme::text
                                                           : &Theme::input_placeholder);
         if (button.enabled && button.hovered) {
             label = std::move(label) | palette.selection();

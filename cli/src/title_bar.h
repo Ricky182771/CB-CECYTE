@@ -11,7 +11,9 @@ namespace chatbot::cli {
 
 /// Botón [Exportar] de la barra de título.
 struct ExportButton {
-    bool enabled = false; ///< Hay respuestas que exportar; si no, atenuado y sin acción.
+    /// Hay respuestas que exportar (color del texto); si no, atenuado
+    /// (input_placeholder) y sin acción.
+    bool enabled = false;
     bool hovered = false; ///< El puntero está encima (con enabled, en el color de selección).
 };
 
