@@ -1,5 +1,7 @@
 #include "markdown_view.h"
 
+#include "code_blocks.h"
+
 #include <ftxui/screen/color.hpp>
 #include <ftxui/screen/string.hpp>
 
@@ -469,7 +471,10 @@ class Renderer {
 public:
     /// first_code: número del primer bloque de código ("#3 · cpp"), o 0
     /// para dibujarlos sin número.
-    Renderer(const Palette& palette, int first_code) : palette_(palette), next_code_(first_code) {}
+    /// code_boxes: si no es nulo, ya tiene un elemento por bloque de código
+    /// (en el orden de code_blocks_of) y cada marco se refleja en el suyo.
+    Renderer(const Palette& palette, int first_code, std::vector<ftxui::Box>* code_boxes)
+        : palette_(palette), next_code_(first_code), code_boxes_(code_boxes) {}
 
     Element blocks(const std::vector<Block>& list, int width, bool spaced) {
         Elements rows;
@@ -643,21 +648,21 @@ private:
                                        ftxui::text(" ")}) |
                           palette_.inside_border();
         // El número es el mismo que usan /copiar y /guardar (code_blocks.h).
-        std::string label;
-        if (next_code_ > 0) {
-            label = "#" + std::to_string(next_code_++);
-            if (!block.info.empty()) {
-                label += " · ";
-            }
-        }
-        label += block.info;
+        const std::string label = code_title(next_code_ > 0 ? next_code_++ : 0, block.info);
+        Element frame;
         if (label.empty()) {
-            return ftxui::borderRounded(std::move(content)) | palette_.ink(&Theme::border);
+            frame = ftxui::borderRounded(std::move(content)) | palette_.ink(&Theme::border);
+        } else {
+            Element title = ftxui::text(label) | palette_.inside_border() |
+                            palette_.ink(&Theme::notice);
+            frame = ftxui::window(std::move(title), std::move(content)) |
+                    palette_.ink(&Theme::border);
         }
-        Element title = ftxui::text(" " + label + " ") | palette_.inside_border() |
-                        palette_.ink(&Theme::notice);
-        return ftxui::window(std::move(title), std::move(content)) |
-               palette_.ink(&Theme::border);
+        if (code_boxes_ != nullptr && code_index_ < code_boxes_->size()) {
+            frame = std::move(frame) | ftxui::reflect((*code_boxes_)[code_index_]);
+        }
+        ++code_index_;
+        return frame;
     }
 
     Element footnote(const Block& block, int width) {
@@ -1010,6 +1015,8 @@ private:
     const Palette& palette_;
     int bullet_depth_ = 0;
     int next_code_ = 0; ///< Número del siguiente bloque de código, o 0 sin números.
+    std::vector<ftxui::Box>* code_boxes_ = nullptr; ///< Cajas de los marcos, o nullptr.
+    std::size_t code_index_ = 0; ///< Bloques de código dibujados hasta ahora.
 };
 
 } // namespace
@@ -1042,9 +1049,27 @@ Element render_plain(std::string_view text, int width, const ftxui::Decorator& s
     return lines_element(flow(atoms, std::max(width, 1)), terminal_palette(), style);
 }
 
-Element render(const Document& document, int width, const Palette& palette, int first_code) {
+std::string code_title(int number, std::string_view info) {
+    std::string label;
+    if (number > 0) {
+        label = "#" + std::to_string(number);
+        if (!info.empty()) {
+            label += " · ";
+        }
+    }
+    label += info;
+    return label.empty() ? std::string{} : " " + label + " ";
+}
+
+Element render(const Document& document, int width, const Palette& palette, int first_code,
+               std::vector<ftxui::Box>* code_boxes) {
     width = std::max(width, 1);
-    Renderer renderer(palette, first_code);
+    if (code_boxes != nullptr) {
+        // Antes de armar los elementos: reflect guarda referencias a estas
+        // cajas, así que el vector no se vuelve a redimensionar.
+        code_boxes->assign(code_blocks_of(document).size(), ftxui::Box{});
+    }
+    Renderer renderer(palette, first_code, code_boxes);
     Element body = renderer.blocks(document.blocks, width, true);
     if (document.footnotes.empty()) {
         return body;

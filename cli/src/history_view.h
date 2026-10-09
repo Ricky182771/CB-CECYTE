@@ -6,6 +6,7 @@
 #include "theme.h"
 
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/box.hpp>
 #include <ftxui/screen/screen.hpp>
 
 #include <cstddef>
@@ -14,6 +15,13 @@
 #include <vector>
 
 namespace chatbot::cli {
+
+/// Un bloque de código ya dibujado en una entrada.
+struct CodeFrame {
+    int number = 0;      ///< Número del bloque (el de collect_code_blocks).
+    ftxui::Box box;      ///< Marco del bloque, en coordenadas de la entrada.
+    int title_width = 0; ///< Columnas del título del marco (" #3 · cpp ").
+};
 
 /// Dibuja las entradas de la conversación. Las respuestas del asistente se
 /// muestran como markdown (también mientras llegan); las del usuario, los
@@ -41,6 +49,10 @@ public:
                                         const Palette& palette,
                                         const std::vector<int>& first_code_numbers = {});
 
+    /// Bloques de código de la entrada i en el último render (vacío si no
+    /// tiene o si se dibujó sin números).
+    [[nodiscard]] const std::vector<CodeFrame>& code_frames(std::size_t entry) const;
+
     /// Veces que se parseó markdown (para las pruebas de la caché).
     [[nodiscard]] std::size_t parse_count() const { return parse_count_; }
     /// Veces que se dibujó una entrada (para las pruebas de la caché).
@@ -58,6 +70,10 @@ private:
         std::string palette_key; ///< Palette::key() con que se dibujó.
         int first_code = 0;      ///< Número del primer bloque de código (0: sin números).
         Entry drawn;
+        /// Marcos de los bloques de código (md::render los llena al dibujar).
+        std::vector<ftxui::Box> code_boxes;
+        /// Lo mismo con número y título, ya en coordenadas de la entrada.
+        std::vector<CodeFrame> code_frames;
     };
 
     const md::Document& document_for(Cached& cached, const std::string& text);

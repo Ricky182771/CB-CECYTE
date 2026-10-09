@@ -802,3 +802,60 @@ TEST_CASE("vista: un H3 largo se ajusta con sangría colgante de 2", "[vista]") 
     }
     check_no_style_past_text(screen, true);
 }
+
+TEST_CASE("vista: la caja de cada bloque de código coincide con las esquinas del marco",
+          "[vista][code_blocks]") {
+    const int width = GENERATE(30, 60);
+    // Bloques sueltos, en una lista y en una cita.
+    md::Document document = md::parse(
+        "Uno:\n\n```cpp\nint a;\n```\n\n- lista\n\n  ```py\n  print(1)\n  print(2)\n  ```\n\n"
+        "> cita\n>\n> ```\n> sin lenguaje\n> ```\n");
+    // md4c no deja bloques en una nota al pie: se arma a mano.
+    md::Block code;
+    code.kind = md::Block::Kind::Code;
+    code.info = "sh";
+    code.code = "ls\n";
+    md::Block note;
+    note.kind = md::Block::Kind::FootnoteDef;
+    note.footnote = 1;
+    note.children.push_back(code);
+    document.footnotes.push_back(note);
+
+    std::vector<ftxui::Box> boxes{ftxui::Box{1, 2, 3, 4}}; // Se reemplaza.
+    ftxui::Element element =
+        md::render(document, width, chatbot::cli::terminal_palette(), 3, &boxes);
+    ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
+                                                 ftxui::Dimension::Fit(element, true));
+    ftxui::Render(screen, element);
+    REQUIRE(boxes.size() == 4);
+    int previous_bottom = -1;
+    for (const ftxui::Box& box : boxes) {
+        INFO("caja (" << box.x_min << ", " << box.y_min << ") a (" << box.x_max << ", "
+                      << box.y_max << ")");
+        CHECK(screen.CellAt(box.x_min, box.y_min).character == "╭");
+        CHECK(screen.CellAt(box.x_max, box.y_min).character == "╮");
+        CHECK(screen.CellAt(box.x_min, box.y_max).character == "╰");
+        CHECK(screen.CellAt(box.x_max, box.y_max).character == "╯");
+        CHECK(box.y_min > previous_bottom); // En el orden de code_blocks_of.
+        previous_bottom = box.y_max;
+    }
+    // El título del primero es el de code_title.
+    CHECK(find(screen, md::code_title(3, "cpp")).y == boxes[0].y_min);
+    CHECK(find(screen, md::code_title(3, "cpp")).x == boxes[0].x_min + 1);
+    CHECK(md::code_title(3, "cpp") == " #3 · cpp ");
+    CHECK(md::code_title(4, "") == " #4 ");
+    CHECK(md::code_title(0, "py") == " py ");
+    CHECK(md::code_title(0, "").empty());
+
+    // Con nullptr, la misma salida.
+    ftxui::Element plain = md::render(document, width, chatbot::cli::terminal_palette(), 3);
+    ftxui::Screen other = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
+                                                ftxui::Dimension::Fit(plain, true));
+    ftxui::Render(other, plain);
+    CHECK(other.ToString() == screen.ToString());
+
+    // Sin bloques, el vector queda vacío.
+    boxes.assign(2, ftxui::Box{});
+    (void)md::render(md::parse("sin código"), width, chatbot::cli::terminal_palette(), 1, &boxes);
+    CHECK(boxes.empty());
+}

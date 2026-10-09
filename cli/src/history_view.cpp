@@ -1,5 +1,6 @@
 #include "history_view.h"
 
+#include "code_blocks.h"
 #include "markdown_view.h"
 
 #include "chatbot/web_search.h"
@@ -8,6 +9,7 @@
 #include <ftxui/dom/requirement.hpp>
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
+#include <ftxui/screen/string.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -160,7 +162,8 @@ ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, in
     case EntryKind::Assistant: {
         ftxui::Elements lines{
             label(ftxui::text("Asistente:") | ftxui::bold | palette.ink(&Theme::assistant_label)),
-            md::render(document_for(cached, entry.text), width, palette, first_code)};
+            md::render(document_for(cached, entry.text), width, palette, first_code,
+                       first_code > 0 ? &cached.code_boxes : nullptr)};
         if (entry.cancelled) {
             lines.push_back(label(ftxui::text("(cancelada)") | notice));
         } else if (entry.incomplete) {
@@ -181,6 +184,11 @@ ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, in
     return ftxui::text("");
 }
 
+const std::vector<CodeFrame>& HistoryView::code_frames(std::size_t entry) const {
+    static const std::vector<CodeFrame> kNone;
+    return entry < cache_.size() ? cache_[entry].code_frames : kNone;
+}
+
 ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
                                    const Palette& palette,
                                    const std::vector<int>& first_code_numbers) {
@@ -199,6 +207,7 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
             cached.first_code != first_code || !same_entry(cached.drawn, entry)) {
             // Con el fondo y el texto de la paleta: Picture copia las celdas
             // tal cual, también su fondo.
+            cached.code_boxes.clear();
             ftxui::Element element =
                 entry_element(cached, entry, width, palette, first_code) | palette.base();
             // El ajuste de líneas es propio (sin flexbox), así que el alto
@@ -207,6 +216,18 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
             const int height = std::max(element->requirement().min_y, 1);
             auto image = std::make_shared<ftxui::Screen>(width, height);
             ftxui::Render(*image, element);
+            // Render dejó las cajas de los marcos en coordenadas de la imagen,
+            // que son las de la entrada.
+            cached.code_frames.clear();
+            if (!cached.code_boxes.empty()) {
+                const std::vector<CodeBlock> blocks = code_blocks_of(cached.document);
+                for (std::size_t b = 0; b < cached.code_boxes.size() && b < blocks.size(); ++b) {
+                    const int number = first_code + static_cast<int>(b);
+                    cached.code_frames.push_back(
+                        CodeFrame{number, cached.code_boxes[b],
+                                  ftxui::string_width(md::code_title(number, blocks[b].info))});
+                }
+            }
             cached.image = std::move(image);
             cached.width = width;
             cached.palette_key = palette_key;

@@ -8,6 +8,7 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/string.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -409,4 +410,35 @@ TEST_CASE("historial: el número del primer bloque es parte de la caché", "[his
     CHECK(draw(view, entries, 40, {4}).find(" #4 · cpp ") != std::string::npos);
     CHECK(view.draw_count() == 2);
     CHECK(view.parse_count() == 1); // El árbol sirve igual.
+}
+
+TEST_CASE("historial: guarda la caja, el número y el título de cada bloque",
+          "[historial][code_blocks]") {
+    const std::vector<Entry> entries{
+        make(EntryKind::Assistant, "Uno:\n\n```cpp\nint a;\n```\n\n- ```\n  x\n  ```"),
+        make(EntryKind::User, "hola"),
+    };
+    HistoryView view;
+    ftxui::Element element = view.render(entries, 40, chatbot::cli::terminal_palette(), {3, 5});
+    ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40),
+                                                 ftxui::Dimension::Fit(element, true));
+    ftxui::Render(screen, element);
+    const std::vector<chatbot::cli::CodeFrame>& frames = view.code_frames(0);
+    REQUIRE(frames.size() == 2);
+    CHECK(frames[0].number == 3);
+    CHECK(frames[1].number == 4);
+    CHECK(frames[0].title_width == ftxui::string_width(" #3 · cpp "));
+    CHECK(frames[1].title_width == ftxui::string_width(" #4 "));
+    // La primera entrada empieza en la fila 0: sus coordenadas son las de la pantalla.
+    for (const chatbot::cli::CodeFrame& frame : frames) {
+        CHECK(screen.CellAt(frame.box.x_min, frame.box.y_min).character == "╭");
+        CHECK(screen.CellAt(frame.box.x_max, frame.box.y_max).character == "╯");
+    }
+    CHECK(view.code_frames(1).empty());
+    CHECK(view.code_frames(7).empty());
+
+    // Sin números, sin cajas.
+    HistoryView plain;
+    (void)plain.render(entries, 40, chatbot::cli::terminal_palette());
+    CHECK(plain.code_frames(0).empty());
 }
