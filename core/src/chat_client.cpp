@@ -166,6 +166,7 @@ bool is_retryable(ErrorKind kind) {
     case ErrorKind::InvalidRequest:
     case ErrorKind::Config:
     case ErrorKind::Cancelled:
+    case ErrorKind::NoSearchResults:
         return false;
     }
     return false;

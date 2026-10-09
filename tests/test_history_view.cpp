@@ -275,6 +275,61 @@ TEST_CASE("historial: fuentes de una búsqueda con hipervínculos y texto filtra
     }
 }
 
+TEST_CASE("historial: fuentes con y sin fecha de publicación", "[historial][busqueda]") {
+    Entry sources;
+    sources.kind = EntryKind::Sources;
+    sources.sources = {
+        {"Con fecha", "https://ejemplo.com/1", "c", "2026-10-04"},
+        {"Sin fecha", "https://ejemplo.com/2", "c", ""},
+        {"", "https://ejemplo.com/3", "c", "2026-10-05"},
+    };
+    HistoryView view;
+    const std::string text = draw(view, {sources}, 80);
+    CHECK(text.find("[1] Con fecha — 2026-10-04 (https://ejemplo.com/1)") != std::string::npos);
+    CHECK(text.find("[2] Sin fecha (https://ejemplo.com/2)") != std::string::npos);
+    CHECK(text.find("[3] https://ejemplo.com/3 — 2026-10-05") != std::string::npos);
+    CHECK(text.find("(https://ejemplo.com/3)") == std::string::npos);
+}
+
+TEST_CASE("historial: una fuente con URL que no es web es texto sin enlace",
+          "[historial][busqueda]") {
+    Entry sources;
+    sources.kind = EntryKind::Sources;
+    sources.sources = {
+        {"Malo", "javascript:alert(1)", "c", "2026-10-04"},
+        {"", "file:///etc/passwd", "c", ""},
+        {"Bueno", "https://ejemplo.com/1", "c", ""},
+    };
+    HistoryView view;
+    ftxui::Element element = view.render({sources}, 80, chatbot::cli::terminal_palette());
+    ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(80),
+                                                 ftxui::Dimension::Fit(element, true));
+    ftxui::Render(screen, element);
+    const std::string text = screen_text(screen);
+    CHECK(text.find("[1] Malo — 2026-10-04 (javascript:alert(1))") != std::string::npos);
+    CHECK(text.find("[2] file:///etc/passwd") != std::string::npos);
+    CHECK(text.find("[3] Bueno (https://ejemplo.com/1)") != std::string::npos);
+
+    std::set<std::string> links;
+    for (int y = 0; y < screen.dimy(); ++y) {
+        for (int x = 0; x < screen.dimx(); ++x) {
+            const ftxui::Cell& cell = screen.CellAt(x, y);
+            if (cell.hyperlink != 0) {
+                links.insert(screen.Hyperlink(cell.hyperlink));
+            }
+        }
+    }
+    CHECK(links == std::set<std::string>{"https://ejemplo.com/1"});
+    // Sin subrayado: no parece enlace (el enlace válido sí lo lleva).
+    bool good_underlined = false;
+    for (int x = 0; x < screen.dimx(); ++x) {
+        CHECK_FALSE(screen.CellAt(x, 1).underlined);
+        CHECK_FALSE(screen.CellAt(x, 2).underlined);
+        good_underlined = good_underlined || screen.CellAt(x, 3).underlined;
+    }
+    CHECK(good_underlined);
+}
+
 TEST_CASE("historial: la caché vuelve a dibujar si cambian las fuentes",
           "[historial][busqueda]") {
     Entry sources;
@@ -286,7 +341,11 @@ TEST_CASE("historial: la caché vuelve a dibujar si cambian las fuentes",
     (void)draw(view, {sources}, 40);
     CHECK(view.draw_count() == drawn);
     sources.sources[0].url = "https://ejemplo.com/2";
-    const std::string text = draw(view, {sources}, 40);
+    std::string text = draw(view, {sources}, 40);
     CHECK(view.draw_count() == drawn + 1);
     CHECK(text.find("https://ejemplo.com/2") != std::string::npos);
+    sources.sources[0].published_date = "2026-10-04";
+    text = draw(view, {sources}, 40);
+    CHECK(view.draw_count() == drawn + 2);
+    CHECK(text.find("2026-10-04") != std::string::npos);
 }

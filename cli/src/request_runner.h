@@ -64,7 +64,7 @@ public:
     ///
     /// Un solo canal para los errores, on_done: si la búsqueda falla, se
     /// cancela o no trae resultados, no se llama al modelo y on_done recibe
-    /// el error de la búsqueda tal cual (o BadResponse con kNoSearchResults),
+    /// el error de la búsqueda tal cual (o NoSearchResults con kNoSearchResults),
     /// con dropped 0. on_search_done solo se llama si hay resultados, antes
     /// del primer delta; desde ahí todo sigue igual que en start(). El
     /// proveedor se comparte con el hilo de trabajo: quien llama puede

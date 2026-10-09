@@ -2,6 +2,8 @@
 
 #include "markdown_view.h"
 
+#include "chatbot/web_search.h"
+
 #include <ftxui/dom/node.hpp>
 #include <ftxui/dom/requirement.hpp>
 #include <ftxui/screen/box.hpp>
@@ -25,7 +27,8 @@ ftxui::Element label(ftxui::Element element) { return ftxui::hbox({std::move(ele
 bool same_sources(const std::vector<SearchResult>& a, const std::vector<SearchResult>& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
                       [](const SearchResult& x, const SearchResult& y) {
-                          return x.title == y.title && x.url == y.url;
+                          return x.title == y.title && x.url == y.url &&
+                                 x.published_date == y.published_date;
                       });
 }
 
@@ -43,9 +46,12 @@ std::string one_line(std::string_view text) {
 }
 
 /// El bloque de fuentes como un párrafo de markdown armado a mano (sin
-/// parsear: un título no puede meter markdown): "[n] título (url)", una
-/// fuente por línea, con el título y la URL como enlace. md::render codifica
-/// la URL con hyperlink_target.
+/// parsear: un título no puede meter markdown): "[n] título — fecha (url)",
+/// una fuente por línea (sin fecha si no hay), con el título, la fecha y la
+/// URL como enlace. Sin título: "[n] url — fecha". md::render codifica la URL
+/// con hyperlink_target. Segunda defensa (TavilySearch y el lector de
+/// archivos ya las descartan): una URL que no pasa is_web_url se dibuja como
+/// texto plano, sin enlace.
 md::Document sources_document(const std::vector<SearchResult>& sources) {
     md::Block paragraph;
     paragraph.kind = md::Block::Kind::Paragraph;
@@ -56,15 +62,38 @@ md::Document sources_document(const std::vector<SearchResult>& sources) {
             paragraph.runs.push_back(std::move(line_break));
         }
         const std::string url = one_line(sources[i].url);
-        std::string title = one_line(sources[i].title);
+        const std::string title = one_line(sources[i].title);
+        const std::string date = one_line(sources[i].published_date);
         md::Run number;
         number.text = "[" + std::to_string(i + 1) + "] ";
         paragraph.runs.push_back(std::move(number));
+        if (!is_web_url(sources[i].url)) {
+            md::Run plain;
+            plain.text = title.empty() ? url : title;
+            if (!date.empty()) {
+                plain.text += " — " + date;
+            }
+            if (!title.empty()) {
+                plain.text += " (" + url + ")";
+            }
+            paragraph.runs.push_back(std::move(plain));
+            continue;
+        }
         md::Run link;
-        link.text = title.empty() ? url : std::move(title);
+        link.text = title.empty() ? url : title;
         link.link = static_cast<int>(paragraph.links.size());
         paragraph.links.push_back(md::Link{url, false});
+        md::Run dated;
+        dated.text = date.empty() ? std::string{} : " — " + date;
+        if (!title.empty()) {
+            // Dentro del enlace: md::render agrega " (url)" al cerrarlo.
+            link.text += dated.text;
+        }
         paragraph.runs.push_back(std::move(link));
+        if (title.empty() && !dated.text.empty()) {
+            // El texto del enlace ya es la URL: la fecha va fuera, sin repetirla.
+            paragraph.runs.push_back(std::move(dated));
+        }
     }
     md::Document document;
     document.blocks.push_back(std::move(paragraph));

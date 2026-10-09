@@ -49,6 +49,8 @@ TEST_CASE("TavilySearch envía el cuerpo correcto", "[tavily_search]") {
     REQUIRE(request_body["topic"] == "general");
     REQUIRE(request_body["safe_search"] == true);
     REQUIRE(request_body["country"] == "mexico");
+    // Sin él, Tavily no manda published_date con topic "general".
+    REQUIRE(request_body["include_published_date"] == true);
 
     // La key va solo en api_key, no en el cuerpo.
     REQUIRE_FALSE(request_body.contains("api_key"));
@@ -92,6 +94,37 @@ TEST_CASE("TavilySearch parsea una respuesta válida", "[tavily_search]") {
     REQUIRE(response.results[1].url == "http://localhost/2");
     REQUIRE(response.results[1].content == "Contenido 2");
     REQUIRE(response.results[1].published_date.empty());
+}
+
+TEST_CASE("TavilySearch normaliza published_date", "[tavily_search]") {
+    auto transport = std::make_unique<FakeTransport>();
+    FakeTransport* raw = transport.get();
+
+    TavilySearch search{"test-key", std::move(transport)};
+
+    // El formato del ejemplo de la documentación, null (sin fecha detectada)
+    // y uno que no se reconoce.
+    json response_body = {
+        {"results", json::array({
+            {{"url", "https://ejemplo.com/1"}, {"content", "c"},
+             {"published_date", "Sun, 04 Oct 2026 17:00:00 GMT"}},
+            {{"url", "https://ejemplo.com/2"}, {"content", "c"},
+             {"published_date", nullptr}},
+            {{"url", "https://ejemplo.com/3"}, {"content", "c"},
+             {"published_date", "hace 3 días"}}
+        })}
+    };
+    HttpResponse resp;
+    resp.status = 200;
+    resp.body = response_body.dump();
+    raw->responses.push_back(resp);
+
+    const auto result = search.search("consulta", nullptr);
+    REQUIRE(result.is_ok());
+    REQUIRE(result.value().results.size() == 3);
+    CHECK(result.value().results[0].published_date == "2026-10-04");
+    CHECK(result.value().results[1].published_date.empty());
+    CHECK(result.value().results[2].published_date == "hace 3 días");
 }
 
 TEST_CASE("TavilySearch sin results da BadResponse", "[tavily_search]") {

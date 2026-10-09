@@ -621,7 +621,7 @@ TEST_CASE("Conversation: /buscar se ve como se escribió y se envía con el bloq
     // Historial: System, User(bloque), Assistant.
     REQUIRE(conversation.history().size() == 3);
     CHECK(conversation.history()[1].role == Role::User);
-    CHECK(conversation.history()[1].content.find("Fecha de hoy: 8 de octubre de 2026.") == 0);
+    CHECK(conversation.history()[1].content.find("Fecha de la búsqueda: 8 de octubre de 2026.") == 0);
     CHECK(conversation.history()[1].content.find("<resultados id=\"nonce-1\">") !=
           std::string::npos);
 
@@ -686,7 +686,7 @@ TEST_CASE("Conversation: cada bloque reconstruido pide su propio nonce",
     REQUIRE(rebuilt.history().size() == 5);
     CHECK(rebuilt.history()[1].content.find("<resultados id=\"n1\">") != std::string::npos);
     CHECK(rebuilt.history()[3].content.find("<resultados id=\"n2\">") != std::string::npos);
-    CHECK(rebuilt.history()[3].content.find("Fecha de hoy: 9 de octubre de 2026.") == 0);
+    CHECK(rebuilt.history()[3].content.find("Fecha de la búsqueda: 9 de octubre de 2026.") == 0);
 }
 
 TEST_CASE("Conversation: sin \"date\" se usa la fecha de created_at",
@@ -699,7 +699,7 @@ TEST_CASE("Conversation: sin \"date\" se usa la fecha de created_at",
                        {Role::Assistant, "Respuesta", "m", "stop", std::nullopt}};
     const Conversation rebuilt = Conversation::from_stored(stored, "", [] { return "n"; });
     REQUIRE(rebuilt.history().size() == 2); // Sin mensaje de sistema.
-    CHECK(rebuilt.history()[0].content.find("Fecha de hoy: 2 de octubre de 2026.") == 0);
+    CHECK(rebuilt.history()[0].content.find("Fecha de la búsqueda: 2 de octubre de 2026.") == 0);
 }
 
 TEST_CASE("Conversation: una conversación vieja sin search carga igual que antes",
@@ -741,7 +741,7 @@ TEST_CASE("Conversation: sin resultados es un aviso, no un error",
     Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("/buscar nada").has_value());
     const std::string restored = conversation.finish_error(chatbot::ChatError{
-        chatbot::ErrorKind::BadResponse, 0, std::string{chatbot::cli::kNoSearchResults},
+        chatbot::ErrorKind::NoSearchResults, 0, std::string{chatbot::cli::kNoSearchResults},
         std::nullopt});
     CHECK(restored == "/buscar nada");
     REQUIRE(conversation.entries().size() == 2);
@@ -751,9 +751,47 @@ TEST_CASE("Conversation: sin resultados es un aviso, no un error",
     REQUIRE(conversation.history().size() == 1);
 }
 
+TEST_CASE("Conversation: sin resultados se detecta por el tipo, no por el texto",
+          "[conversacion][busqueda]") {
+    SECTION("NoSearchResults con otro texto sigue siendo aviso") {
+        Conversation conversation{kDefaultSystemPrompt};
+        REQUIRE(conversation.submit("/buscar nada").has_value());
+        (void)conversation.finish_error(chatbot::ChatError{
+            chatbot::ErrorKind::NoSearchResults, 0, "Otro texto cualquiera.", std::nullopt});
+        REQUIRE(conversation.entries().size() == 2);
+        CHECK(conversation.entries()[1].kind == EntryKind::Notice);
+        CHECK(conversation.entries()[1].text == "Otro texto cualquiera.");
+    }
+    SECTION("BadResponse con el texto de kNoSearchResults es un error") {
+        Conversation conversation{kDefaultSystemPrompt};
+        REQUIRE(conversation.submit("/buscar nada").has_value());
+        (void)conversation.finish_error(chatbot::ChatError{
+            chatbot::ErrorKind::BadResponse, 0, std::string{chatbot::cli::kNoSearchResults},
+            std::nullopt});
+        REQUIRE(conversation.entries().size() == 2);
+        CHECK(conversation.entries()[1].kind == EntryKind::Error);
+    }
+}
+
 TEST_CASE("Conversation: attach_search sin petición en curso no hace nada",
           "[conversacion][busqueda]") {
     Conversation conversation{kDefaultSystemPrompt};
     CHECK_FALSE(conversation.attach_search(sample_search(), "2026-10-08", "bloque"));
     CHECK(conversation.history().size() == 1);
+}
+
+TEST_CASE("Conversation: una búsqueda guardada sin resultados no deja fuentes vacías",
+          "[conversacion][busqueda][persistencia]") {
+    // Pasa si el lector descartó todos los resultados (URL que no es web).
+    chatbot::SearchResponse empty;
+    empty.query = "algo";
+    chatbot::cli::StoredConversation stored;
+    stored.id = "20261002-235800-a1b2c3";
+    stored.messages = {{Role::User, "/buscar algo", "", "",
+                        chatbot::cli::StoredSearch{"2026-10-02", empty}},
+                       {Role::Assistant, "Respuesta", "m", "stop", std::nullopt}};
+    const Conversation rebuilt = Conversation::from_stored(stored, "", [] { return "n"; });
+    REQUIRE(rebuilt.entries().size() == 2);
+    CHECK(rebuilt.entries()[0].kind == EntryKind::User);
+    CHECK(rebuilt.entries()[1].kind == EntryKind::Assistant);
 }

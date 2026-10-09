@@ -36,6 +36,13 @@ public:
         const CancelToken* cancel = nullptr) = 0;
 };
 
+/// Indica si la URL es de la web: empieza con "http://" o "https://" y tiene
+/// algo después. El esquema no distingue mayúsculas ("HTTPS://" pasa), como
+/// manda RFC 3986 §3.1; nada más se acepta (ni espacios antes, ni
+/// "javascript:", "file:", "data:"...). Solo esas URL se guardan y se dibujan
+/// como enlace.
+[[nodiscard]] bool is_web_url(std::string_view url);
+
 /// Máximo de bytes de content por resultado en el bloque de contexto.
 inline constexpr std::size_t kSearchContentMaxBytes = 1200;
 /// Máximo de bytes de content, sumando todos los resultados.
@@ -50,16 +57,18 @@ inline constexpr std::size_t kSearchTotalMaxBytes = 6000;
 [[nodiscard]] SearchResponse trim_search_response(const SearchResponse& response);
 
 /// Formatea los resultados de búsqueda como contexto para el modelo. Recorta
-/// con trim_search_response; en title, url, published_date, today y la
+/// con trim_search_response; en title, url, published_date, search_date y la
 /// consulta, además, \n se vuelve espacio. La cadena de cierre del bloque se
 /// neutraliza en todos los campos.
 ///
 /// @param response Los resultados de la búsqueda.
-/// @param today La fecha de hoy en formato legible (por ejemplo, "6 de octubre de 2026").
+/// @param search_date La fecha en que se hizo la búsqueda, en formato legible
+///                    (por ejemplo, "6 de octubre de 2026"); va como "Fecha de la
+///                    búsqueda". Al reabrir una conversación es la guardada.
 /// @param nonce Cadena aleatoria para evitar inyección de cierre de etiqueta.
 /// @return El bloque de contexto formateado.
 [[nodiscard]] std::string format_search_context(const SearchResponse& response,
-                                                std::string_view today,
+                                                std::string_view search_date,
                                                 std::string_view nonce);
 
 }  // namespace chatbot

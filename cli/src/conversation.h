@@ -87,8 +87,8 @@ public:
     /// lo regrese a la caja de entrada.
     /// Con ErrorKind::Cancelled no hay entrada de error: la respuesta parcial
     /// se marca cancelada o, si no hubo texto, se agrega un aviso (Notice).
-    /// Una búsqueda sin resultados (BadResponse con kNoSearchResults) también
-    /// es un aviso, no un error. La búsqueda adjunta, si había, se descarta.
+    /// Una búsqueda sin resultados (ErrorKind::NoSearchResults, sin importar
+    /// el texto) también es un aviso, no un error. La búsqueda adjunta, si había, se descarta.
     [[nodiscard]] std::string finish_error(const ChatError& error);
 
     /// Agrega una entrada de error en rojo (p. ej. al no poder guardar).

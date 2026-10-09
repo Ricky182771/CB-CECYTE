@@ -195,7 +195,9 @@ Conversation Conversation::from_stored(const StoredConversation& stored,
                 message.search->date.empty() ? stored.created_at : message.search->date;
             content = format_search_context(message.search->response, spanish_date(date),
                                             make_nonce());
-            sources = message.search->response.results;
+            if (!message.search->response.results.empty()) {
+                sources = message.search->response.results;
+            }
         }
         conversation.history_.push_back(Message{message.role, std::move(content)});
         conversation.entries_.push_back(
@@ -216,7 +218,7 @@ std::string Conversation::finish_error(const ChatError& error) {
     }
     pending_search_.reset();
     Entry* answer = current_answer();
-    if (error.kind == ErrorKind::BadResponse && error.message == kNoSearchResults) {
+    if (error.kind == ErrorKind::NoSearchResults) {
         // No se llamó al modelo: no hay respuesta parcial ni es un error.
         entries_.push_back(
             Entry{EntryKind::Notice, error.message, false, false, false, {}, {}});

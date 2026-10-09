@@ -1,5 +1,6 @@
 #include "chatbot/tavily_search.h"
 #include "chatbot/error.h"
+#include "published_date.h"
 
 #include <nlohmann/json.hpp>
 
@@ -74,12 +75,6 @@ std::string extract_error_message(const std::string& body, int status) {
     return "Error HTTP " + std::to_string(status);
 }
 
-/// Valida que una URL sea http:// o https://.
-bool is_valid_url(std::string_view url) {
-    return url.size() >= 8 &&
-           (url.substr(0, 8) == "https://" || url.substr(0, 7) == "http://");
-}
-
 }  // namespace
 
 class TavilySearch::Impl {
@@ -95,7 +90,8 @@ public:
             {"max_results", 5},
             {"topic", "general"},
             {"safe_search", true},
-            {"country", "mexico"}
+            {"country", "mexico"},
+            {"include_published_date", true}
         };
 
         HttpRequest request;
@@ -164,7 +160,7 @@ public:
                 continue;
             }
             result.url = item["url"].get<std::string>();
-            if (!is_valid_url(result.url)) {
+            if (!is_web_url(result.url)) {
                 continue;  // Descartar URLs no HTTP/HTTPS.
             }
 
@@ -178,8 +174,10 @@ public:
             if (item.contains("title") && item["title"].is_string()) {
                 result.title = item["title"].get<std::string>();
             }
+            // Llega como RFC 1123 ("Tue, 11 Mar 2025 17:00:00 GMT") o null.
             if (item.contains("published_date") && item["published_date"].is_string()) {
-                result.published_date = item["published_date"].get<std::string>();
+                result.published_date =
+                    normalize_published_date(item["published_date"].get<std::string>());
             }
 
             search_response.results.push_back(std::move(result));

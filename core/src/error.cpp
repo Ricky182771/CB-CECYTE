@@ -24,6 +24,8 @@ const char* error_kind_label(ErrorKind kind) {
         return "petición inválida";
     case ErrorKind::Cancelled:
         return "cancelado";
+    case ErrorKind::NoSearchResults:
+        return "búsqueda sin resultados";
     }
     return "error desconocido";
 }

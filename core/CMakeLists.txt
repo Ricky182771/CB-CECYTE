@@ -8,6 +8,7 @@ add_library(chatbot_core STATIC
     src/error.cpp
     src/error_body.cpp
     src/history.cpp
+    src/published_date.cpp
     src/config.cpp
     src/sleeper.cpp
     src/sse.cpp
