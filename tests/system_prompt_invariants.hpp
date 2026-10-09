@@ -84,8 +84,11 @@ enum class Ending {
 /// prueba falla): no debe pasar nunca.
 [[nodiscard]] inline std::vector<chatbot::Message> sent_messages_of(
     const chatbot::HttpRequest& request) {
+    // El documento va en una variable: en un for sobre parse(...).at(...)
+    // el temporal de parse se destruiría antes del ciclo.
+    const nlohmann::json body = nlohmann::json::parse(request.body);
     std::vector<chatbot::Message> messages;
-    for (const nlohmann::json& item : nlohmann::json::parse(request.body).at("messages")) {
+    for (const nlohmann::json& item : body.at("messages")) {
         const std::string role = item.at("role").get<std::string>();
         chatbot::Message message;
         if (role == "system") {
