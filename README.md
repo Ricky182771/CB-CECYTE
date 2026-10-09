@@ -239,7 +239,18 @@ Para ver cómo se muestra un archivo markdown sin usar la API:
 
 ### Copiar, guardar y exportar
 
-Los bloques de código de las respuestas se numeran desde 1 en toda la conversación, en el orden en que aparecen; el número va en el título del bloque (`#3 · cpp`). Estos comandos no se envían al modelo ni entran al historial: el resultado aparece como un aviso en la conversación.
+Los bloques de código de las respuestas se numeran desde 1 en toda la conversación, en el orden en que aparecen; el número va en el título del bloque (`#3 · cpp`).
+
+**Con el ratón.** Cada bloque lleva a la derecha de su título los botones `[Copiar]` y `[Guardar]`. Si el bloque es más alto que la pantalla, al bajar con la rueda los botones se quedan pegados a la primera fila visible del bloque y desaparecen con él cuando ya no queda ninguna fila de código a la vista.
+
+- `[Copiar]` copia el bloque y cambia a `[✓ Copiado]` hasta que mueves el puntero fuera del botón o pasan 2 segundos.
+- `[Guardar]` lo guarda con el nombre por defecto (`bloque-3.cpp`). Para otro nombre, usa `/guardar 3 suma.cpp`.
+- `[Exportar]`, a la derecha de la barra de título, exporta la conversación. Sin respuestas que exportar se ve atenuado y no hace nada.
+- El resultado (con qué se copió, la ruta del archivo o el error) aparece en la línea de estado. Los botones no agregan nada a la conversación ni mueven la vista: puedes copiar un bloque de la mitad de la conversación sin que salte al final.
+- Funcionan también mientras llega una respuesta: un bloque que sigue llegando se copia como va, y el aviso dice `Ojo: el bloque está incompleto (la respuesta aún no termina)`. Lo mismo pasa con un bloque de una respuesta cancelada o cortada por un error.
+- En una terminal angosta los botones se acortan a `[C]` `[G]`; si tampoco caben, no se muestran (los comandos siguen funcionando). Con el puntero encima van en el color de selección del tema (invertidos con `NO_COLOR`).
+
+**Con comandos**, para cuando no hay ratón (por ejemplo, por SSH desde una terminal que no lo manda) o prefieres el teclado. No se envían al modelo ni entran al historial: el resultado aparece como un aviso en la conversación.
 
 | Comando | Qué hace |
 |---|---|
