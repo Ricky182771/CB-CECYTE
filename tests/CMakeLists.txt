@@ -15,6 +15,7 @@ find_package(nlohmann_json 3.9 REQUIRED)
 
 add_executable(chatbot_tests
     test_cancel.cpp
+    test_command_parser.cpp
     test_config.cpp
     test_conversation.cpp
     test_conversation_list.cpp
@@ -30,10 +31,15 @@ add_executable(chatbot_tests
     test_retries.cpp
     test_request_body.cpp
     test_request_runner.cpp
+    test_search_config.cpp
+    test_search_context.cpp
+    test_search_settings.cpp
     test_sidebar.cpp
     test_sse.cpp
     test_streaming.cpp
-    test_system_prompt.cpp)
+    test_system_prompt.cpp
+    test_tavily_search.cpp
+    test_web_search.cpp)
 
 target_compile_features(chatbot_tests PRIVATE cxx_std_20)
 target_include_directories(chatbot_tests PRIVATE

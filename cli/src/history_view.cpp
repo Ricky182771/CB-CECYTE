@@ -8,7 +8,11 @@
 #include <ftxui/screen/color.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace chatbot::cli {
 
@@ -18,9 +22,53 @@ namespace {
 /// de la entrada se estiraría a todo el ancho, y el estilo con ella.
 ftxui::Element label(ftxui::Element element) { return ftxui::hbox({std::move(element)}); }
 
+bool same_sources(const std::vector<SearchResult>& a, const std::vector<SearchResult>& b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(),
+                      [](const SearchResult& x, const SearchResult& y) {
+                          return x.title == y.title && x.url == y.url;
+                      });
+}
+
 bool same_entry(const Entry& a, const Entry& b) {
     return a.kind == b.kind && a.in_progress == b.in_progress && a.incomplete == b.incomplete &&
-           a.cancelled == b.cancelled && a.text == b.text && a.note == b.note;
+           a.cancelled == b.cancelled && a.text == b.text && a.note == b.note &&
+           same_sources(a.sources, b.sources);
+}
+
+/// Texto filtrado (md::sanitize) en una sola línea.
+std::string one_line(std::string_view text) {
+    std::string out = md::sanitize(text);
+    std::replace(out.begin(), out.end(), '\n', ' ');
+    return out;
+}
+
+/// El bloque de fuentes como un párrafo de markdown armado a mano (sin
+/// parsear: un título no puede meter markdown): "[n] título (url)", una
+/// fuente por línea, con el título y la URL como enlace. md::render codifica
+/// la URL con hyperlink_target.
+md::Document sources_document(const std::vector<SearchResult>& sources) {
+    md::Block paragraph;
+    paragraph.kind = md::Block::Kind::Paragraph;
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        if (i > 0) {
+            md::Run line_break;
+            line_break.kind = md::Run::Kind::LineBreak;
+            paragraph.runs.push_back(std::move(line_break));
+        }
+        const std::string url = one_line(sources[i].url);
+        std::string title = one_line(sources[i].title);
+        md::Run number;
+        number.text = "[" + std::to_string(i + 1) + "] ";
+        paragraph.runs.push_back(std::move(number));
+        md::Run link;
+        link.text = title.empty() ? url : std::move(title);
+        link.link = static_cast<int>(paragraph.links.size());
+        paragraph.links.push_back(md::Link{url, false});
+        paragraph.runs.push_back(std::move(link));
+    }
+    md::Document document;
+    document.blocks.push_back(std::move(paragraph));
+    return document;
 }
 
 /// Nodo que muestra una entrada ya dibujada: copia solo las celdas que caen
@@ -97,6 +145,9 @@ ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, in
         return md::render_plain(entry.text, width, palette.ink(&Theme::error));
     case EntryKind::Notice:
         return md::render_plain(entry.text, width, notice);
+    case EntryKind::Sources:
+        return ftxui::vbox({label(ftxui::text("Fuentes:") | ftxui::bold | notice),
+                            md::render(sources_document(entry.sources), width, palette)});
     }
     return ftxui::text("");
 }

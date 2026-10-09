@@ -9,6 +9,8 @@
 #include <ftxui/screen/screen.hpp>
 
 #include <chrono>
+#include <cstddef>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -223,4 +225,68 @@ TEST_CASE("historial: el estilo de etiquetas y texto plano no se estira", "[hist
     const std::string text = screen_text(screen);
     CHECK(text.find("Falló la conexión.") != std::string::npos);
     CHECK(screen.CellAt(0, 0).bold); // "Tú:"
+}
+
+TEST_CASE("historial: fuentes de una búsqueda con hipervínculos y texto filtrado",
+          "[historial][busqueda]") {
+    Entry sources;
+    sources.kind = EntryKind::Sources;
+    sources.sources = {
+        {"Crónica del partido", "https://ejemplo.com/cronica", "contenido", ""},
+        {"", "https://ejemplo.com/sin-titulo", "contenido", ""},
+        {"Malo\x1b[31m\nrojo", "https://ejemplo.com/a b\x07", "contenido", ""},
+    };
+    HistoryView view;
+    ftxui::Element element = view.render({sources}, 80, chatbot::cli::terminal_palette());
+    ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(80),
+                                                 ftxui::Dimension::Fit(element, true));
+    ftxui::Render(screen, element);
+    const std::string text = screen_text(screen);
+
+    CHECK(text.find("Fuentes:") != std::string::npos);
+    CHECK(text.find("[1] Crónica del partido (https://ejemplo.com/cronica)") !=
+          std::string::npos);
+    // Sin título, la URL una sola vez.
+    CHECK(text.find("[2] https://ejemplo.com/sin-titulo ") != std::string::npos);
+    CHECK(text.find("(https://ejemplo.com/sin-titulo)") == std::string::npos);
+    // ESC y BEL no llegan a la pantalla; el salto de línea del título es un espacio.
+    CHECK(text.find('\x1b') == std::string::npos);
+    CHECK(text.find('\x07') == std::string::npos);
+    CHECK(text.find("[3] Malo") != std::string::npos);
+
+    // Los enlaces salen de la búsqueda, codificados para OSC 8.
+    std::set<std::string> links;
+    for (int y = 0; y < screen.dimy(); ++y) {
+        for (int x = 0; x < screen.dimx(); ++x) {
+            const ftxui::Cell& cell = screen.CellAt(x, y);
+            if (cell.hyperlink != 0) {
+                links.insert(screen.Hyperlink(cell.hyperlink));
+            }
+        }
+    }
+    CHECK(links.count("https://ejemplo.com/cronica") == 1);
+    CHECK(links.count("https://ejemplo.com/sin-titulo") == 1);
+    REQUIRE(links.size() == 3);
+    for (const std::string& link : links) {
+        for (const char c : link) {
+            const auto byte = static_cast<unsigned char>(c);
+            CHECK((byte >= 0x21 && byte <= 0x7E));
+        }
+    }
+}
+
+TEST_CASE("historial: la caché vuelve a dibujar si cambian las fuentes",
+          "[historial][busqueda]") {
+    Entry sources;
+    sources.kind = EntryKind::Sources;
+    sources.sources = {{"Uno", "https://ejemplo.com/1", "c", ""}};
+    HistoryView view;
+    (void)draw(view, {sources}, 40);
+    const std::size_t drawn = view.draw_count();
+    (void)draw(view, {sources}, 40);
+    CHECK(view.draw_count() == drawn);
+    sources.sources[0].url = "https://ejemplo.com/2";
+    const std::string text = draw(view, {sources}, 40);
+    CHECK(view.draw_count() == drawn + 1);
+    CHECK(text.find("https://ejemplo.com/2") != std::string::npos);
 }

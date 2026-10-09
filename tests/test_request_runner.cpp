@@ -4,6 +4,7 @@
 #include "blocking_transport.hpp"
 #include "chatbot/chat_client.h"
 #include "chatbot/sleeper.h"
+#include "chatbot/tavily_search.h"
 #include "fake_transport.hpp"
 
 #include <nlohmann/json.hpp>
@@ -382,4 +383,217 @@ TEST_CASE("RequestRunner: cancelar antes de que corra on_done convierte el éxit
     REQUIRE(harness.outcome.result->is_error());
     CHECK(harness.outcome.result->error().kind == ErrorKind::Cancelled);
     CHECK(harness.outcome.done_calls == 1);
+}
+
+// Pruebas de start_with_search.
+
+namespace {
+
+/// Respuesta 200 de Tavily con los resultados dados (título, url, contenido).
+HttpResponse tavily_response(const nlohmann::json& results) {
+    HttpResponse response;
+    response.status = 200;
+    response.body = nlohmann::json{{"query", "q"}, {"results", results}}.dump();
+    return response;
+}
+
+/// Lo que el hilo de la interfaz recibió de on_search_done.
+struct SearchOutcome {
+    std::optional<RequestRunner::SearchContext> context;
+    int calls = 0;
+};
+
+/// Lanza start_with_search con el historial de sample_messages() más el
+/// mensaje del comando, como lo arma Conversation::submit.
+bool start_search(RunnerHarness& harness, std::shared_ptr<chatbot::SearchProvider> provider,
+                  SearchOutcome& search) {
+    std::vector<Message> history = {Message{Role::System, "Eres un asistente de prueba."},
+                                    Message{Role::User, "/buscar consulta de prueba"}};
+    return harness.runner->start_with_search(
+        std::move(history), "consulta de prueba", std::move(provider), "8 de octubre de 2026",
+        [&harness, &search](RequestRunner::SearchContext context) {
+            harness.outcome.off_thread_callback |=
+                std::this_thread::get_id() != harness.ui_thread;
+            search.context = std::move(context);
+            ++search.calls;
+        },
+        [&harness](std::string delta) {
+            harness.outcome.off_thread_callback |=
+                std::this_thread::get_id() != harness.ui_thread;
+            harness.outcome.deltas.push_back(std::move(delta));
+        },
+        [&harness](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
+            harness.outcome.off_thread_callback |=
+                std::this_thread::get_id() != harness.ui_thread;
+            harness.outcome.result = std::move(result);
+            harness.outcome.dropped = dropped;
+            ++harness.outcome.done_calls;
+        });
+}
+
+} // namespace
+
+TEST_CASE("RequestRunner: búsqueda bien hecha y luego streaming con un solo User",
+          "[runner][hilos][busqueda]") {
+    auto transport = std::make_unique<chatbot_test::FakeTransport>();
+    chatbot_test::FakeTransport* model = transport.get();
+    model->responses.push_back(
+        HttpResponse{200, sse_flow({"Según [1], ", "ganó."}), std::nullopt, false, ""});
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
+
+    auto search_transport = std::make_unique<chatbot_test::FakeTransport>();
+    search_transport->responses.push_back(tavily_response(nlohmann::json::array(
+        {{{"title", "Resultado 1"},
+          {"url", "https://ejemplo.com/1"},
+          {"content", "Contenido del resultado 1"},
+          {"published_date", "2026-10-07"}}})));
+    auto provider = std::make_shared<chatbot::TavilySearch>("clave-ficticia",
+                                                            std::move(search_transport));
+
+    SearchOutcome search;
+    REQUIRE(start_search(harness, provider, search));
+    REQUIRE(harness.wait_done());
+
+    // on_search_done: una vez, con los resultados y el bloque.
+    REQUIRE(search.calls == 1);
+    REQUIRE(search.context.has_value());
+    REQUIRE(search.context->response.results.size() == 1);
+    CHECK(search.context->response.results[0].title == "Resultado 1");
+    CHECK(search.context->block.find("Fecha de hoy: 8 de octubre de 2026.") == 0);
+
+    REQUIRE(harness.outcome.result.has_value());
+    REQUIRE(harness.outcome.result->is_ok());
+    REQUIRE(harness.outcome.deltas.size() == 2);
+    CHECK(harness.outcome.done_calls == 1);
+    CHECK_FALSE(harness.outcome.off_thread_callback);
+
+    // Al modelo: System + User(bloque) = 2 mensajes, sin dos User seguidos.
+    REQUIRE(model->requests.size() == 1);
+    const auto messages = nlohmann::json::parse(model->requests[0].body).at("messages");
+    REQUIRE(messages.size() == 2);
+    CHECK(messages[0].at("role") == "system");
+    CHECK(messages[1].at("role") == "user");
+    const std::string sent = messages[1].at("content").get<std::string>();
+    CHECK(sent == search.context->block);
+    CHECK(sent.find("/buscar") == std::string::npos);
+    CHECK(sent.find("[1] Resultado 1 — https://ejemplo.com/1 — 2026-10-07\n"
+                    "Contenido del resultado 1\n") != std::string::npos);
+    CHECK(sent.find("Pregunta del usuario: consulta de prueba\n") != std::string::npos);
+}
+
+TEST_CASE("RequestRunner: si la búsqueda falla no hay petición al modelo",
+          "[runner][hilos][busqueda]") {
+    auto transport = std::make_unique<chatbot_test::FakeTransport>();
+    chatbot_test::FakeTransport* model = transport.get();
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
+
+    auto search_transport = std::make_unique<chatbot_test::FakeTransport>();
+    HttpResponse unauthorized;
+    unauthorized.status = 401;
+    unauthorized.body = R"({"detail": {"error": "Unauthorized: missing or invalid API key."}})";
+    search_transport->responses.push_back(unauthorized);
+    auto provider = std::make_shared<chatbot::TavilySearch>("clave-ficticia",
+                                                            std::move(search_transport));
+
+    SearchOutcome search;
+    REQUIRE(start_search(harness, provider, search));
+    REQUIRE(harness.wait_done());
+
+    // El error llega solo por on_done.
+    CHECK(search.calls == 0);
+    REQUIRE(harness.outcome.result.has_value());
+    REQUIRE(harness.outcome.result->is_error());
+    CHECK(harness.outcome.result->error().kind == ErrorKind::Auth);
+    CHECK(harness.outcome.result->error().message == "La key de búsqueda no es válida");
+    CHECK(harness.outcome.done_calls == 1);
+    CHECK(harness.outcome.dropped == 0);
+    CHECK(harness.outcome.deltas.empty());
+    CHECK(model->requests.empty());
+    CHECK_FALSE(harness.runner->busy());
+}
+
+TEST_CASE("RequestRunner: búsqueda sin resultados no llama al modelo",
+          "[runner][hilos][busqueda]") {
+    auto transport = std::make_unique<chatbot_test::FakeTransport>();
+    chatbot_test::FakeTransport* model = transport.get();
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
+
+    auto search_transport = std::make_unique<chatbot_test::FakeTransport>();
+    SECTION("results vacío") {
+        search_transport->responses.push_back(tavily_response(nlohmann::json::array()));
+    }
+    SECTION("todos los resultados se descartan") {
+        search_transport->responses.push_back(tavily_response(nlohmann::json::array(
+            {{{"title", "x"}, {"url", "javascript:alert(1)"}, {"content", "c"}}})));
+    }
+    auto provider = std::make_shared<chatbot::TavilySearch>("clave-ficticia",
+                                                            std::move(search_transport));
+
+    SearchOutcome search;
+    REQUIRE(start_search(harness, provider, search));
+    REQUIRE(harness.wait_done());
+
+    CHECK(search.calls == 0);
+    REQUIRE(harness.outcome.result.has_value());
+    REQUIRE(harness.outcome.result->is_error());
+    CHECK(harness.outcome.result->error().message == "La búsqueda no encontró resultados.");
+    CHECK(harness.outcome.done_calls == 1);
+    CHECK(model->requests.empty());
+}
+
+TEST_CASE("RequestRunner: cancelar durante la búsqueda no llama al modelo",
+          "[runner][hilos][busqueda]") {
+    auto transport = std::make_unique<chatbot_test::FakeTransport>();
+    chatbot_test::FakeTransport* model = transport.get();
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
+
+    auto search_transport = std::make_unique<BlockingTransport>(BlockingTransport::Mode::Block);
+    BlockingTransport* blocking = search_transport.get();
+    auto provider = std::make_shared<chatbot::TavilySearch>("clave-ficticia",
+                                                            std::move(search_transport));
+
+    SearchOutcome search;
+    REQUIRE(start_search(harness, provider, search));
+    REQUIRE(blocking->started.wait_for(kThreadTimeout));
+    // La búsqueda recibió el token del runner.
+    REQUIRE(blocking->requests().size() == 1);
+    CHECK(blocking->requests()[0].cancel != nullptr);
+
+    const auto begin = Clock::now();
+    harness.runner->cancel();
+    REQUIRE(harness.wait_done());
+    chatbot_test::report_latency("cancelar durante la búsqueda", Clock::now() - begin);
+
+    REQUIRE(harness.outcome.result.has_value());
+    REQUIRE(harness.outcome.result->is_error());
+    CHECK(harness.outcome.result->error().kind == ErrorKind::Cancelled);
+    CHECK(harness.outcome.done_calls == 1);
+    CHECK(search.calls == 0);
+    CHECK(model->requests.empty());
+}
+
+TEST_CASE("RequestRunner: cancelar durante la respuesta después de buscar",
+          "[runner][hilos][busqueda]") {
+    auto transport = std::make_unique<BlockingTransport>(BlockingTransport::Mode::Block);
+    BlockingTransport* model = transport.get();
+    model->first_chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"Hola\"}}]}\n\n";
+    RunnerHarness harness(std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
+
+    auto search_transport = std::make_unique<chatbot_test::FakeTransport>();
+    search_transport->responses.push_back(tavily_response(nlohmann::json::array(
+        {{{"title", "R"}, {"url", "https://ejemplo.com"}, {"content", "c"}}})));
+    auto provider = std::make_shared<chatbot::TavilySearch>("clave-ficticia",
+                                                            std::move(search_transport));
+
+    SearchOutcome search;
+    REQUIRE(start_search(harness, provider, search));
+    REQUIRE(model->started.wait_for(kThreadTimeout));
+    harness.runner->cancel();
+    REQUIRE(harness.wait_done());
+
+    CHECK(search.calls == 1);
+    REQUIRE(harness.outcome.result.has_value());
+    REQUIRE(harness.outcome.result->is_error());
+    CHECK(harness.outcome.result->error().kind == ErrorKind::Cancelled);
+    CHECK(harness.outcome.deltas == std::vector<std::string>{"Hola"});
 }

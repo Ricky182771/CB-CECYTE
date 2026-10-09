@@ -33,11 +33,13 @@ StoredConversation sample(const std::string& id, const std::string& updated_at) 
     conversation.created_at = "2026-10-02T23:58:00-06:00";
     conversation.updated_at = updated_at;
     conversation.messages = {
-        StoredMessage{Role::User, "¿Cuánto es la raíz cuadrada de 64? 🤔 ñandú 日本語", "", ""},
+        StoredMessage{Role::User, "¿Cuánto es la raíz cuadrada de 64? 🤔 ñandú 日本語", "", "",
+                      std::nullopt},
         StoredMessage{Role::Assistant, "La raíz cuadrada de 64 es **8**. ✅",
-                      "nvidia/nemotron-3-super-120b-a12b", "stop"},
-        StoredMessage{Role::User, "¿Y de 81?", "", ""},
-        StoredMessage{Role::Assistant, "Es 9, pero me cor", "otro/modelo", "length"},
+                      "nvidia/nemotron-3-super-120b-a12b", "stop", std::nullopt},
+        StoredMessage{Role::User, "¿Y de 81?", "", "", std::nullopt},
+        StoredMessage{Role::Assistant, "Es 9, pero me cor", "otro/modelo", "length",
+                      std::nullopt},
     };
     return conversation;
 }
@@ -331,4 +333,90 @@ TEST_CASE("ConversationStore: el JSON sigue el orden del esquema", "[almacen]") 
     CHECK(role < content);
     CHECK(content < model);
     CHECK(model < finish);
+}
+
+TEST_CASE("ConversationStore: guardar y cargar conserva la búsqueda de un /buscar",
+          "[almacen][busqueda]") {
+    const ScopedTempDir temp;
+    const ConversationStore store{temp.string()};
+    StoredConversation original = sample("20261008-120000-abcdef", "2026-10-08T12:00:00-06:00");
+    chatbot::cli::StoredSearch search;
+    search.date = "2026-10-08";
+    search.response.query = "clima en León";
+    search.response.results = {
+        {"Pronóstico — León", "https://ejemplo.com/clima", "Soleado, 25 °C.\nViento débil.",
+         "2026-10-08"},
+        {"", "https://ejemplo.com/b", "Sin título", ""},
+    };
+    original.messages[0].content = "/buscar clima en León";
+    original.messages[0].search = search;
+
+    REQUIRE_FALSE(store.save(original).has_value());
+    const LoadResult loaded = store.load(original.id);
+    REQUIRE(loaded.conversation.has_value());
+    const StoredMessage& first = loaded.conversation->messages[0];
+    CHECK(first.content == "/buscar clima en León");
+    REQUIRE(first.search.has_value());
+    CHECK(first.search->date == "2026-10-08");
+    CHECK(first.search->response.query == "clima en León");
+    REQUIRE(first.search->response.results.size() == 2);
+    for (std::size_t i = 0; i < 2; ++i) {
+        const chatbot::SearchResult& a = first.search->response.results[i];
+        const chatbot::SearchResult& b = search.response.results[i];
+        CHECK(a.title == b.title);
+        CHECK(a.url == b.url);
+        CHECK(a.content == b.content);
+        CHECK(a.published_date == b.published_date);
+    }
+    // Solo el mensaje que la tenía.
+    for (std::size_t i = 1; i < loaded.conversation->messages.size(); ++i) {
+        CHECK_FALSE(loaded.conversation->messages[i].search.has_value());
+    }
+    // Sigue siendo la versión 1, con "search" dentro del mensaje.
+    const std::string json = read_file(temp.path() / (original.id + ".json"));
+    CHECK_THAT(json, Catch::Matchers::ContainsSubstring("\"version\": 1"));
+    const std::size_t at = json.find("\"search\"");
+    REQUIRE(at != std::string::npos);
+    CHECK(json.find("\"query\"", at) < json.find("\"date\"", at));
+    CHECK(json.find("\"date\"", at) < json.find("\"results\"", at));
+}
+
+TEST_CASE("ConversationStore: un archivo sin \"search\" y con llaves desconocidas carga igual",
+          "[almacen][busqueda]") {
+    const ScopedTempDir temp;
+    const ConversationStore store{temp.string()};
+    write_file(temp.path() / "20261001-100000-000001.json",
+               R"({"version": 1, "id": "20261001-100000-000001", "title": "Hola",
+                   "futura": {"x": 1},
+                   "messages": [{"role": "user", "content": "Hola", "otra": true},
+                                {"role": "assistant", "content": "Qué tal", "model": "m",
+                                 "finish_reason": "stop"}]})");
+    const LoadResult loaded = store.load("20261001-100000-000001");
+    REQUIRE(loaded.conversation.has_value());
+    REQUIRE(loaded.conversation->messages.size() == 2);
+    CHECK_FALSE(loaded.conversation->messages[0].search.has_value());
+    CHECK(loaded.conversation->messages[0].content == "Hola");
+}
+
+TEST_CASE("ConversationStore: una búsqueda mal formada hace ilegible el archivo",
+          "[almacen][busqueda]") {
+    const ScopedTempDir temp;
+    const ConversationStore store{temp.string()};
+    const std::string id = "20261001-100000-000001";
+    const std::string bad_searches[] = {
+        R"("search": "texto")",
+        R"("search": {"query": "q"})",
+        R"("search": {"query": "q", "results": [1]})",
+        R"("search": {"query": 5, "results": []})",
+        R"("search": {"query": "q", "results": [{"url": 3}]})",
+    };
+    for (const std::string& search : bad_searches) {
+        INFO(search);
+        write_file(temp.path() / (id + ".json"),
+                   R"({"version": 1, "id": ")" + id +
+                       R"(", "messages": [{"role": "user", "content": "x", )" + search + "}]}");
+        const LoadResult loaded = store.load(id);
+        CHECK_FALSE(loaded.conversation.has_value());
+        CHECK_FALSE(loaded.error.empty());
+    }
 }

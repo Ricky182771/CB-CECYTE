@@ -72,6 +72,44 @@ bool optional_string(const json& object, const char* key, std::string& out, std:
     return true;
 }
 
+/// Lee la llave opcional "search" de un mensaje. Devuelve el error en
+/// español o nullopt (también si no está).
+std::optional<std::string> parse_search(const json& item, std::optional<StoredSearch>& out) {
+    out.reset();
+    const auto search = item.find("search");
+    if (search == item.end() || search->is_null()) {
+        return std::nullopt;
+    }
+    if (!search->is_object()) {
+        return "la búsqueda de un mensaje no es un objeto";
+    }
+    StoredSearch stored;
+    std::string error;
+    if (!optional_string(*search, "query", stored.response.query, error) ||
+        !optional_string(*search, "date", stored.date, error)) {
+        return error;
+    }
+    const auto results = search->find("results");
+    if (results == search->end() || !results->is_array()) {
+        return "la búsqueda de un mensaje no tiene la lista \"results\"";
+    }
+    for (const json& result : *results) {
+        if (!result.is_object()) {
+            return "un resultado de búsqueda no es un objeto";
+        }
+        SearchResult parsed;
+        if (!optional_string(result, "title", parsed.title, error) ||
+            !optional_string(result, "url", parsed.url, error) ||
+            !optional_string(result, "content", parsed.content, error) ||
+            !optional_string(result, "published_date", parsed.published_date, error)) {
+            return error;
+        }
+        stored.response.results.push_back(std::move(parsed));
+    }
+    out = std::move(stored);
+    return std::nullopt;
+}
+
 /// Interpreta el contenido de un archivo. Devuelve el error en español o
 /// nullopt si es válido.
 std::optional<std::string> parse_conversation(const std::string& content,
@@ -124,6 +162,9 @@ std::optional<std::string> parse_conversation(const std::string& content,
             !optional_string(item, "finish_reason", message.finish_reason, error)) {
             return error;
         }
+        if (const std::optional<std::string> search_error = parse_search(item, message.search)) {
+            return search_error;
+        }
         if (role == "user") {
             message.role = Role::User;
         } else if (role == "assistant") {
@@ -148,6 +189,21 @@ nlohmann::ordered_json to_json(const StoredConversation& conversation) {
         if (message.role == Role::Assistant) {
             item["model"] = message.model;
             item["finish_reason"] = message.finish_reason;
+        } else if (message.search.has_value()) {
+            ordered_json results = ordered_json::array();
+            for (const SearchResult& result : message.search->response.results) {
+                ordered_json entry = ordered_json::object();
+                entry["title"] = result.title;
+                entry["url"] = result.url;
+                entry["content"] = result.content;
+                entry["published_date"] = result.published_date;
+                results.push_back(std::move(entry));
+            }
+            ordered_json search = ordered_json::object();
+            search["query"] = message.search->response.query;
+            search["date"] = message.search->date;
+            search["results"] = std::move(results);
+            item["search"] = std::move(search);
         }
         messages.push_back(std::move(item));
     }

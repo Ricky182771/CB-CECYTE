@@ -13,7 +13,10 @@ add_library(chatbot_core STATIC
     src/sse.cpp
     src/curl_transport.cpp
     src/chat_client.cpp
-    src/url.cpp)
+    src/url.cpp
+    src/utf8.cpp
+    src/web_search.cpp
+    src/tavily_search.cpp)
 
 add_library(chatbot::core ALIAS chatbot_core)
 

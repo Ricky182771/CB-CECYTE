@@ -2,6 +2,7 @@
 #define CHATBOT_CLI_CONVERSATION_STORE_H
 
 #include "chatbot/types.h"
+#include "chatbot/web_search.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,15 +20,24 @@ inline constexpr int kConversationFormatVersion = 1;
 /// Largo máximo del título, en puntos de código (sin contar el "…").
 inline constexpr std::size_t kTitleMaxCodePoints = 60;
 
+/// Búsqueda web de un mensaje del usuario (/buscar), tal como se guarda:
+/// con ella se reconstruye el bloque que se envía y las fuentes.
+struct StoredSearch {
+    std::string date;        ///< "AAAA-MM-DD" local del día de la búsqueda.
+    SearchResponse response; ///< Consulta y resultados ya recortados (trim_search_response).
+};
+
 /// Un mensaje guardado. El de sistema nunca se guarda.
 struct StoredMessage {
     Role role = Role::User;
-    std::string content;
+    std::string content;       ///< En un /buscar, el texto que escribió el usuario.
     std::string model;         ///< Solo en respuestas del asistente.
     std::string finish_reason; ///< Solo en respuestas del asistente.
+    std::optional<StoredSearch> search; ///< Solo en mensajes del usuario hechos con /buscar.
 };
 
-/// Una conversación en su forma guardable (esquema versión 1).
+/// Una conversación en su forma guardable (esquema versión 1; "search" es
+/// una llave opcional que las versiones anteriores ignoran).
 struct StoredConversation {
     std::string id;
     std::string title;
