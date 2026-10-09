@@ -5,6 +5,7 @@
 #include "chatbot/chat_client.h"
 #include "chatbot/sleeper.h"
 #include "chatbot/tavily_search.h"
+#include "fake_search_provider.hpp"
 #include "fake_transport.hpp"
 
 #include <nlohmann/json.hpp>
@@ -389,13 +390,7 @@ TEST_CASE("RequestRunner: cancelar antes de que corra on_done convierte el éxit
 
 namespace {
 
-/// Respuesta 200 de Tavily con los resultados dados (título, url, contenido).
-HttpResponse tavily_response(const nlohmann::json& results) {
-    HttpResponse response;
-    response.status = 200;
-    response.body = nlohmann::json{{"query", "q"}, {"results", results}}.dump();
-    return response;
-}
+using chatbot_test::tavily_response;
 
 /// Lo que el hilo de la interfaz recibió de on_search_done.
 struct SearchOutcome {
