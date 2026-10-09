@@ -2,6 +2,7 @@
 #include "search_context.h"
 #include "system_prompt.h"
 
+#include "system_prompt_invariants.hpp"
 #include "temp_dir.hpp"
 
 #include "chatbot/error.h"
@@ -12,6 +13,7 @@
 
 #include <cstddef>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -794,4 +796,271 @@ TEST_CASE("Conversation: una búsqueda guardada sin resultados no deja fuentes v
     REQUIRE(rebuilt.entries().size() == 2);
     CHECK(rebuilt.entries()[0].kind == EntryKind::User);
     CHECK(rebuilt.entries()[1].kind == EntryKind::Assistant);
+}
+
+// Sesión larga: 300 turnos con errores, cancelaciones, búsquedas, cambios de
+// instrucciones e idas y vueltas a la forma guardable. Después de cada paso
+// se revisan los invariantes del mensaje de sistema sobre history().
+
+namespace {
+
+using chatbot_test::Ending;
+
+/// Cómo termina un turno de la sesión larga.
+enum class TurnKind {
+    Ok,
+    ErrorEmpty,      ///< Error sin texto parcial.
+    ErrorPartial,    ///< Error con texto parcial.
+    CancelEmpty,     ///< Cancelado sin texto parcial.
+    CancelPartial,   ///< Cancelado con texto parcial.
+    NoText,          ///< finish_success sin texto: se trata como error.
+    Search,          ///< /buscar con resultados y respuesta completa.
+    SearchNoResults, ///< /buscar sin resultados: no se llama al modelo.
+    SearchCancelled, ///< /buscar cancelado durante la búsqueda.
+    SearchError,     ///< /buscar con resultados y error a media respuesta.
+    SearchCancelPartial, ///< /buscar con resultados y cancelado a media respuesta.
+};
+
+TurnKind turn_kind(int turn) {
+    if (turn == 45 || turn == 245) {
+        return TurnKind::SearchNoResults;
+    }
+    if (turn == 95 || turn == 195) {
+        return TurnKind::SearchCancelled;
+    }
+    if (turn % 10 == 9) {
+        if (turn % 30 == 29) {
+            return TurnKind::SearchError;
+        }
+        return turn % 40 == 39 ? TurnKind::SearchCancelPartial : TurnKind::Search;
+    }
+    if (turn % 7 == 3) {
+        return TurnKind::ErrorEmpty;
+    }
+    if (turn % 11 == 5) {
+        return TurnKind::ErrorPartial;
+    }
+    if (turn % 13 == 6) {
+        return TurnKind::CancelEmpty;
+    }
+    if (turn % 17 == 8) {
+        return TurnKind::CancelPartial;
+    }
+    if (turn % 19 == 0) {
+        return TurnKind::NoText;
+    }
+    return TurnKind::Ok;
+}
+
+chatbot::SearchResponse session_search(int turn) {
+    chatbot::SearchResponse response;
+    response.query = "consulta " + std::to_string(turn) + " ñandú";
+    response.results = {
+        {"Resultado A " + std::to_string(turn), "https://ejemplo.com/a", "Dato A: 日本語 😀",
+         "2026-10-08"},
+        {"Resultado B", "https://ejemplo.com/b", "Dato B.\nSegunda línea.", ""},
+    };
+    return chatbot::trim_search_response(response);
+}
+
+chatbot::ChatError error_of(chatbot::ErrorKind kind, std::string message) {
+    return chatbot::ChatError{kind, 0, std::move(message), std::nullopt};
+}
+
+/// Revisa el estado sin petición en curso: invariantes, nada de User
+/// huérfano, lo guardable sin sistema y el historial alineado con los pares
+/// guardados (en los /buscar, el bloque en lugar del texto escrito).
+void check_idle(const Conversation& conversation, const std::string& prompt,
+                std::size_t completed_pairs) {
+    CHECK_FALSE(conversation.busy());
+    CHECK(chatbot_test::check_invariants(conversation.history(), prompt, Ending::Idle) == "");
+    const chatbot::cli::StoredConversation stored = conversation.to_stored("2026-10-09T12:00:00");
+    REQUIRE(stored.messages.size() == 2 * completed_pairs);
+    const std::size_t system = prompt.empty() ? 0 : 1;
+    REQUIRE(conversation.history().size() == system + stored.messages.size());
+    for (std::size_t i = 0; i < stored.messages.size(); ++i) {
+        const chatbot::cli::StoredMessage& saved = stored.messages[i];
+        const chatbot::Message& sent = conversation.history()[system + i];
+        CHECK(saved.role != Role::System);
+        CHECK(sent.role == saved.role);
+        if (saved.search.has_value()) {
+            CHECK(sent.content.rfind("Fecha de la búsqueda: ", 0) == 0);
+            CHECK(sent.content.find("Pregunta del usuario: " + saved.search->response.query +
+                                    "\n") != std::string::npos);
+        } else {
+            CHECK(sent.content == saved.content);
+        }
+    }
+}
+
+/// Tras from_stored: cada /buscar se reconstruye como bloque (con el nonce
+/// que dio make_nonce, en orden) en el historial y como el texto escrito en
+/// las entradas.
+void check_restored(const Conversation& restored, const chatbot::cli::StoredConversation& stored,
+                    const std::string& prompt, int first_nonce) {
+    const std::size_t system = prompt.empty() ? 0 : 1;
+    REQUIRE(restored.history().size() == system + stored.messages.size());
+    std::vector<std::string> user_entries;
+    std::size_t sources_entries = 0;
+    for (const Entry& entry : restored.entries()) {
+        if (entry.kind == EntryKind::User) {
+            user_entries.push_back(entry.text);
+        }
+        sources_entries += entry.kind == EntryKind::Sources ? 1 : 0;
+    }
+    std::size_t user_index = 0;
+    std::size_t searches = 0;
+    int nonce = first_nonce;
+    for (std::size_t i = 0; i < stored.messages.size(); ++i) {
+        const chatbot::cli::StoredMessage& saved = stored.messages[i];
+        if (saved.role != Role::User) {
+            continue;
+        }
+        REQUIRE(user_index < user_entries.size());
+        CHECK(user_entries[user_index++] == saved.content);
+        const std::string& sent = restored.history()[system + i].content;
+        if (saved.search.has_value()) {
+            ++searches;
+            CHECK(sent == chatbot::format_search_context(
+                              saved.search->response,
+                              chatbot::cli::spanish_date(saved.search->date),
+                              "nonce-" + std::to_string(nonce++)));
+        } else {
+            CHECK(sent == saved.content);
+        }
+    }
+    CHECK(user_index == user_entries.size());
+    CHECK(sources_entries == searches);
+}
+
+} // namespace
+
+TEST_CASE("Conversation: sesión larga de 300 turnos conserva el sistema",
+          "[conversacion][sistema][sesion]") {
+    const std::string p1 = "P1: responde en español. 🤖";
+    const std::string p2 = "P2: responde con frases cortas.\nSin listas.";
+    const std::string p3 = "P3: empieza siempre con PIÑA.";
+    std::string prompt = p1;
+    int next_nonce = 0;
+    const std::function<std::string()> make_nonce = [&next_nonce] {
+        return "nonce-" + std::to_string(++next_nonce);
+    };
+
+    Conversation conversation{prompt};
+    std::size_t completed = 0;
+    std::size_t round_trips = 0;
+    std::size_t searches_ok = 0;
+    check_idle(conversation, prompt, completed);
+
+    for (int turn = 0; turn < 300; ++turn) {
+        INFO("turno " << turn);
+        // Cambios de instrucciones a mitad de la sesión: P1 → P2 → "" → P3.
+        if (turn == 75 || turn == 150 || turn == 225) {
+            prompt = turn == 75 ? p2 : turn == 150 ? std::string{} : p3;
+            REQUIRE(conversation.set_system_prompt(prompt));
+            check_idle(conversation, prompt, completed);
+        }
+
+        const TurnKind kind = turn_kind(turn);
+        const bool search = kind == TurnKind::Search || kind == TurnKind::SearchNoResults ||
+                            kind == TurnKind::SearchCancelled || kind == TurnKind::SearchError ||
+                            kind == TurnKind::SearchCancelPartial;
+        const std::string typed = search ? "/buscar consulta " + std::to_string(turn) + " ñandú"
+                                         : "Pregunta " + std::to_string(turn) + ": " +
+                                               std::string(static_cast<std::size_t>(turn % 50), 'x') +
+                                               " ¿qué tal?";
+
+        const std::optional<std::vector<chatbot::Message>> sent = conversation.submit(typed);
+        REQUIRE(sent.has_value());
+        CHECK(chatbot_test::check_invariants(*sent, prompt, Ending::Sent, typed) == "");
+        CHECK(chatbot_test::check_invariants(conversation.history(), prompt, Ending::Sent,
+                                             typed) == "");
+
+        // Con una respuesta en curso, las instrucciones no cambian.
+        if (turn == 100) {
+            CHECK_FALSE(conversation.set_system_prompt("no debe aplicarse"));
+            CHECK(chatbot_test::check_invariants(conversation.history(), prompt, Ending::Sent,
+                                                 typed) == "");
+        }
+
+        if (kind == TurnKind::Search || kind == TurnKind::SearchError ||
+            kind == TurnKind::SearchCancelPartial) {
+            const chatbot::SearchResponse response = session_search(turn);
+            const std::string block = chatbot::format_search_context(
+                response, chatbot::cli::spanish_date("2026-10-09"),
+                "turno-" + std::to_string(turn));
+            REQUIRE(conversation.attach_search(response, "2026-10-09", block));
+            CHECK(chatbot_test::check_invariants(conversation.history(), prompt, Ending::Sent,
+                                                 block) == "");
+        }
+
+        const bool partial = kind == TurnKind::Ok || kind == TurnKind::ErrorPartial ||
+                             kind == TurnKind::CancelPartial || kind == TurnKind::Search ||
+                             kind == TurnKind::SearchError ||
+                             kind == TurnKind::SearchCancelPartial;
+        if (partial) {
+            conversation.append_delta("Respuesta " + std::to_string(turn));
+            conversation.append_delta(", parte dos.");
+            CHECK(chatbot_test::check_invariants(conversation.history(), prompt,
+                                                 Ending::Sent) == "");
+        }
+
+        switch (kind) {
+        case TurnKind::Ok:
+        case TurnKind::Search:
+            REQUIRE_FALSE(conversation.finish_success("stop", "modelo").has_value());
+            ++completed;
+            searches_ok += kind == TurnKind::Search ? 1 : 0;
+            break;
+        case TurnKind::NoText:
+            CHECK(conversation.finish_success("stop", "modelo") == typed);
+            break;
+        case TurnKind::ErrorEmpty:
+        case TurnKind::ErrorPartial:
+        case TurnKind::SearchError:
+            CHECK(conversation.finish_error(error_of(chatbot::ErrorKind::Server, "Falla.")) ==
+                  typed);
+            CHECK(conversation.entries().back().kind == EntryKind::Error);
+            break;
+        case TurnKind::CancelEmpty:
+        case TurnKind::CancelPartial:
+        case TurnKind::SearchCancelled:
+        case TurnKind::SearchCancelPartial:
+            CHECK(conversation.finish_error(error_of(chatbot::ErrorKind::Cancelled,
+                                                     "Petición cancelada por el usuario.")) ==
+                  typed);
+            break;
+        case TurnKind::SearchNoResults:
+            CHECK(conversation.finish_error(
+                      error_of(chatbot::ErrorKind::NoSearchResults,
+                               std::string{chatbot::cli::kNoSearchResults})) == typed);
+            CHECK(conversation.entries().back().kind == EntryKind::Notice);
+            break;
+        }
+        check_idle(conversation, prompt, completed);
+
+        // Cada 50 turnos: a la forma guardable y de vuelta.
+        if ((turn + 1) % 50 == 0) {
+            const chatbot::cli::StoredConversation stored =
+                conversation.to_stored("2026-10-09T12:00:00");
+            const int first_nonce = next_nonce + 1;
+            conversation = Conversation::from_stored(stored, prompt, make_nonce);
+            ++round_trips;
+            check_idle(conversation, prompt, completed);
+            check_restored(conversation, stored, prompt, first_nonce);
+            const chatbot::cli::StoredConversation again =
+                conversation.to_stored("2026-10-09T12:00:00");
+            REQUIRE(again.messages.size() == stored.messages.size());
+            for (std::size_t i = 0; i < stored.messages.size(); ++i) {
+                CHECK(again.messages[i].content == stored.messages[i].content);
+                CHECK(again.messages[i].search.has_value() ==
+                      stored.messages[i].search.has_value());
+            }
+        }
+    }
+    // La sesión pasó por todo lo que se quería probar.
+    CHECK(completed > 150);
+    CHECK(searches_ok > 10);
+    CHECK(round_trips == 6);
+    CHECK(prompt == p3);
 }
