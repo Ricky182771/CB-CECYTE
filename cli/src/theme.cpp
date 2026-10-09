@@ -334,6 +334,22 @@ ftxui::Decorator Palette::selection() const {
     };
 }
 
+void Palette::ink_cell(ftxui::Cell& cell, ThemeColor Theme::*field) const {
+    const ThemeColor color = theme_.*field;
+    cell.foreground_color = to_ftxui(has_color(color) ? color : theme_.text);
+    cell.dim = color.dim;
+}
+
+void Palette::select_cell(ftxui::Cell& cell) const {
+    cell.dim = false;
+    if (theme_.invert_selection) {
+        cell.inverted = true;
+        return;
+    }
+    cell.foreground_color = to_ftxui(theme_.selection_fg);
+    cell.background_color = to_ftxui(theme_.selection_bg);
+}
+
 ftxui::Decorator Palette::highlight() const {
     // Como antes de los temas: el fondo afuera y el texto adentro.
     const ftxui::Decorator foreground = ink(&Theme::highlight_fg);

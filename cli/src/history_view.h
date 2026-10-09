@@ -11,7 +11,9 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace chatbot::cli {
@@ -38,6 +40,15 @@ struct CodeFrame {
 /// Cada entrada se dibuja con el fondo y el color de texto de la paleta
 /// (Palette::base), porque se copia celda por celda sobre la pantalla.
 ///
+/// Botones [Copiar] [Guardar] de los bloques de código numerados: se dibujan
+/// en cada cuadro sobre las celdas ya copiadas (no son parte de la caché),
+/// alineados a la derecha y terminando una columna antes del borde derecho
+/// del marco. Van sobre el borde superior si está a la vista; si no, fijos
+/// en la primera fila visible del contenido, nunca sobre el borde inferior
+/// ni fuera del bloque. Si no caben después del título con 2 columnas de
+/// margen, [C] [G]; si tampoco, no hay botones. El puntero encima (hover) no
+/// vuelve a dibujar ninguna entrada.
+///
 /// Se usa solo desde el hilo de la interfaz.
 class HistoryView {
 public:
@@ -49,6 +60,14 @@ public:
                                         const Palette& palette,
                                         const std::vector<int>& first_code_numbers = {});
 
+    /// Puntero en (x, y) de la pantalla: el botón que esté ahí se dibuja con
+    /// el color de selección desde el siguiente cuadro.
+    void set_hover(int x, int y);
+    /// El puntero salió del historial: ningún botón con hover.
+    void clear_hover();
+    /// true (por defecto) dibuja los botones de los bloques.
+    void set_buttons_visible(bool visible) { buttons_visible_ = visible; }
+
     /// Bloques de código de la entrada i en el último render (vacío si no
     /// tiene o si se dibujó sin números).
     [[nodiscard]] const std::vector<CodeFrame>& code_frames(std::size_t entry) const;
@@ -59,6 +78,8 @@ public:
     [[nodiscard]] std::size_t draw_count() const { return draw_count_; }
 
 private:
+    class Picture;
+
     struct Cached {
         // Árbol de markdown (solo entradas del asistente).
         bool parsed = false;
@@ -81,6 +102,9 @@ private:
                                  const Palette& palette, int first_code);
 
     std::vector<Cached> cache_;
+    Palette palette_; ///< La del último render, para los botones.
+    std::optional<std::pair<int, int>> hover_; ///< Puntero (x, y), si está encima.
+    bool buttons_visible_ = true;
     std::size_t parse_count_ = 0;
     std::size_t draw_count_ = 0;
 };

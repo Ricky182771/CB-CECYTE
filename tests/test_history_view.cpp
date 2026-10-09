@@ -442,3 +442,222 @@ TEST_CASE("historial: guarda la caja, el número y el título de cada bloque",
     (void)plain.render(entries, 40, chatbot::cli::terminal_palette());
     CHECK(plain.code_frames(0).empty());
 }
+
+namespace {
+
+/// Dibuja el historial en una vista de height filas cuya primera fila
+/// visible es top, como Scroll en main.cpp (focusPosition + yframe).
+ftxui::Screen draw_view(HistoryView& view, const std::vector<Entry>& entries, int width,
+                        int height, int top, const std::vector<int>& numbers) {
+    ftxui::Element element = view.render(entries, width, chatbot::cli::terminal_palette(),
+                                         numbers) |
+                             ftxui::focusPosition(0, top + (height - 1) / 2) | ftxui::yframe;
+    ftxui::Screen screen(width, height);
+    ftxui::Render(screen, element);
+    return screen;
+}
+
+/// Texto de la fila y (una celda vacía cuenta como espacio).
+std::string row_text(const ftxui::Screen& screen, int y) {
+    std::string text;
+    for (int x = 0; x < screen.dimx(); ++x) {
+        const std::string& character = screen.CellAt(x, y).character;
+        text += character.empty() ? std::string{" "} : character;
+    }
+    return text;
+}
+
+/// Filas de la pantalla donde aparece needle.
+std::vector<int> rows_with(const ftxui::Screen& screen, const std::string& needle) {
+    std::vector<int> rows;
+    for (int y = 0; y < screen.dimy(); ++y) {
+        if (row_text(screen, y).find(needle) != std::string::npos) {
+            rows.push_back(y);
+        }
+    }
+    return rows;
+}
+
+/// Columna (en celdas) donde empieza needle en la fila y, o -1.
+int column_of(const ftxui::Screen& screen, int y, const std::string& needle) {
+    for (int x = 0; x < screen.dimx(); ++x) {
+        std::string text;
+        for (int k = x; k < screen.dimx() && text.size() < needle.size(); ++k) {
+            const std::string& character = screen.CellAt(k, y).character;
+            text += character.empty() ? std::string{" "} : character;
+        }
+        if (text.rfind(needle, 0) == 0) {
+            return x;
+        }
+    }
+    return -1;
+}
+
+bool same_cell(const ftxui::Cell& a, const ftxui::Cell& b) {
+    return a.character == b.character && a.foreground_color == b.foreground_color &&
+           a.background_color == b.background_color && a.bold == b.bold && a.dim == b.dim &&
+           a.inverted == b.inverted && a.underlined == b.underlined;
+}
+
+/// Conversación con un bloque de 40 líneas entre texto, para recorrer todos
+/// los desplazamientos de una vista de 10 filas.
+std::vector<Entry> long_block_entries() {
+    std::string code;
+    for (int i = 1; i <= 40; ++i) {
+        code += "linea " + std::to_string(i) + "\n";
+    }
+    std::string before;
+    for (int i = 0; i < 12; ++i) {
+        before += "antes " + std::to_string(i) + "\n\n";
+    }
+    std::string after;
+    for (int i = 0; i < 12; ++i) {
+        after += "\n\ndespues " + std::to_string(i);
+    }
+    return {make(EntryKind::User, "hola"),
+            make(EntryKind::Assistant, before + "```cpp\n" + code + "```" + after)};
+}
+
+} // namespace
+
+TEST_CASE("botones: fijos arriba del bloque en todos los desplazamientos",
+          "[historial][botones]") {
+    const std::vector<Entry> entries = long_block_entries();
+    const std::vector<int> numbers{1, 1};
+    constexpr int kWidth = 50;
+    constexpr int kHeight = 10;
+    // Dónde queda el bloque en el historial completo.
+    HistoryView full;
+    ftxui::Element whole = full.render(entries, kWidth, chatbot::cli::terminal_palette(), numbers);
+    ftxui::Screen all = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth),
+                                              ftxui::Dimension::Fit(whole, true));
+    ftxui::Render(all, whole);
+    const std::vector<int> tops = rows_with(all, "╭ #1 · cpp ");
+    REQUIRE(tops.size() == 1);
+    const int block_top = tops.front();
+    const std::vector<chatbot::cli::CodeFrame>& frames = full.code_frames(1);
+    REQUIRE(frames.size() == 1);
+    const int block_bottom = block_top + frames[0].box.y_max - frames[0].box.y_min;
+    REQUIRE(all.CellAt(frames[0].box.x_max, block_bottom).character == "╯");
+    const int max_top = all.dimy() - kHeight;
+    REQUIRE(block_top > kHeight);              // Al principio, el bloque está abajo.
+    REQUIRE(block_bottom < max_top);           // Al final, ya pasó.
+    const std::string labels = "[Copiar] [Guardar]";
+    const int label_x = frames[0].box.x_max - ftxui::string_width(labels);
+
+    HistoryView view;
+    HistoryView plain;
+    plain.set_buttons_visible(false);
+    int on_border = 0;
+    int pinned = 0;
+    int at_end = 0;
+    int only_bottom = 0;
+    int hidden = 0;
+    for (int top = 0; top <= max_top; ++top) {
+        INFO("primera fila visible: " << top);
+        const ftxui::Screen screen = draw_view(view, entries, kWidth, kHeight, top, numbers);
+        const std::vector<int> rows = rows_with(screen, labels);
+        const bool top_visible = block_top >= top && block_top < top + kHeight;
+        if (top_visible) {
+            // Con el borde superior a la vista, sobre el borde.
+            REQUIRE(rows.size() == 1);
+            CHECK(rows.front() == block_top - top);
+            CHECK(row_text(screen, rows.front()).find("╭ #1 · cpp ") != std::string::npos);
+            ++on_border;
+        } else if (block_top < top && top <= block_bottom - 1) {
+            // Fijos en la primera fila visible del contenido.
+            REQUIRE(rows.size() == 1);
+            CHECK(rows.front() == 0);
+            CHECK(screen.CellAt(frames[0].box.x_min, 0).character == "│");
+            ++pinned;
+            if (top == block_bottom - 1) {
+                ++at_end; // La fila bottom - 1: la última de contenido.
+            }
+        } else {
+            CHECK(rows.empty());
+            if (top == block_bottom) {
+                CHECK(screen.CellAt(frames[0].box.x_max, 0).character == "╯");
+                ++only_bottom;
+            } else {
+                ++hidden;
+            }
+        }
+        if (!rows.empty()) {
+            // Terminan una columna antes del borde derecho, sin tapar la esquina.
+            CHECK(column_of(screen, rows.front(), labels) == label_x);
+            CHECK(screen.CellAt(frames[0].box.x_max, rows.front()).character ==
+                  (top_visible ? "╮" : "│"));
+        }
+        // Fuera de la caja del bloque, todo igual que sin botones.
+        const ftxui::Screen without = draw_view(plain, entries, kWidth, kHeight, top, numbers);
+        for (int y = 0; y < kHeight; ++y) {
+            const int content_y = top + y;
+            const bool inside_block = content_y >= block_top && content_y <= block_bottom;
+            for (int x = 0; x < kWidth; ++x) {
+                const bool inside = inside_block && x >= frames[0].box.x_min &&
+                                    x <= frames[0].box.x_max;
+                if (!inside) {
+                    INFO("celda (" << x << ", " << y << ")");
+                    CHECK(same_cell(screen.CellAt(x, y), without.CellAt(x, y)));
+                }
+            }
+        }
+    }
+    CHECK(on_border > 0);
+    CHECK(pinned > 0);
+    CHECK(at_end == 1);
+    CHECK(only_bottom == 1);
+    CHECK(hidden > 0);
+}
+
+TEST_CASE("botones: completos, compactos u ocultos según el ancho", "[historial][botones]") {
+    const std::vector<Entry> entries{make(EntryKind::Assistant, "```cpp\nint a;\n```")};
+    // Título " #1 · cpp " (10 columnas) desde la columna 1, 2 de margen y los
+    // botones hasta una columna antes del borde.
+    const auto first_row = [&](int width) {
+        HistoryView view;
+        return row_text(draw_view(view, entries, width, 5, 0, {1}), 1);
+    };
+    CHECK(first_row(32).find("╭ #1 · cpp ──[Copiar] [Guardar]╮") != std::string::npos);
+    CHECK(first_row(31).find("[Copiar]") == std::string::npos);
+    CHECK(first_row(31).find("╭ #1 · cpp ────────────[C] [G]╮") != std::string::npos);
+    CHECK(first_row(21).find("╭ #1 · cpp ──[C] [G]╮") != std::string::npos);
+    CHECK(first_row(20).find("[C]") == std::string::npos);
+    CHECK(first_row(20).find("╭ #1 · cpp ────────╮") != std::string::npos);
+}
+
+TEST_CASE("botones: solo en bloques numerados", "[historial][botones]") {
+    const std::vector<Entry> entries{make(EntryKind::Assistant, "```cpp\nint a;\n```")};
+    HistoryView view;
+    CHECK(rows_with(draw_view(view, entries, 40, 5, 0, {}), "[Copiar]").empty());
+    CHECK(rows_with(draw_view(view, entries, 40, 5, 0, {1}), "[Copiar]").size() == 1);
+}
+
+TEST_CASE("botones: el puntero encima no vuelve a dibujar la entrada", "[historial][botones]") {
+    const std::vector<Entry> entries{make(EntryKind::Assistant, "```cpp\nint a;\n```")};
+    HistoryView view;
+    ftxui::Screen screen = draw_view(view, entries, 40, 5, 0, {1});
+    const std::size_t draws = view.draw_count();
+    const int copy_x = column_of(screen, 1, "[Copiar]");
+    const int save_x = column_of(screen, 1, "[Guardar]");
+    REQUIRE(copy_x > 0);
+    CHECK_FALSE(screen.CellAt(copy_x, 1).inverted);
+
+    view.set_hover(copy_x + 2, 1);
+    screen = draw_view(view, entries, 40, 5, 0, {1});
+    for (int x = copy_x; x < copy_x + 8; ++x) {
+        CHECK(screen.CellAt(x, 1).inverted); // "De la terminal": selección invertida.
+    }
+    CHECK_FALSE(screen.CellAt(copy_x + 8, 1).inverted); // El espacio entre botones.
+    CHECK_FALSE(screen.CellAt(save_x, 1).inverted);
+
+    view.set_hover(save_x, 1);
+    screen = draw_view(view, entries, 40, 5, 0, {1});
+    CHECK_FALSE(screen.CellAt(copy_x, 1).inverted);
+    CHECK(screen.CellAt(save_x, 1).inverted);
+
+    view.clear_hover();
+    screen = draw_view(view, entries, 40, 5, 0, {1});
+    CHECK_FALSE(screen.CellAt(save_x, 1).inverted);
+    CHECK(view.draw_count() == draws);
+}
