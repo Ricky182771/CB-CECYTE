@@ -61,3 +61,92 @@ TEST_CASE("parse_command preserva consultas con caracteres especiales", "[comman
     REQUIRE(result.type == ParsedCommand::Type::Search);
     REQUIRE(result.text == "¿Cuál es la capital de México?");
 }
+
+TEST_CASE("parse_command reconoce /copiar", "[command_parser]") {
+    SECTION("Sin número: el último bloque") {
+        const auto result = parse_command("/copiar");
+        REQUIRE(result.type == ParsedCommand::Type::Copy);
+        CHECK_FALSE(result.block.has_value());
+    }
+
+    SECTION("Con número y espacios de más") {
+        const auto result = parse_command("  /copiar   3  ");
+        REQUIRE(result.type == ParsedCommand::Type::Copy);
+        REQUIRE(result.block == 3);
+    }
+
+    SECTION("Un número fuera de rango lo revisa quien lo usa") {
+        const auto zero = parse_command("/copiar 0");
+        REQUIRE(zero.type == ParsedCommand::Type::Copy);
+        CHECK(zero.block == 0);
+        const auto big = parse_command("/copiar 999999999");
+        REQUIRE(big.type == ParsedCommand::Type::Copy);
+        CHECK(big.block == 999999999);
+    }
+}
+
+TEST_CASE("parse_command detecta errores de uso de /copiar", "[command_parser]") {
+    for (const char* input : {"/copiar tres", "/copiar 3 4", "/copiar -1", "/copiar 3x",
+                              "/copiar 1234567890"}) {
+        INFO(input);
+        const auto result = parse_command(input);
+        CHECK(result.type == ParsedCommand::Type::CopyUsage);
+        CHECK_FALSE(result.block.has_value());
+    }
+}
+
+TEST_CASE("parse_command reconoce /guardar", "[command_parser]") {
+    SECTION("Sin argumentos") {
+        const auto result = parse_command("/guardar");
+        REQUIRE(result.type == ParsedCommand::Type::Save);
+        CHECK_FALSE(result.block.has_value());
+        CHECK(result.file_name.empty());
+    }
+
+    SECTION("Con número") {
+        const auto result = parse_command("/guardar 3");
+        REQUIRE(result.type == ParsedCommand::Type::Save);
+        CHECK(result.block == 3);
+        CHECK(result.file_name.empty());
+    }
+
+    SECTION("Con número y nombre") {
+        const auto result = parse_command("/guardar 3 suma.cpp");
+        REQUIRE(result.type == ParsedCommand::Type::Save);
+        CHECK(result.block == 3);
+        CHECK(result.file_name == "suma.cpp");
+    }
+
+    SECTION("El nombre se pasa sin validar") {
+        const auto result = parse_command("/guardar 1 ../x");
+        REQUIRE(result.type == ParsedCommand::Type::Save);
+        CHECK(result.file_name == "../x");
+    }
+}
+
+TEST_CASE("parse_command detecta errores de uso de /guardar", "[command_parser]") {
+    for (const char* input : {"/guardar suma.cpp", "/guardar 3 suma.cpp extra",
+                              "/guardar 3 mi archivo.cpp", "/guardar uno dos"}) {
+        INFO(input);
+        const auto result = parse_command(input);
+        CHECK(result.type == ParsedCommand::Type::SaveUsage);
+        CHECK_FALSE(result.block.has_value());
+        CHECK(result.file_name.empty());
+    }
+}
+
+TEST_CASE("parse_command reconoce /exportar", "[command_parser]") {
+    CHECK(parse_command("/exportar").type == ParsedCommand::Type::Export);
+    CHECK(parse_command("  /exportar  ").type == ParsedCommand::Type::Export);
+    CHECK(parse_command("/exportar todo").type == ParsedCommand::Type::ExportUsage);
+}
+
+TEST_CASE("parse_command manda como mensaje normal los comandos parecidos", "[command_parser]") {
+    for (const char* input : {"/copiarx", "/copiarx 3", "/guardarlo", "/exportarlo", "/Copiar",
+                              "copiar 3", "/copia"}) {
+        INFO(input);
+        const auto result = parse_command(input);
+        CHECK(result.type == ParsedCommand::Type::Normal);
+        CHECK(result.text == input);
+    }
+}

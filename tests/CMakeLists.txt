@@ -15,12 +15,16 @@ find_package(nlohmann_json 3.9 REQUIRED)
 
 add_executable(chatbot_tests
     test_cancel.cpp
+    test_clipboard.cpp
+    test_code_blocks.cpp
     test_command_parser.cpp
     test_config.cpp
     test_conversation.cpp
+    test_conversation_export.cpp
     test_conversation_list.cpp
     test_conversation_store.cpp
     test_debug_sse.cpp
+    test_downloads.cpp
     test_provider_core.cpp
     test_error_mapping.cpp
     test_history.cpp
@@ -47,6 +51,9 @@ target_include_directories(chatbot_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/core/src)
 target_link_libraries(chatbot_tests PRIVATE
     chatbot::core chatbot_cli_lib Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
+# Archivos de tests/data (solo lectura).
+target_compile_definitions(chatbot_tests PRIVATE
+    CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 chatbot_set_warnings(chatbot_tests)
 

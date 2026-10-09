@@ -150,7 +150,7 @@ const md::Document& HistoryView::document_for(Cached& cached, const std::string&
 }
 
 ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, int width,
-                                          const Palette& palette) {
+                                          const Palette& palette, int first_code) {
     const ftxui::Decorator notice = palette.ink(&Theme::notice);
     switch (entry.kind) {
     case EntryKind::User:
@@ -160,7 +160,7 @@ ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, in
     case EntryKind::Assistant: {
         ftxui::Elements lines{
             label(ftxui::text("Asistente:") | ftxui::bold | palette.ink(&Theme::assistant_label)),
-            md::render(document_for(cached, entry.text), width, palette)};
+            md::render(document_for(cached, entry.text), width, palette, first_code)};
         if (entry.cancelled) {
             lines.push_back(label(ftxui::text("(cancelada)") | notice));
         } else if (entry.incomplete) {
@@ -182,7 +182,8 @@ ftxui::Element HistoryView::entry_element(Cached& cached, const Entry& entry, in
 }
 
 ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
-                                   const Palette& palette) {
+                                   const Palette& palette,
+                                   const std::vector<int>& first_code_numbers) {
     width = std::max(width, 1);
     const std::string palette_key = palette.key();
     // Si cambió la conversación, las entradas se comparan por contenido: las
@@ -193,11 +194,13 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
     for (std::size_t i = 0; i < entries.size(); ++i) {
         Cached& cached = cache_[i];
         const Entry& entry = entries[i];
+        const int first_code = i < first_code_numbers.size() ? first_code_numbers[i] : 0;
         if (!cached.image || cached.width != width || cached.palette_key != palette_key ||
-            !same_entry(cached.drawn, entry)) {
+            cached.first_code != first_code || !same_entry(cached.drawn, entry)) {
             // Con el fondo y el texto de la paleta: Picture copia las celdas
             // tal cual, también su fondo.
-            ftxui::Element element = entry_element(cached, entry, width, palette) | palette.base();
+            ftxui::Element element =
+                entry_element(cached, entry, width, palette, first_code) | palette.base();
             // El ajuste de líneas es propio (sin flexbox), así que el alto
             // mínimo es el alto final: no hace falta Dimension::Fit.
             element->ComputeRequirement();
@@ -207,6 +210,7 @@ ftxui::Element HistoryView::render(const std::vector<Entry>& entries, int width,
             cached.image = std::move(image);
             cached.width = width;
             cached.palette_key = palette_key;
+            cached.first_code = first_code;
             cached.drawn = entry;
             ++draw_count_;
         }

@@ -467,7 +467,9 @@ int column_floor(int natural) { return std::clamp(natural, 1, kMinColumn); }
 
 class Renderer {
 public:
-    explicit Renderer(const Palette& palette) : palette_(palette) {}
+    /// first_code: número del primer bloque de código ("#3 · cpp"), o 0
+    /// para dibujarlos sin número.
+    Renderer(const Palette& palette, int first_code) : palette_(palette), next_code_(first_code) {}
 
     Element blocks(const std::vector<Block>& list, int width, bool spaced) {
         Elements rows;
@@ -609,7 +611,7 @@ private:
         return ftxui::vbox(std::move(rows));
     }
 
-    Element code(const Block& block, int width) const {
+    Element code(const Block& block, int width) {
         // El marco y un espacio de margen a cada lado ocupan cuatro columnas.
         const int inner = std::max(width - 4, 1);
         std::vector<Line> lines;
@@ -640,10 +642,19 @@ private:
                                        ftxui::flex(lines_element(lines, palette_)),
                                        ftxui::text(" ")}) |
                           palette_.inside_border();
-        if (block.info.empty()) {
+        // El número es el mismo que usan /copiar y /guardar (code_blocks.h).
+        std::string label;
+        if (next_code_ > 0) {
+            label = "#" + std::to_string(next_code_++);
+            if (!block.info.empty()) {
+                label += " · ";
+            }
+        }
+        label += block.info;
+        if (label.empty()) {
             return ftxui::borderRounded(std::move(content)) | palette_.ink(&Theme::border);
         }
-        Element title = ftxui::text(" " + block.info + " ") | palette_.inside_border() |
+        Element title = ftxui::text(" " + label + " ") | palette_.inside_border() |
                         palette_.ink(&Theme::notice);
         return ftxui::window(std::move(title), std::move(content)) |
                palette_.ink(&Theme::border);
@@ -998,6 +1009,7 @@ private:
 
     const Palette& palette_;
     int bullet_depth_ = 0;
+    int next_code_ = 0; ///< Número del siguiente bloque de código, o 0 sin números.
 };
 
 } // namespace
@@ -1030,9 +1042,9 @@ Element render_plain(std::string_view text, int width, const ftxui::Decorator& s
     return lines_element(flow(atoms, std::max(width, 1)), terminal_palette(), style);
 }
 
-Element render(const Document& document, int width, const Palette& palette) {
+Element render(const Document& document, int width, const Palette& palette, int first_code) {
     width = std::max(width, 1);
-    Renderer renderer(palette);
+    Renderer renderer(palette, first_code);
     Element body = renderer.blocks(document.blocks, width, true);
     if (document.footnotes.empty()) {
         return body;

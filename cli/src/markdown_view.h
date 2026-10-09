@@ -17,8 +17,11 @@ namespace chatbot::cli::md {
 /// del documento y del ancho. Nunca pierde texto: lo que no cabe se parte.
 /// Los colores salen de palette; el fondo y el color del texto normal no:
 /// los pone quien llama (Palette::base) sobre todo lo que dibuja.
+/// first_code > 0 numera los bloques de código desde ahí, en el orden de
+/// code_blocks_of (code_blocks.h): el título del marco pasa de "cpp" a
+/// "#3 · cpp", o "#3" sin lenguaje. Con 0, sin números.
 [[nodiscard]] ftxui::Element render(const Document& document, int width,
-                                    const Palette& palette);
+                                    const Palette& palette, int first_code = 0);
 
 /// Texto plano (sin markdown) filtrado con sanitize() y ajustado a width
 /// columnas con las mismas reglas; conserva los espacios repetidos. style

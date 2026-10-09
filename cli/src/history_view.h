@@ -23,8 +23,9 @@ namespace chatbot::cli {
 /// - el árbol de markdown y el texto del que salió: solo se vuelve a parsear
 ///   si el texto cambió;
 /// - la entrada ya dibujada para un ancho y una paleta: se vuelve a dibujar
-///   si cambió la entrada, el ancho, el tema o el modo de fondo. En cada
-///   cuadro solo se copian las filas visibles.
+///   si cambió la entrada, el ancho, el tema, el modo de fondo o el número
+///   de su primer bloque de código. En cada cuadro solo se copian las filas
+///   visibles.
 ///
 /// Cada entrada se dibuja con el fondo y el color de texto de la paleta
 /// (Palette::base), porque se copia celda por celda sobre la pantalla.
@@ -32,8 +33,13 @@ namespace chatbot::cli {
 /// Se usa solo desde el hilo de la interfaz.
 class HistoryView {
 public:
+    /// first_code_numbers[i]: número del primer bloque de código de la
+    /// entrada i (CodeBlockIndex::first_numbers o first_code_numbers, en
+    /// code_blocks.h); los bloques se dibujan como "#3 · cpp". Si falta (por
+    /// ejemplo, con el vector vacío), los bloques de esa entrada van sin número.
     [[nodiscard]] ftxui::Element render(const std::vector<Entry>& entries, int width,
-                                        const Palette& palette);
+                                        const Palette& palette,
+                                        const std::vector<int>& first_code_numbers = {});
 
     /// Veces que se parseó markdown (para las pruebas de la caché).
     [[nodiscard]] std::size_t parse_count() const { return parse_count_; }
@@ -50,12 +56,13 @@ private:
         std::shared_ptr<const ftxui::Screen> image;
         int width = 0;
         std::string palette_key; ///< Palette::key() con que se dibujó.
+        int first_code = 0;      ///< Número del primer bloque de código (0: sin números).
         Entry drawn;
     };
 
     const md::Document& document_for(Cached& cached, const std::string& text);
     ftxui::Element entry_element(Cached& cached, const Entry& entry, int width,
-                                 const Palette& palette);
+                                 const Palette& palette, int first_code);
 
     std::vector<Cached> cache_;
     std::size_t parse_count_ = 0;
