@@ -8,12 +8,12 @@
 #include "markdown_view.h"
 #include "theme.h"
 
+#include "chatbot/platform.h"
+
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
-
-#include <unistd.h>
 
 #include <charconv>
 #include <fstream>
@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                                  ftxui::Dimension::Fit(element, true));
     ftxui::Render(screen, element);
-    if (isatty(STDOUT_FILENO) != 0) {
+    if (chatbot::stdout_is_terminal()) {
         std::cout << screen.ToString() << "\n";
     } else {
         std::cout << plain_text(screen);

@@ -51,9 +51,57 @@ Se usan igual, cambiando `dev` por el nombre del preset. Cada preset compila en 
 
 Las pruebas de tiempo siempre miden y reportan con `WARN`. Sus límites solo hacen fallar la prueba con `CHATBOT_STRICT_PERF=1` (por ejemplo, `CHATBOT_STRICT_PERF=1 ctest --preset release --verbose`). La CI activa esa variable solo en release, con GCC y Clang. Esto incluye parseo, reparto de tablas, dibujo del historial y latencia de cancelación/destrucción. Las esperas máximas entre hilos y la comprobación de que una espera no termine antes de tiempo siguen siendo verificaciones funcionales obligatorias.
 
+### Windows
+
+Funciona en Windows 10 (versión 1903 o posterior; se prueba en Windows 10 IoT LTSC 21H2) y en Windows 11. Se compila con [MSYS2](https://www.msys2.org) y GCC (entorno UCRT64), no con Visual Studio.
+
+1. Instala MSYS2 desde [msys2.org](https://www.msys2.org) (queda en `C:\msys64`).
+2. Abre la terminal **MSYS2 UCRT64** (desde el menú Inicio) e instala los paquetes:
+
+   ```bash
+   pacman -S --needed git mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,curl,nlohmann-json,catch}
+   ```
+
+3. En esa misma terminal, clona el repositorio y compila con los mismos presets que en Linux (`asan` y `tsan` son solo de Linux):
+
+   ```bash
+   git clone https://github.com/Ricky182771/CB-CECYTE.git
+   cd CB-CECYTE
+   cmake --preset release && cmake --build --preset release
+   ctest --preset release --output-on-failure   # opcional: las pruebas
+   ```
+
+   También puedes clonar con Git for Windows: `.gitattributes` fija los saltos de línea, así que no hace falta cambiar `core.autocrlf`.
+
+**Ejecutar.** El programa es una aplicación de consola: córrelo desde **Windows Terminal** (recomendado), **CMD** o **PowerShell**. En la terminal de MSYS2 (mintty) no corre, porque no es una consola de Windows. Necesita las DLL de `C:\msys64\ucrt64\bin` en el `PATH`:
+
+```bat
+:: CMD
+set PATH=C:\msys64\ucrt64\bin;%PATH%
+build\release\cli\chatbot.exe
+```
+
+```powershell
+# PowerShell
+$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+.\build\release\cli\chatbot.exe
+```
+
+Para usarlo en una PC sin MSYS2, descarga el artefacto `chatbot-windows-x64` de la CI (GitHub → Actions → la ejecución → Artifacts): trae `chatbot.exe` con sus DLL; descomprímelo y corre `chatbot.exe` desde esa carpeta.
+
+**Qué cambia en Windows:**
+
+- La configuración y la key van en `%APPDATA%\chatbot\` (`config.json` y `credentials.json`), las conversaciones en `%LOCALAPPDATA%\chatbot\conversations` y `/guardar` y `/exportar` en tu carpeta Descargas, dentro de `chatbot\`. Las variables `CHAT_*` siguen teniendo prioridad; `HOME` y `XDG_*` no se usan (MSYS2 define `HOME`).
+- `credentials.json` no necesita `chmod`: lo protege la carpeta de tu perfil de Windows, que solo tu usuario puede leer. Todavía no va cifrado.
+- `/copiar` y `[Copiar]` usan el portapapeles de Windows (con acentos y saltos de línea que el Bloc de notas respeta); por SSH, OSC 52 primero.
+- Los certificados HTTPS salen del almacén de Windows: no hace falta instalar nada más.
+- Al arrancar, la consola se pone en UTF-8 para que los acentos se vean bien, y al salir vuelve a la página de códigos que tenía (`chcp` muestra lo mismo que antes).
+- Ctrl+C sale limpio, también a mitad de una respuesta. Ctrl+Break y cerrar la ventana terminan el programa de golpe: lo que ya estaba guardado sigue ahí, pero la respuesta en curso se pierde y, con Ctrl+Break, `chcp` puede quedar en 65001.
+- En CMD y PowerShell sin Windows Terminal (conhost), el ratón y algunos símbolos todavía pueden no funcionar; con Windows Terminal sí.
+
 ### Integración continua
 
-En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las dos suites de pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
+En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las dos suites de pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`. En Windows (MSYS2 UCRT64 con GCC) compila y prueba `dev` y `release`, sin `CHATBOT_STRICT_PERF` (los tiempos de esas máquinas varían mucho), y sube `chatbot-windows-x64`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
 
 ### Configurar
 
@@ -77,7 +125,7 @@ La forma más fácil es la pantalla de configuración: ábrela con **F2** o con 
 
 "No confirmada" no quiere decir que falle: el chatbot la pide igual y, si falla, te deja escribir el modelo.
 
-**Dónde se guarda la key:** en `~/.config/chatbot/credentials.json` (o `$XDG_CONFIG_HOME/chatbot/credentials.json`), una por proveedor (y una por URL en los personalizados). El archivo se escribe con permisos 0600 y su carpeta con 0700. Si alguien le abre los permisos (grupo u otros), el chatbot no lo lee y te pide correr `chmod 600` sobre él. Al guardar, una key que empieza con `$`, trae espacios o saltos de línea, o mide menos de 20 caracteres no se guarda: suele ser el nombre de una variable (`$NIMKEY`) o una key cortada al copiarla. La key nunca va en `config.json`, en los volcados de depuración ni en las conversaciones guardadas. No copies `credentials.json` al repositorio (está en `.gitignore`).
+**Dónde se guarda la key:** en `~/.config/chatbot/credentials.json` (o `$XDG_CONFIG_HOME/chatbot/credentials.json`; en Windows, `%APPDATA%\chatbot\credentials.json`), una por proveedor (y una por URL en los personalizados). El archivo se escribe con permisos 0600 y su carpeta con 0700. Si alguien le abre los permisos (grupo u otros), el chatbot no lo lee y te pide correr `chmod 600` sobre él (en Windows no: ahí lo protege la carpeta de tu perfil). Al guardar, una key que empieza con `$`, trae espacios o saltos de línea, o mide menos de 20 caracteres no se guarda: suele ser el nombre de una variable (`$NIMKEY`) o una key cortada al copiarla. La key nunca va en `config.json`, en los volcados de depuración ni en las conversaciones guardadas. No copies `credentials.json` al repositorio (está en `.gitignore`).
 
 **Servidor local (Ollama, llama.cpp…):** elige `Ollama (local)` o `Personalizado…` con una URL como `http://localhost:8080/v1`. Solo se acepta `http://` para `localhost`, `127.0.0.1` o `[::1]` (cualquier puerto), y ahí la key es opcional; cualquier otro servidor necesita `https://`, para que la key y la conversación no viajen sin cifrar.
 
@@ -90,7 +138,7 @@ export CHAT_MODEL="nvidia/nemotron-3-super-120b-a12b"   # solo es un ejemplo
 
 No hay modelo por defecto: los modelos se retiran con el tiempo. El del ejemplo fue el más rápido y constante en las pruebas del equipo contra NIM, pero no es un valor por defecto.
 
-Lo que guarda la pantalla va a `~/.config/chatbot/config.json` (o `$XDG_CONFIG_HOME/chatbot/config.json`), que también puedes editar a mano. Al guardar se conservan las demás llaves del archivo. Nunca lleva la key:
+Lo que guarda la pantalla va a `~/.config/chatbot/config.json` (o `$XDG_CONFIG_HOME/chatbot/config.json`; en Windows, `%APPDATA%\chatbot\config.json`), que también puedes editar a mano. Al guardar se conservan las demás llaves del archivo. Nunca lleva la key:
 
 ```json
 {
@@ -164,7 +212,8 @@ Cada conversación se guarda sola después de cada respuesta completa, en un arc
 
 - `CHAT_DATA_DIR`, si la defines;
 - si no, `$XDG_DATA_HOME/chatbot/conversations` (solo si `XDG_DATA_HOME` es una ruta absoluta);
-- si no, `~/.local/share/chatbot/conversations`.
+- si no, `~/.local/share/chatbot/conversations`;
+- en Windows, si no defines `CHAT_DATA_DIR`, `%LOCALAPPDATA%\chatbot\conversations`.
 
 Los archivos contienen **el texto completo de tus conversaciones**. Por eso la carpeta se crea con permisos 0700 y los archivos con 0600 (solo tu usuario puede leerlos). Para borrar una conversación, usa Supr en la barra de conversaciones (Ctrl+O); para borrarlas todas, borra la carpeta. Si un archivo está dañado o es de una versión más nueva del programa, aparece en la barra como ilegible y el programa nunca lo modifica.
 
@@ -265,13 +314,14 @@ Los bloques de código de las respuestas se numeran desde 1 en toda la conversac
 - Solo en minúsculas y con los argumentos separados por espacios. Cualquier otro texto que empiece con `/` (por ejemplo `/copiarx`) se envía como un mensaje normal.
 - Con una respuesta en curso, la línea de estado dice `Espera a que termine la respuesta`. Si no hay bloques, el número no existe o sobran argumentos, la línea de estado explica cómo se usa y el texto se queda en la caja.
 - `/guardar` y `/exportar` nunca sobrescriben: si el archivo ya existe, usan `suma-2.cpp`, `suma-3.cpp`… (hasta `-99`). Los archivos se crean con permisos 0644 (o menos, según tu `umask`), nunca como ejecutables (tampoco los `.sh`).
-- El nombre que das es solo el nombre del archivo: no puede llevar `/`, `\`, `..` ni caracteres de control, ni empezar con `.`, y mide como máximo 100 bytes.
+- El nombre que das es solo el nombre del archivo: no puede llevar `/`, `\`, `..` ni caracteres de control, ni empezar con `.`, y mide como máximo 100 bytes. Para que lo guardado se pueda copiar a Windows, en todos los sistemas tampoco puede llevar `< > : " | ? *`, terminar en punto o espacio, ni llamarse como un dispositivo de Windows (`CON`, `PRN`, `AUX`, `NUL`, `COM1` a `COM9`, `LPT1` a `LPT9`, también con extensión: `con.cpp`).
 - El archivo exportado tiene el título, la fecha y el modelo, y cada pregunta (`## Tú`, tal como la escribiste, también el `/buscar …`) con su respuesta (`## Asistente`) y, si hubo búsqueda, sus fuentes (`### Fuentes`). Nunca incluye las instrucciones del sistema, los resultados de búsqueda que recibió el modelo, keys, avisos ni errores.
 
 **Cómo se copia**, en este orden:
 
 1. Si estás conectado por SSH (`SSH_CONNECTION` o `SSH_TTY`), primero con la secuencia OSC 52 de la terminal, para que llegue al portapapeles de tu máquina local.
 2. Con un programa del sistema que esté en tu `PATH`: `termux-clipboard-set` en Termux (paquete `termux-api` y la app Termux:API), `wl-copy` en Wayland, o `xclip` o `xsel` en X11. En Fedora: `sudo dnf install wl-clipboard` (Wayland) o `sudo dnf install xclip` (X11).
+   En Windows, en lugar de un programa, el portapapeles de Windows.
 3. Si nada de eso funciona, con OSC 52, y el aviso dice `si tu terminal no lo soporta, usa /guardar`. Kitty, WezTerm, foot, Alacritty y Ghostty soportan OSC 52; dentro de tmux se envía envuelta para tmux, y puede hacer falta `set -g allow-passthrough on` o `set -g set-clipboard on` en tu `~/.tmux.conf`.
 
 OSC 52 solo manda bloques de hasta 100 000 bytes; para uno más grande, usa `/guardar`.
@@ -283,6 +333,8 @@ OSC 52 solo manda bloques de hasta 100 000 bytes; para uno más grande, usa `/gu
 3. en Termux, `~/storage/downloads` (después de correr `termux-setup-storage`);
 4. `~/Descargas` o `~/Downloads`, la que exista;
 5. tu carpeta personal (`~`).
+
+En Windows: `CHAT_DOWNLOAD_DIR`, si la defines; si no, tu carpeta Descargas; si Windows no la da, `%USERPROFILE%`.
 
 Para cambiarla, define la variable antes de abrir el chatbot:
 

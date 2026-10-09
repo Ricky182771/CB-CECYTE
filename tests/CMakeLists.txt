@@ -32,6 +32,7 @@ add_executable(chatbot_tests
     test_markdown.cpp
     test_models_loader.cpp
     test_provider_settings.cpp
+    test_platform.cpp
     test_published_date.cpp
     test_response.cpp
     test_retries.cpp
@@ -58,6 +59,7 @@ target_compile_definitions(chatbot_tests PRIVATE
     CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 chatbot_set_warnings(chatbot_tests)
+chatbot_windows_manifest(chatbot_tests)
 
 add_test(NAME chatbot_tests COMMAND chatbot_tests)
 
@@ -79,4 +81,5 @@ target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui ftxui::component C
 target_compile_definitions(chatbot_ui_tests PRIVATE
     CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 chatbot_set_warnings(chatbot_ui_tests)
+chatbot_windows_manifest(chatbot_ui_tests)
 add_test(NAME chatbot_ui_tests COMMAND chatbot_ui_tests)

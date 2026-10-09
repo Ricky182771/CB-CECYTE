@@ -2,7 +2,10 @@
 
 #include "temp_dir.hpp"
 
+#ifndef _WIN32
 #include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -44,11 +47,13 @@ StoredConversation sample(const std::string& id, const std::string& updated_at) 
     return conversation;
 }
 
+#ifndef _WIN32
 unsigned permissions_of(const fs::path& path) {
     struct stat info {};
     REQUIRE(::stat(path.c_str(), &info) == 0);
     return static_cast<unsigned>(info.st_mode) & 0777U;
 }
+#endif
 
 void write_file(const fs::path& path, const std::string& content) {
     std::ofstream file{path, std::ios::binary};
@@ -80,6 +85,19 @@ TEST_CASE("resolve_data_dir: CHAT_DATA_DIR vacío se ignora", "[almacen][ruta]")
     CHECK(chatbot::cli::resolve_data_dir(std::string{""}, std::string{"/xdg"},
                                          std::string{"/home/ana"}) ==
           "/xdg/chatbot/conversations");
+}
+
+TEST_CASE("resolve_windows_data_dir: CHAT_DATA_DIR, AppData\\Local o LOCALAPPDATA",
+          "[almacen][ruta][windows]") {
+    using chatbot::cli::resolve_windows_data_dir;
+    const std::string local = "C:\\Users\\José\\AppData\\Local";
+    const std::string expected = local + "\\chatbot\\conversations";
+    CHECK(resolve_windows_data_dir(std::string{"D:\\chats"}, local, local) == "D:\\chats");
+    CHECK(resolve_windows_data_dir(std::string{""}, local, std::nullopt) == expected);
+    CHECK(resolve_windows_data_dir(std::nullopt, local + "\\", std::string{"E:\\x"}) == expected);
+    CHECK(resolve_windows_data_dir(std::nullopt, std::nullopt, local) == expected);
+    CHECK(resolve_windows_data_dir(std::nullopt, std::string{}, local) == expected);
+    CHECK_FALSE(resolve_windows_data_dir(std::nullopt, std::nullopt, std::nullopt).has_value());
 }
 
 TEST_CASE("resolve_data_dir: XDG_DATA_HOME absoluto", "[almacen][ruta]") {
@@ -170,6 +188,29 @@ TEST_CASE("ConversationStore: guardar y cargar conserva todo (UTF-8, emoji, mode
     CHECK(json.find("system") == std::string::npos);
 }
 
+TEST_CASE("ConversationStore: ida y vuelta en una carpeta con ñ y acentos", "[almacen]") {
+    // Como %LOCALAPPDATA% de un usuario "José Ñandú": la ruta es UTF-8.
+    const ScopedTempDir temp;
+    const fs::path dir = temp.path() / fs::path{u8"José Ñandú"} / fs::path{u8"conversación"};
+    const ConversationStore store{dir.string()};
+    const StoredConversation original = sample("20261002-235800-a1b2c3", "2026-10-02T23:59:12-06:00");
+    REQUIRE_FALSE(store.save(original).has_value());
+
+    const LoadResult loaded = store.load(original.id);
+    REQUIRE(loaded.conversation.has_value());
+    CHECK(loaded.conversation->title == original.title);
+    REQUIRE(loaded.conversation->messages.size() == original.messages.size());
+    CHECK(loaded.conversation->messages[0].content == original.messages[0].content);
+
+    const std::vector<ConversationSummary> list = store.list();
+    REQUIRE(list.size() == 1);
+    CHECK(list[0].id == original.id);
+    CHECK(list[0].readable);
+    CHECK_FALSE(has_tmp_files(dir));
+    CHECK_FALSE(store.remove(original.id).has_value());
+    CHECK(store.list().empty());
+}
+
 TEST_CASE("ConversationStore: permisos 0700 del directorio y 0600 del archivo, sin .tmp",
           "[almacen]") {
     const ScopedTempDir temp;
@@ -178,14 +219,18 @@ TEST_CASE("ConversationStore: permisos 0700 del directorio y 0600 del archivo, s
     REQUIRE_FALSE(store.save(sample("20261002-235800-a1b2c3", "2026-10-02T23:59:12-06:00"))
                       .has_value());
 
+#ifndef _WIN32
     CHECK(permissions_of(dir) == 0700U);
     CHECK(permissions_of(dir / "20261002-235800-a1b2c3.json") == 0600U);
+#endif
     CHECK_FALSE(has_tmp_files(dir));
 
     // Guardar otra vez (sobrescribir) mantiene 0600 y no deja .tmp.
     REQUIRE_FALSE(store.save(sample("20261002-235800-a1b2c3", "2026-10-03T00:10:00-06:00"))
                       .has_value());
+#ifndef _WIN32
     CHECK(permissions_of(dir / "20261002-235800-a1b2c3.json") == 0600U);
+#endif
     CHECK_FALSE(has_tmp_files(dir));
 }
 
@@ -281,6 +326,9 @@ TEST_CASE("ConversationStore: sin directorio todas las operaciones fallan con me
     CHECK_FALSE(store.load("20261001-100000-000001").error.empty());
 }
 
+#ifndef _WIN32
+// En Windows, fs::permissions solo cambia el atributo de solo lectura, que
+// no impide escribir dentro de una carpeta: la prueba es de POSIX.
 TEST_CASE("ConversationStore: directorio sin permiso de escritura da error, no excepción",
           "[almacen]") {
     if (::geteuid() == 0) {
@@ -294,6 +342,7 @@ TEST_CASE("ConversationStore: directorio sin permiso de escritura da error, no e
     REQUIRE(error.has_value());
     CHECK_FALSE(error->empty());
 }
+#endif
 
 TEST_CASE("ConversationStore: si la carpeta es un archivo, guardar da error sin excepción",
           "[almacen]") {

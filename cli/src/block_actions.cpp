@@ -48,17 +48,18 @@ std::string short_prefix(const CodeBlock& block) {
 ClipboardAccess real_clipboard() {
     const std::optional<std::string> tmux = environment_value("TMUX");
     return ClipboardAccess{
-        clipboard_methods(environment_value, find_in_path), tmux.has_value() && !tmux->empty(),
+        clipboard_methods(environment_value, find_in_path, current_os()),
+        tmux.has_value() && !tmux->empty(),
         [](const std::vector<std::string>& argv, std::string_view text) {
             return run_with_input(argv, text);
         },
-        write_to_terminal};
+        write_to_terminal, copy_to_native_clipboard};
 }
 
 ActionResult copy_block(const CodeBlock& block, const ClipboardAccess& clipboard,
                         Wording wording) {
     const CopyResult copied = copy_to_clipboard(block.code, clipboard.methods, clipboard.tmux,
-                                                clipboard.run, clipboard.write);
+                                                clipboard.run, clipboard.write, clipboard.native);
     if (wording == Wording::Short) {
         if (!copied.copied) {
             return {"No se pudo copiar #" + std::to_string(block.number) + " · usa [Guardar]",
@@ -118,7 +119,7 @@ ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
         return copy_block(*choice.block, clipboard, Wording::Short);
     }
     if (!download_base.has_value()) {
-        return {std::string{kNoDownloadDir}, true};
+        return {std::string{no_download_dir_message(current_os())}, true};
     }
     return save_block(*choice.block, {}, *download_base, home, Wording::Short);
 }

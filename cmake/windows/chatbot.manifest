@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Manifiesto de todos los ejecutables en Windows (chatbot_windows_manifest en
+  CMakeLists.txt):
+  - activeCodePage UTF-8: la página de códigos ANSI del proceso es UTF-8
+    (Windows 10 1903 o posterior), así que getenv, fopen y std::ifstream con
+    std::string reciben y dan UTF-8. Regla del proyecto: std::string es UTF-8
+    en todas las plataformas.
+  - supportedOS: Windows 10 y 11 (el mismo Id para los dos).
+  - requestedExecutionLevel asInvoker: sin elevación, igual que el manifiesto
+    por defecto de MinGW al que reemplaza.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

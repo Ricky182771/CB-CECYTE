@@ -33,6 +33,7 @@
 #include "chatbot/credentials.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
+#include "chatbot/platform.h"
 #include "chatbot/result.h"
 #include "chatbot/tavily_search.h"
 #include "chatbot/types.h"
@@ -60,8 +61,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#include <unistd.h>
 
 namespace {
 
@@ -209,6 +208,17 @@ private:
 } // namespace
 
 int main() {
+    // Windows: la consola en UTF-8 mientras corre el programa, y al salir
+    // (también por un error) vuelve a la página de códigos que tenía. Se
+    // declara primero para que se destruya al último, después de FTXUI.
+    const chatbot::ConsoleUtf8Scope console_utf8;
+    // Windows: sin ENABLE_PROCESSED_INPUT, Ctrl+C llega como tecla y sale por
+    // screen.Exit() (ver CatchEvent), en lugar de matar el proceso con
+    // SIGINT dentro de Loop(). Se construye antes de Loop() y se destruye
+    // después de que el runner cancela y hace join, así que Ctrl+C durante
+    // ese join tampoco mata el proceso.
+    const chatbot::ConsoleInputScope console_input;
+
     // La configuración se carga antes de tocar la terminal: si falla, el
     // error sale por stderr sin abrir la pantalla completa. Si lo único que
     // falta es la key o el modelo, la app arranca con la pantalla de
@@ -219,7 +229,7 @@ int main() {
     const chatbot::Result<chatbot::Config> initial = chatbot::load_config(load_options);
     const std::optional<chatbot::ChatError> incomplete =
         initial.is_ok() ? chatbot::validate_config(initial.value()) : std::nullopt;
-    const bool has_terminal = ::isatty(STDIN_FILENO) == 1 && ::isatty(STDOUT_FILENO) == 1;
+    const bool has_terminal = chatbot::stdio_is_terminal();
     if (initial.is_error() || (incomplete.has_value() && !has_terminal)) {
         const chatbot::ChatError& error = initial.is_error() ? initial.error() : *incomplete;
         std::cerr << "[" << chatbot::error_kind_label(error.kind) << "] " << error.message
@@ -276,10 +286,7 @@ int main() {
     // hilo, que usa ambos); igual el cargador de modelos, que une sus hilos.
     // Las tareas que queden en la cola de screen apuntan a conversation,
     // input_text, scroll, last_dropped y store: van antes que screen.
-    const chatbot::cli::ConversationStore store{
-        chatbot::cli::resolve_data_dir(env_value("CHAT_DATA_DIR"), env_value("XDG_DATA_HOME"),
-                                       env_value("HOME"))
-            .value_or("")};
+    const chatbot::cli::ConversationStore store{chatbot::cli::default_data_dir().value_or("")};
     chatbot::cli::Conversation conversation{system_prompt};
     std::string input_text;
     Scroll scroll;
@@ -333,14 +340,16 @@ int main() {
     }
     const auto busy = [&] { return runner != nullptr && runner->busy(); };
 
-    const std::string home = env_value("HOME").value_or(""); ///< Abrevia rutas con "~".
+    /// Abrevia rutas con "~" (en Windows, vacía: las rutas van completas).
+    const std::string home =
+        chatbot::cli::display_home(chatbot::cli::environment_value, chatbot::current_os());
     // Carpeta de descargas (sin chatbot/) para /guardar y /exportar, o
     // nullopt con el motivo en la línea de estado.
     const auto download_base = [&]() -> std::optional<std::string> {
         std::optional<std::string> base =
-            chatbot::cli::resolve_download_dir(chatbot::cli::environment_value);
+            chatbot::cli::default_download_dir(chatbot::cli::environment_value);
         if (!base.has_value()) {
-            flash = std::string{chatbot::cli::kNoDownloadDir};
+            flash = std::string{chatbot::cli::no_download_dir_message(chatbot::current_os())};
         }
         return base;
     };
@@ -530,8 +539,7 @@ int main() {
             const std::optional<std::string> credentials_path =
                 chatbot::default_credentials_path();
             if (!config_path.has_value() || !credentials_path.has_value()) {
-                return "No se encontró la carpeta de configuración (define HOME o "
-                       "XDG_CONFIG_HOME).";
+                return chatbot::missing_config_dir_message(chatbot::current_os());
             }
             // Primero la key: si falla, config.json no apunta a un proveedor sin key.
             if (const auto update = form.credential_update()) {
@@ -564,8 +572,7 @@ int main() {
         [&](const chatbot::cli::Appearance& chosen) -> std::optional<std::string> {
             const std::optional<std::string> config_path = chatbot::default_config_path();
             if (!config_path.has_value()) {
-                return "No se encontró la carpeta de configuración (define HOME o "
-                       "XDG_CONFIG_HOME).";
+                return chatbot::missing_config_dir_message(chatbot::current_os());
             }
             const chatbot::AppearanceValues values{
                 std::string{chosen.theme->id},
@@ -582,8 +589,7 @@ int main() {
         [&](const std::optional<std::string>& stored) -> std::optional<std::string> {
             const std::optional<std::string> config_path = chatbot::default_config_path();
             if (!config_path.has_value()) {
-                return "No se encontró la carpeta de configuración (define HOME o "
-                       "XDG_CONFIG_HOME).";
+                return chatbot::missing_config_dir_message(chatbot::current_os());
             }
             if (const auto error = chatbot::save_system_prompt(*config_path, stored)) {
                 return error->message;
@@ -610,8 +616,7 @@ int main() {
             const std::optional<std::string> credentials_path =
                 chatbot::default_credentials_path();
             if (!credentials_path.has_value()) {
-                return "No se encontró la carpeta de configuración (define HOME o "
-                       "XDG_CONFIG_HOME).";
+                return chatbot::missing_config_dir_message(chatbot::current_os());
             }
             chatbot::Result<chatbot::Credentials> saved =
                 chatbot::load_credentials(*credentials_path);
@@ -661,7 +666,7 @@ int main() {
         const std::optional<std::string> config_path = chatbot::default_config_path();
         const std::optional<std::string> credentials_path = chatbot::default_credentials_path();
         if (!config_path.has_value() || !credentials_path.has_value()) {
-            flash = "No se encontró la carpeta de configuración (define HOME o XDG_CONFIG_HOME).";
+            flash = chatbot::missing_config_dir_message(chatbot::current_os());
             return;
         }
         const chatbot::Result<chatbot::ConfigFileValues> values =
@@ -969,7 +974,7 @@ int main() {
             code_blocks.update(conversation.entries());
             const chatbot::cli::ActionResult result = chatbot::cli::run_block_action(
                 code_blocks.blocks(), hit->block, hit->action, chatbot::cli::real_clipboard(),
-                chatbot::cli::resolve_download_dir(chatbot::cli::environment_value), home);
+                chatbot::cli::default_download_dir(chatbot::cli::environment_value), home);
             flash = result.message;
             if (!result.error && hit->action == chatbot::cli::BlockAction::Copy) {
                 history.show_copied(hit->block);

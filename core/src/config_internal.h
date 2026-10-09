@@ -18,6 +18,18 @@ namespace chatbot {
     const std::optional<std::string>& xdg_config_home,
     const std::optional<std::string>& home);
 
+/// Construye la ruta del archivo de configuración en Windows, donde HOME y
+/// XDG_* no cuentan (MSYS2 define HOME y la configuración quedaría partida
+/// según la shell):
+/// - <roaming_app_data>\chatbot\config.json, con la carpeta AppData\Roaming
+///   que da Windows (known_folder(KnownFolder::RoamingAppData));
+/// - si no la dio, con la variable APPDATA (appdata);
+/// - si no hay ninguna: nullopt.
+/// Función pura, para probarla también en Linux.
+[[nodiscard]] std::optional<std::string> build_windows_config_path(
+    const std::optional<std::string>& roaming_app_data,
+    const std::optional<std::string>& appdata);
+
 /// Lo que necesita una petición, sin el modelo: URL base válida, key (salvo
 /// para un servidor local) y timeout. Lo usan validate_config y
 /// ChatClient::list_models (que se llama antes de elegir modelo).

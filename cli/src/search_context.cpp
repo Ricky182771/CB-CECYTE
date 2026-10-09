@@ -1,5 +1,7 @@
 #include "search_context.h"
 
+#include "chatbot/platform.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -19,12 +21,12 @@ std::string generate_search_nonce() {
 }
 
 std::string local_iso_date(std::time_t time) {
-    std::tm local{};
-    if (localtime_r(&time, &local) == nullptr) {
+    const std::optional<std::tm> local = local_time(time);
+    if (!local.has_value()) {
         return {};
     }
     std::array<char, 16> buffer{};
-    if (std::strftime(buffer.data(), buffer.size(), "%Y-%m-%d", &local) == 0) {
+    if (std::strftime(buffer.data(), buffer.size(), "%Y-%m-%d", &*local) == 0) {
         return {};
     }
     return std::string{buffer.data()};

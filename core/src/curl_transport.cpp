@@ -1,6 +1,7 @@
 #include "chatbot/curl_transport.h"
 
 #include "chatbot/cancel_token.h"
+#include "chatbot/platform.h"
 
 #include <curl/curl.h>
 
@@ -232,6 +233,12 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
     }
     // 10 s para establecer conexión (sección 8).
     set(CURLOPT_CONNECTTIMEOUT_MS, 10000L);
+    // Windows: los certificados del almacén del sistema, sin repartir un
+    // cacert.pem. La verificación TLS sigue siempre activa (sección 8); en
+    // Linux no cambia nada.
+    if (current_os() == Os::Windows) {
+        set(CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NATIVE_CA));
+    }
     set(CURLOPT_ERRORBUFFER, error_buffer);
     set(CURLOPT_NOSIGNAL, 1L);
 

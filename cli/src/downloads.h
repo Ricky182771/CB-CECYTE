@@ -3,6 +3,8 @@
 
 #include "clipboard.h"
 
+#include "chatbot/platform.h"
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -25,6 +27,35 @@ inline constexpr int kMaxNameSuffix = 99;
 /// nullopt si no hay HOME ni CHAT_DOWNLOAD_DIR.
 [[nodiscard]] std::optional<std::string> resolve_download_dir(const EnvLookup& env);
 
+/// Carpeta de descargas en Windows (función pura), sin "chatbot\", donde
+/// HOME y XDG_* no cuentan:
+/// 1. CHAT_DOWNLOAD_DIR, si está definida y no vacía;
+/// 2. la carpeta Descargas que da Windows (KnownFolder::Downloads);
+/// 3. USERPROFILE (user_profile).
+/// nullopt si no hay ninguna.
+[[nodiscard]] std::optional<std::string> resolve_windows_download_dir(
+    const std::optional<std::string>& chat_download_dir,
+    const std::optional<std::string>& downloads_folder,
+    const std::optional<std::string>& user_profile);
+
+/// Carpeta de descargas de este proceso: resolve_download_dir(env) o, en
+/// Windows, resolve_windows_download_dir con env y la carpeta Descargas.
+[[nodiscard]] std::optional<std::string> default_download_dir(const EnvLookup& env);
+
+/// Sin carpeta de descargas: el aviso de cada sistema (qué faltó).
+inline constexpr std::string_view kNoDownloadDir =
+    "No se encontró la carpeta de descargas (define HOME o CHAT_DOWNLOAD_DIR).";
+inline constexpr std::string_view kNoDownloadDirWindows =
+    "No se encontró la carpeta de descargas: Windows no dio la carpeta Descargas y la "
+    "variable USERPROFILE no está definida (define CHAT_DOWNLOAD_DIR).";
+
+/// kNoDownloadDir o kNoDownloadDirWindows.
+[[nodiscard]] std::string_view no_download_dir_message(Os os);
+
+/// home para display_path: HOME en POSIX; vacía en Windows, donde las rutas
+/// se muestran completas, sin "~".
+[[nodiscard]] std::string display_home(const EnvLookup& env, Os os);
+
 /// XDG_DOWNLOAD_DIR de un archivo user-dirs.dirs (líneas
 /// XDG_DOWNLOAD_DIR="$HOME/Descargas" o con ruta absoluta), con $HOME
 /// expandido a home. nullopt si no está, no se puede leer o no es válida.
@@ -37,8 +68,12 @@ inline constexpr int kMaxNameSuffix = 99;
 
 /// Revisa un nombre que dio el usuario: solo el nombre base, sin "/", "\",
 /// "..", caracteres de control, sin empezar con "." y de a lo más
-/// kMaxFileNameBytes bytes de UTF-8 válido. Devuelve el motivo (para
-/// mostrarlo) o nullopt si es válido.
+/// kMaxFileNameBytes bytes de UTF-8 válido. Además, en todas las
+/// plataformas, las reglas de Windows (para poder copiar lo guardado entre
+/// sistemas): sin < > : " | ? *, sin terminar en "." ni en espacio y sin los
+/// nombres reservados CON, PRN, AUX, NUL, COM1 a COM9 y LPT1 a LPT9 (sin
+/// distinguir mayúsculas, también con extensión: "con.cpp"). Devuelve el
+/// motivo (para mostrarlo) o nullopt si es válido.
 [[nodiscard]] std::optional<std::string> validate_file_name(std::string_view name);
 
 /// Nombre final del bloque: el del usuario (ya validado), con la extensión
@@ -55,13 +90,15 @@ struct WriteResult {
     std::string error; ///< Vacío si salió bien.
 };
 
-/// Crea <base>/chatbot con 0755 (menos la umask) si no existe. Devuelve la
-/// ruta o el error.
+/// Crea <base>/chatbot (chatbot::create_directory: 0755 menos la umask en
+/// POSIX) si no existe. Devuelve la ruta o el error.
 [[nodiscard]] WriteResult ensure_download_dir(const std::string& base);
 
-/// Escribe content en dir/name sin sobrescribir nunca (O_CREAT | O_EXCL):
-/// si el nombre existe, prueba "nombre-2.ext" hasta "-99". Permisos 0644
-/// menos la umask (nunca ejecutable). Si falla a la mitad, borra lo que creó.
+/// Escribe content en dir/name sin sobrescribir nunca
+/// (chatbot::create_new_file: O_CREAT | O_EXCL en POSIX, CREATE_NEW en
+/// Windows): si el nombre existe, prueba "nombre-2.ext" hasta "-99". En
+/// POSIX, permisos 0644 menos la umask (nunca ejecutable). Si falla a la
+/// mitad, borra lo que creó. El separador es "/" en POSIX y "\" en Windows.
 [[nodiscard]] WriteResult write_new_file(const std::string& dir, std::string_view name,
                                          std::string_view content);
 

@@ -4,11 +4,10 @@
 #include "system_prompt.h"
 
 #include "chatbot/config.h"
+#include "posix_permissions.hpp"
 #include "temp_dir.hpp"
 
 #include <catch2/catch_test_macros.hpp>
-
-#include <sys/stat.h>
 
 #include <filesystem>
 #include <fstream>
@@ -33,7 +32,7 @@ std::string read(const std::filesystem::path& path) {
 void write(const std::filesystem::path& path, const std::string& content) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream{path} << content;
-    ::chmod(path.c_str(), 0600);
+    chatbot_test::set_mode(path, 0600);
 }
 
 std::filesystem::path config_in(const ScopedTempDir& dir) {

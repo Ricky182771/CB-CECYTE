@@ -1,12 +1,9 @@
 #include "chatbot/credentials.h"
 
-#include "atomic_file.h"
+#include "chatbot/platform.h"
 
 #include <nlohmann/json.hpp>
 
-#include <sys/stat.h>
-
-#include <cerrno>
 #include <fstream>
 #include <sstream>
 
@@ -34,16 +31,17 @@ std::string credentials_key(std::string_view provider, std::string_view base_url
 }
 
 Result<Credentials> load_credentials(const std::string& path) {
-    struct stat info {};
-    if (::stat(path.c_str(), &info) != 0) {
-        if (errno == ENOENT) {
-            return Credentials{}; // Sin archivo: no hay keys guardadas.
-        }
+    switch (check_secret_file(path)) {
+    case SecretFileState::Missing:
+        return Credentials{}; // Sin archivo: no hay keys guardadas.
+    case SecretFileState::Unreadable:
         return config_error("No se pudo leer " + path + ".");
-    }
-    if ((info.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+    case SecretFileState::OpenAccess:
+        // Solo en POSIX; en Windows lo protege la ACL del perfil.
         return config_error("credentials.json tiene permisos demasiado abiertos; corre chmod 600 " +
                             path);
+    case SecretFileState::Private:
+        break;
     }
     try {
         std::ifstream file{path, std::ios::binary};
@@ -89,7 +87,8 @@ std::optional<ChatError> save_credentials(const std::string& path,
     }
     const std::string content =
         document.dump(4, ' ', false, nlohmann::ordered_json::error_handler_t::replace) + "\n";
-    if (const std::optional<std::string> error = write_file_atomic(path, content, 0600, 0700)) {
+    if (const std::optional<std::string> error = write_file_atomic(path, content, FilePrivacy::Private,
+                                                                        FolderPrivacy::Private)) {
         return config_error("No se pudieron guardar las credenciales: " + *error);
     }
     return std::nullopt;

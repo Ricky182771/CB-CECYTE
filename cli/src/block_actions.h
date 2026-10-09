@@ -21,10 +21,6 @@ struct ActionResult {
     bool error = false;
 };
 
-/// Sin carpeta de descargas (resolve_download_dir dio nullopt).
-inline constexpr std::string_view kNoDownloadDir =
-    "No se encontró la carpeta de descargas (define HOME o CHAT_DOWNLOAD_DIR).";
-
 /// Cómo se escriben los avisos: Long para los comandos (van al historial),
 /// Short para los botones (van a la línea de estado, de una fila): solo lo
 /// que el botón no dice, con lo importante primero ("#1 copiado con
@@ -35,16 +31,19 @@ enum class Wording { Long, Short };
 enum class BlockAction { Copy, Save };
 
 /// Lo que copy_block necesita para copiar, inyectable para probarla sin
-/// lanzar procesos ni escribir en la terminal (ver copy_to_clipboard).
+/// lanzar procesos, tocar el portapapeles del sistema ni escribir en la
+/// terminal (ver copy_to_clipboard).
 struct ClipboardAccess {
     std::vector<ClipboardMethod> methods;
     bool tmux = false;
     ProgramRunner run;
     TerminalWriter write;
+    NativeCopier native{}; ///< Vacío: el método Native falla.
 };
 
-/// El portapapeles real: clipboard_methods con el entorno del proceso,
-/// run_with_input y write_to_terminal.
+/// El portapapeles real: clipboard_methods con el entorno del proceso y el
+/// sistema actual, run_with_input, write_to_terminal y
+/// copy_to_native_clipboard.
 [[nodiscard]] ClipboardAccess real_clipboard();
 
 /// Copia el bloque. "Copiado el bloque #3 (cpp, 24 líneas) con wl-copy.",
@@ -69,7 +68,7 @@ struct ClipboardAccess {
 
 /// Lo que hace un botón del bloque con ese número (de collect_code_blocks):
 /// copy_block, o save_block con el nombre por defecto en download_base
-/// (resolve_download_dir; nullopt es un error), con Wording::Short. Un
+/// (default_download_dir; nullopt es un error, no_download_dir_message), con Wording::Short. Un
 /// número que ya no existe es un error (choose_code_block).
 [[nodiscard]] ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
                                             BlockAction action, const ClipboardAccess& clipboard,

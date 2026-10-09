@@ -1,5 +1,6 @@
 #include "conversation_export.h"
 
+#include "chatbot/platform.h"
 #include "chatbot/web_search.h"
 
 #include <algorithm>
@@ -139,10 +140,13 @@ std::string export_file_name(std::string_view id, std::time_t now) {
     if (!id.empty()) {
         return "conversacion-" + std::string{id} + ".md";
     }
-    std::tm local{};
-    localtime_r(&now, &local);
+    const std::optional<std::tm> local = local_time(now);
     char stamp[32] = {};
-    const std::size_t size = std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &local);
+    const std::size_t size =
+        local.has_value() ? std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &*local) : 0;
+    if (size == 0) {
+        return "conversacion.md"; // Sin hora local: write_new_file evita choques con -2, -3...
+    }
     return "conversacion-" + std::string{stamp, size} + ".md";
 }
 

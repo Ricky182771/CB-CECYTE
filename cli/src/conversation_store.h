@@ -77,13 +77,29 @@ struct LoadResult {
     const std::optional<std::string>& xdg_data_home,
     const std::optional<std::string>& home);
 
+/// Directorio de las conversaciones en Windows (función pura), donde HOME y
+/// XDG_* no cuentan:
+/// - chat_data_dir (CHAT_DATA_DIR) si está y no está vacío;
+/// - si no, <local_app_data>\chatbot\conversations, con la carpeta
+///   AppData\Local que da Windows (KnownFolder::LocalAppData);
+/// - si no la dio, con la variable LOCALAPPDATA (localappdata);
+/// - nullopt si no hay nada.
+[[nodiscard]] std::optional<std::string> resolve_windows_data_dir(
+    const std::optional<std::string>& chat_data_dir,
+    const std::optional<std::string>& local_app_data,
+    const std::optional<std::string>& localappdata);
+
+/// Directorio de las conversaciones de este proceso: resolve_data_dir con el
+/// entorno real o, en Windows, resolve_windows_data_dir.
+[[nodiscard]] std::optional<std::string> default_data_dir();
+
 /// Título a partir del primer mensaje del usuario: espacios y saltos de línea
 /// colapsados a un espacio, truncado a kTitleMaxCodePoints puntos de código
 /// sin partir un carácter UTF-8, más "…" si se truncó.
 [[nodiscard]] std::string make_title(std::string_view first_user_message);
 
 /// Fecha ISO 8601 local con desfase ("2026-10-02T23:58:00-06:00"), con
-/// localtime_r + strftime (POSIX).
+/// chatbot::local_time + strftime ("%z" da "-0600" en POSIX y en UCRT).
 [[nodiscard]] std::string format_iso8601(std::time_t time);
 
 /// id = AAAAMMDD-HHMMSS-xxxxxx (hora local + 6 hex).
@@ -108,9 +124,10 @@ public:
 
     [[nodiscard]] LoadResult load(const std::string& id) const;
 
-    /// Escritura atómica: <id>.json.tmp (0600) + fsync + rename + fsync del
-    /// directorio. Crea el directorio con 0700 si no existe. Nunca sobrescribe
-    /// un archivo ilegible. Devuelve el error o nullopt.
+    /// Escritura atómica con chatbot::write_file_atomic: <id>.json.tmp (0600)
+    /// y reemplazo. Crea el directorio con 0700 si no existe; si ya existía,
+    /// no toca sus permisos. Nunca sobrescribe un archivo ilegible. Devuelve
+    /// el error o nullopt.
     [[nodiscard]] std::optional<std::string> save(const StoredConversation& conversation) const;
 
     /// Borra la conversación. Nunca borra un archivo ilegible.

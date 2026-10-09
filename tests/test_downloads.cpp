@@ -3,7 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#ifndef _WIN32
 #include <sys/stat.h>
+#endif
 
 #include <filesystem>
 #include <fstream>
@@ -35,6 +37,7 @@ std::string read_text(const std::string& path) {
     return buffer.str();
 }
 
+#ifndef _WIN32
 unsigned mode_of(const std::string& path) {
     struct stat info{};
     REQUIRE(::stat(path.c_str(), &info) == 0);
@@ -55,6 +58,9 @@ public:
 private:
     mode_t old_;
 };
+#endif
+
+using chatbot_test::native_separators;
 
 } // namespace
 
@@ -102,6 +108,43 @@ TEST_CASE("validate_file_name rechaza nombres peligrosos con un motivo", "[downl
     CHECK(validate_file_name("a\x01")->find("control") != std::string::npos);
 }
 
+TEST_CASE("validate_file_name aplica las reglas de Windows en todas las plataformas",
+          "[downloads][windows]") {
+    using chatbot::cli::validate_file_name;
+
+    // Caracteres que Windows no acepta; ":" crearía un flujo alterno de NTFS.
+    for (const char* bad : {"a<b.txt", "a>b", "suma.cpp:x", "a\"b", "a|b", "que?.md", "a*.cpp"}) {
+        INFO(bad);
+        const std::optional<std::string> reason = validate_file_name(bad);
+        REQUIRE(reason.has_value());
+        CHECK(reason->find("< > : \" | ? *") != std::string::npos);
+    }
+
+    // Nombres reservados, sin distinguir mayúsculas y también con extensión.
+    for (const char* bad : {"con", "CON", "con.cpp", "Con.tar.gz", "prn.txt", "aux", "NUL.json",
+                            "com1", "COM9.py", "lpt1.c", "Lpt9", "con .txt"}) {
+        INFO(bad);
+        const std::optional<std::string> reason = validate_file_name(bad);
+        REQUIRE(reason.has_value());
+        CHECK(reason->find("reservado en Windows") != std::string::npos);
+    }
+    // Se parecen, pero no son dispositivos.
+    for (const char* good : {"console.txt", "contacto.cpp", "com.cpp", "com10.c", "lpt0.txt",
+                             "nul-algo.md", "auxiliar.py", "mi-con.cpp", "año.con"}) {
+        INFO(good);
+        CHECK_FALSE(validate_file_name(good).has_value());
+    }
+
+    // Terminar en punto o en espacio.
+    for (const char* bad : {"notas.", "notas ", "suma.cpp "}) {
+        INFO(bad);
+        const std::optional<std::string> reason = validate_file_name(bad);
+        REQUIRE(reason.has_value());
+        CHECK(reason->find("terminar en punto ni en espacio") != std::string::npos);
+    }
+    CHECK_FALSE(validate_file_name("con espacios.txt").has_value());
+}
+
 TEST_CASE("nombre del archivo del bloque", "[downloads]") {
     using chatbot::cli::block_file_name;
     CHECK(block_file_name("", 3, "cpp") == "bloque-3.cpp");
@@ -146,6 +189,33 @@ TEST_CASE("XDG_DOWNLOAD_DIR de user-dirs.dirs", "[downloads]") {
     // Sin HOME no se puede expandir.
     write_text(file, "XDG_DOWNLOAD_DIR=\"$HOME/Descargas\"\n");
     CHECK_FALSE(read_xdg_download_dir(file.string(), "").has_value());
+}
+
+TEST_CASE("carpeta de descargas en Windows: CHAT_DOWNLOAD_DIR, Descargas o USERPROFILE",
+          "[downloads][windows]") {
+    using chatbot::cli::resolve_windows_download_dir;
+    const std::string downloads = "C:\\Users\\Ñandú\\Downloads";
+    const std::string profile = "C:\\Users\\Ñandú";
+    CHECK(resolve_windows_download_dir(std::string{"D:\\bajadas"}, downloads, profile) ==
+          "D:\\bajadas");
+    CHECK(resolve_windows_download_dir(std::string{""}, downloads, profile) == downloads);
+    CHECK(resolve_windows_download_dir(std::nullopt, std::nullopt, profile) == profile);
+    CHECK(resolve_windows_download_dir(std::nullopt, std::string{}, profile) == profile);
+    CHECK_FALSE(resolve_windows_download_dir(std::nullopt, std::nullopt, std::nullopt).has_value());
+}
+
+TEST_CASE("avisos sin carpeta de descargas y home para mostrar rutas", "[downloads][windows]") {
+    using chatbot::Os;
+    CHECK(chatbot::cli::no_download_dir_message(Os::Posix) == chatbot::cli::kNoDownloadDir);
+    const std::string_view windows = chatbot::cli::no_download_dir_message(Os::Windows);
+    CHECK(windows.find("USERPROFILE") != std::string_view::npos);
+    CHECK(windows.find("HOME") == std::string_view::npos);
+
+    // En Windows las rutas se muestran completas: no hay home que abreviar.
+    const auto env = fake_env({{"HOME", "/home/ana"}});
+    CHECK(chatbot::cli::display_home(env, Os::Posix) == "/home/ana");
+    CHECK(chatbot::cli::display_home(env, Os::Windows).empty());
+    CHECK(chatbot::cli::display_home(fake_env({}), Os::Posix).empty());
 }
 
 TEST_CASE("carpeta de descargas, en orden de prioridad", "[downloads]") {
@@ -212,10 +282,12 @@ TEST_CASE("ensure_download_dir crea chatbot/ con 0755 o menos", "[downloads]") {
     const chatbot_test::ScopedTempDir dir;
     const chatbot::cli::WriteResult created = chatbot::cli::ensure_download_dir(dir.string());
     REQUIRE(created.error.empty());
-    CHECK(created.path == dir.string() + "/chatbot");
+    CHECK(created.path == native_separators(dir.string() + "/chatbot"));
+#ifndef _WIN32
     // La umask del usuario puede quitar permisos, nunca agregarlos.
     CHECK(within(mode_of(created.path), 0755U));
     CHECK((mode_of(created.path) & 0700U) == 0700U);
+#endif
     // Si ya existe, se usa tal cual.
     CHECK(chatbot::cli::ensure_download_dir(dir.string()).error.empty());
 
@@ -232,30 +304,37 @@ TEST_CASE("write_new_file nunca sobrescribe y deja 0644 o menos", "[downloads]")
 
     const auto first = write_new_file(dir.string(), "suma.cpp", "uno\n");
     REQUIRE(first.error.empty());
-    CHECK(first.path == dir.string() + "/suma.cpp");
+    CHECK(first.path == native_separators(dir.string() + "/suma.cpp"));
     CHECK(read_text(first.path) == "uno\n");
+#ifndef _WIN32
     CHECK(within(mode_of(first.path), 0644U));
     CHECK((mode_of(first.path) & 0600U) == 0600U);
+#endif
 
     const auto second = write_new_file(dir.string(), "suma.cpp", "dos\n");
     REQUIRE(second.error.empty());
-    CHECK(second.path == dir.string() + "/suma-2.cpp");
+    CHECK(second.path == native_separators(dir.string() + "/suma-2.cpp"));
     CHECK(read_text(first.path) == "uno\n"); // El primero no cambió.
     CHECK(read_text(second.path) == "dos\n");
 
     const auto third = write_new_file(dir.string(), "suma.cpp", "tres\n");
-    CHECK(third.path == dir.string() + "/suma-3.cpp");
+    CHECK(third.path == native_separators(dir.string() + "/suma-3.cpp"));
 
     // Sin extensión, el sufijo va al final.
-    CHECK(write_new_file(dir.string(), "notas", "x").path == dir.string() + "/notas");
-    CHECK(write_new_file(dir.string(), "notas", "x").path == dir.string() + "/notas-2");
+    CHECK(write_new_file(dir.string(), "notas", "x").path ==
+          native_separators(dir.string() + "/notas"));
+    CHECK(write_new_file(dir.string(), "notas", "x").path ==
+          native_separators(dir.string() + "/notas-2"));
 
+#ifndef _WIN32
     // Un .sh nunca queda ejecutable.
     const auto script = write_new_file(dir.string(), "script.sh", "echo hola\n");
     CHECK(within(mode_of(script.path), 0644U));
     CHECK((mode_of(script.path) & 0111U) == 0U);
+#endif
 }
 
+#ifndef _WIN32
 TEST_CASE("la carpeta y los archivos respetan la umask del usuario", "[downloads]") {
     const chatbot_test::ScopedTempDir dir;
     const ScopedUmask strict(077);
@@ -266,6 +345,7 @@ TEST_CASE("la carpeta y los archivos respetan la umask del usuario", "[downloads
     REQUIRE(written.error.empty());
     CHECK(mode_of(written.path) == 0600U);
 }
+#endif
 
 TEST_CASE("write_new_file se rinde después de -99", "[downloads]") {
     using chatbot::cli::write_new_file;
@@ -284,11 +364,15 @@ TEST_CASE("write_new_file no sigue enlaces simbólicos ni escribe en carpetas qu
           "[downloads]") {
     using chatbot::cli::write_new_file;
     const chatbot_test::ScopedTempDir dir;
+#ifndef _WIN32
+    // En Windows, crear un enlace simbólico pide privilegios (o el modo de
+    // desarrollador): esta parte solo corre en POSIX.
     write_text(dir.path() / "destino.txt", "original");
     fs::create_symlink(dir.path() / "destino.txt", dir.path() / "enlace.txt");
     const auto result = write_new_file(dir.string(), "enlace.txt", "nuevo");
     CHECK(result.path == dir.string() + "/enlace-2.txt"); // El enlace cuenta como existente.
     CHECK(read_text((dir.path() / "destino.txt").string()) == "original");
+#endif
 
     CHECK_FALSE(write_new_file((dir.path() / "no-existe").string(), "a.txt", "x").error.empty());
 }

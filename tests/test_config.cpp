@@ -5,8 +5,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <unistd.h>
-
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
@@ -39,32 +37,6 @@ public:
 
 private:
     std::string path_;
-};
-
-/// Directorio temporal único que se borra al salir del ámbito.
-class TempDir {
-public:
-    TempDir()
-        : path_{std::filesystem::temp_directory_path() /
-                ("chatbot_tests_" + std::to_string(static_cast<long>(::getpid())) + "_" +
-                 std::to_string(++counter()))} {
-        std::filesystem::create_directories(path_);
-    }
-    ~TempDir() {
-        std::error_code ignored;
-        std::filesystem::remove_all(path_, ignored);
-    }
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-
-    [[nodiscard]] std::string string() const { return path_.string(); }
-
-private:
-    static int& counter() {
-        static int value = 0;
-        return ++value;
-    }
-    std::filesystem::path path_;
 };
 
 PathProvider path_of(std::optional<std::string> path) {
@@ -211,10 +183,49 @@ TEST_CASE("build_config_path: XDG_CONFIG_HOME presente y ausente", "[config][xdg
     CHECK_FALSE(build_config_path(std::nullopt, std::nullopt).has_value());
 }
 
+TEST_CASE("build_windows_config_path: AppData\\Roaming, si no APPDATA", "[config][windows]") {
+    using chatbot::build_windows_config_path;
+    const std::string roaming = "C:\\Users\\Ñandú\\AppData\\Roaming";
+
+    // La carpeta que da Windows manda, aunque APPDATA diga otra cosa.
+    CHECK(build_windows_config_path(roaming, std::string{"D:\\otra"}).value() ==
+          roaming + "\\chatbot\\config.json");
+    // Con barra final (\ o /) no se repite el separador.
+    CHECK(build_windows_config_path(roaming + "\\", std::nullopt).value() ==
+          roaming + "\\chatbot\\config.json");
+    CHECK(build_windows_config_path(std::string{"C:/Users/Ana/AppData/Roaming/"}, std::nullopt)
+              .value() == "C:/Users/Ana/AppData/Roaming\\chatbot\\config.json");
+
+    // Si Windows no la dio (o vacía), la variable APPDATA.
+    CHECK(build_windows_config_path(std::nullopt, roaming).value() ==
+          roaming + "\\chatbot\\config.json");
+    CHECK(build_windows_config_path(std::string{}, roaming).value() ==
+          roaming + "\\chatbot\\config.json");
+
+    // Sin ninguna: no hay ruta. HOME y XDG_* ni siquiera son parámetros.
+    CHECK_FALSE(build_windows_config_path(std::nullopt, std::nullopt).has_value());
+    CHECK_FALSE(build_windows_config_path(std::string{}, std::string{}).has_value());
+}
+
+TEST_CASE("missing_config_dir_message dice qué faltó en cada sistema", "[config][windows]") {
+    CHECK(chatbot::missing_config_dir_message(chatbot::Os::Posix) ==
+          "No se encontró la carpeta de configuración (define HOME o XDG_CONFIG_HOME).");
+    const std::string windows = chatbot::missing_config_dir_message(chatbot::Os::Windows);
+    CHECK_THAT(windows, Catch::Matchers::ContainsSubstring("AppData\\Roaming"));
+    CHECK_THAT(windows, Catch::Matchers::ContainsSubstring("APPDATA"));
+    CHECK(windows.find("HOME") == std::string::npos);
+}
+
 TEST_CASE("default_config_path usa el entorno real del proceso", "[config][xdg]") {
+    const std::optional<std::string> path = chatbot::default_config_path();
+    if (chatbot::current_os() == chatbot::Os::Windows) {
+        // En Windows: %APPDATA%\chatbot\config.json, sin mirar HOME.
+        REQUIRE(path.has_value());
+        REQUIRE_THAT(*path, Catch::Matchers::EndsWith("\\chatbot\\config.json"));
+        return;
+    }
     // El proceso de pruebas corre con HOME definido; basta con que la función
     // devuelva una ruta coherente dentro de él.
-    const std::optional<std::string> path = chatbot::default_config_path();
     const char* xdg = ::getenv("XDG_CONFIG_HOME");
     const char* home = ::getenv("HOME");
 

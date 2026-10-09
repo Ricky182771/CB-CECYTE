@@ -7,12 +7,11 @@
 #include "chatbot/config.h"
 #include "chatbot/credentials.h"
 #include "fake_transport.hpp"
+#include "posix_permissions.hpp"
 #include "temp_dir.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
-
-#include <sys/stat.h>
 
 #include <filesystem>
 #include <fstream>
@@ -42,17 +41,20 @@ std::string read(const std::filesystem::path& path) {
     return content.str();
 }
 
-void write(const std::filesystem::path& path, const std::string& content, mode_t mode) {
+/// Escribe el archivo y, en POSIX, le pone esos permisos.
+void write(const std::filesystem::path& path, const std::string& content, unsigned mode) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream{path} << content;
-    ::chmod(path.c_str(), mode);
+    chatbot_test::set_mode(path, mode);
 }
 
+#ifndef _WIN32
 mode_t mode_of(const std::filesystem::path& path) {
     struct stat info {};
     REQUIRE(::stat(path.c_str(), &info) == 0);
     return info.st_mode & 0777;
 }
+#endif
 
 chatbot::Result<chatbot::Config> load(const FakeEnv& env, const std::filesystem::path& config) {
     return chatbot::load_config(chatbot::ConfigOptions{
@@ -179,8 +181,10 @@ TEST_CASE("credentials.json: ida y vuelta, permisos 0600 y carpeta 0700", "[prov
         kSecret;
     credentials.keys[chatbot::credentials_key("custom", "https://mi-servidor/v1/")] = "otra";
     REQUIRE_FALSE(chatbot::save_credentials(path.string(), credentials).has_value());
+#ifndef _WIN32
     CHECK(mode_of(path) == 0600);
     CHECK(mode_of(path.parent_path()) == 0700);
+#endif
 
     const auto loaded = chatbot::load_credentials(path.string());
     REQUIRE(loaded.is_ok());
@@ -195,6 +199,7 @@ TEST_CASE("credentials.json: ida y vuelta, permisos 0600 y carpeta 0700", "[prov
     CHECK(missing.value().keys.empty());
 }
 
+#ifndef _WIN32
 TEST_CASE("credentials.json con permisos abiertos no se lee", "[proveedor][credenciales]") {
     const ScopedTempDir dir;
     const std::filesystem::path path = dir.path() / "credentials.json";
@@ -212,7 +217,29 @@ TEST_CASE("credentials.json con permisos abiertos no se lee", "[proveedor][crede
     ::chmod(path.c_str(), 0600);
     CHECK(chatbot::load_credentials(path.string()).is_ok());
 
-    // JSON inválido: error sin citar el contenido.
+}
+#endif
+
+TEST_CASE("credentials.json en Windows se lee sin chmod", "[proveedor][credenciales][windows]") {
+    // Escrito como lo deja cualquier editor: sin chmod. En Windows lo
+    // protege la ACL del perfil y se lee; en POSIX (0644 con la umask
+    // habitual) sigue siendo un error, y nunca dice "chmod 600" en Windows.
+    const ScopedTempDir dir;
+    const std::filesystem::path path = dir.path() / "credentials.json";
+    std::ofstream{path} << std::string{R"({"version":1,"keys":{"nvidia":")"} + kSecret + "\"}}";
+    const auto loaded = chatbot::load_credentials(path.string());
+    if (chatbot::current_os() == chatbot::Os::Windows) {
+        REQUIRE(loaded.is_ok());
+        CHECK(loaded.value().keys.at("nvidia") == kSecret);
+    } else if (loaded.is_error()) {
+        CHECK_THAT(loaded.error().message, Catch::Matchers::ContainsSubstring("chmod 600"));
+    }
+}
+
+TEST_CASE("credentials.json con JSON inválido: error sin citar el contenido",
+          "[proveedor][credenciales]") {
+    const ScopedTempDir dir;
+    const std::filesystem::path path = dir.path() / "credentials.json";
     write(path, std::string{"{ \"keys\": \""} + kSecret, 0600);
     const auto broken = chatbot::load_credentials(path.string());
     REQUIRE(broken.is_error());
@@ -254,11 +281,13 @@ TEST_CASE("load_config: CHAT_API_KEY gana; si no, la key del proveedor", "[prove
     REQUIRE(custom.is_ok());
     CHECK(custom.value().api_key == "de-mi-servidor");
 
+#ifndef _WIN32
     // credentials.json con permisos abiertos: error Config al arrancar.
     ::chmod((config.parent_path() / "credentials.json").c_str(), 0644);
     const auto open = load(empty, config);
     REQUIRE(open.is_error());
     CHECK(open.error().kind == ErrorKind::Config);
+#endif
 }
 
 TEST_CASE("save_config_file conserva llaves y nunca escribe la key", "[proveedor][config]") {
@@ -279,7 +308,9 @@ TEST_CASE("save_config_file conserva llaves y nunca escribe la key", "[proveedor
     const std::string text = read(config);
     CHECK(text.find(kSecret) == std::string::npos);
     CHECK(text.find("api_key") == std::string::npos);
+#ifndef _WIN32
     CHECK(mode_of(config) == 0640); // Conserva los permisos que tenía.
+#endif
     // Las llaves que ya estaban siguen, en su orden; las nuevas, al final.
     CHECK(text.find("\"timeout_seconds\": 90") < text.find("\"history_limit\": 1000"));
     CHECK(text.find("\"otra\"") != std::string::npos);
@@ -299,7 +330,9 @@ TEST_CASE("save_config_file conserva llaves y nunca escribe la key", "[proveedor
     const std::filesystem::path fresh = dir.path() / "otro" / "config.json";
     REQUIRE_FALSE(chatbot::save_config_file(fresh.string(), {"ollama", "http://localhost:11434/v1", "llama3"})
                       .has_value());
+#ifndef _WIN32
     CHECK(mode_of(fresh) == 0644);
+#endif
     write(config, "{ roto", 0644);
     CHECK(chatbot::save_config_file(config.string(), {"openai", "https://api.openai.com/v1", "x"})
               .has_value());
@@ -331,11 +364,13 @@ TEST_CASE("load_config para la interfaz: sin key ni modelo no es error", "[prove
     env.values.erase("CHAT_BASE_URL");
     write(config, "{ no es json", 0644);
     CHECK(chatbot::load_config(options(true)).is_error());
+#ifndef _WIN32
     write(config, R"({"provider":"nvidia"})", 0644);
     write(config.parent_path() / "credentials.json", R"({"version":1,"keys":{}})", 0644);
     const auto open = chatbot::load_config(options(true));
     REQUIRE(open.is_error());
     CHECK_THAT(open.error().message, Catch::Matchers::ContainsSubstring("chmod 600"));
+#endif
 }
 
 TEST_CASE("load_config_file_values lee config.json sin el entorno", "[proveedor][config]") {
@@ -383,7 +418,9 @@ TEST_CASE("save_appearance conserva las demás llaves; load_appearance_values la
     CHECK(text.find("\"appearance\"") < text.find("\"zeta\": 3"));
     CHECK(text.find("\"extra\": true") != std::string::npos);
     CHECK(text.find("\"viejo\"") == std::string::npos);
+#ifndef _WIN32
     CHECK(mode_of(config) == 0640);
+#endif
 
     const auto loaded = chatbot::load_appearance_values(config.string());
     REQUIRE(loaded.is_ok());

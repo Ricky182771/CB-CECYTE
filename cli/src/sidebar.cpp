@@ -1,5 +1,7 @@
 #include "sidebar.h"
 
+#include "chatbot/platform.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -19,12 +21,12 @@ bool selectable(const SidebarRow& row) { return row.kind != SidebarRow::Kind::He
 } // namespace
 
 std::optional<CalendarDay> local_day(std::time_t time) {
-    std::tm local{};
-    if (localtime_r(&time, &local) == nullptr) {
+    const std::optional<std::tm> local = local_time(time);
+    if (!local.has_value()) {
         return std::nullopt;
     }
-    return CalendarDay{local.tm_year + 1900, static_cast<unsigned>(local.tm_mon + 1),
-                       static_cast<unsigned>(local.tm_mday)};
+    return CalendarDay{local->tm_year + 1900, static_cast<unsigned>(local->tm_mon + 1),
+                       static_cast<unsigned>(local->tm_mday)};
 }
 
 std::optional<CalendarDay> day_of(std::string_view iso) {

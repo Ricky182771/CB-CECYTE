@@ -1,8 +1,16 @@
 find_package(CURL REQUIRED)
 find_package(nlohmann_json 3.9 REQUIRED)
 
+# Capa de plataforma (chatbot/platform.h): CMake elige la implementación.
+if(WIN32)
+    set(CHATBOT_PLATFORM_SOURCE src/platform_windows.cpp)
+else()
+    set(CHATBOT_PLATFORM_SOURCE src/platform_posix.cpp)
+endif()
+
 add_library(chatbot_core STATIC
-    src/atomic_file.cpp
+    ${CHATBOT_PLATFORM_SOURCE}
+    src/platform_common.cpp
     src/cancel_token.cpp
     src/credentials.cpp
     src/error.cpp
@@ -31,3 +39,8 @@ chatbot_set_warnings(chatbot_core)
 # libcurl y nlohmann/json son detalles de implementación: no aparecen en los
 # headers públicos, así que se enlazan en PRIVATE.
 target_link_libraries(chatbot_core PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
+# Windows: SHGetKnownFolderPath (shell32) y CoTaskMemFree (ole32). Son
+# bibliotecas del sistema, no dependencias nuevas.
+if(WIN32)
+    target_link_libraries(chatbot_core PRIVATE shell32 ole32)
+endif()
