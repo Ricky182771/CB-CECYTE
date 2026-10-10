@@ -31,6 +31,7 @@ add_executable(chatbot_tests
     test_history.cpp
     test_markdown.cpp
     test_models_loader.cpp
+    test_paste.cpp
     test_provider_settings.cpp
     test_platform.cpp
     test_published_date.cpp
