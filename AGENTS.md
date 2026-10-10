@@ -79,7 +79,8 @@ chatbot/
 │   │                        # platform.h: capa de plataforma; platform_windows.h:
 │   │                        # UTF-8 <-> UTF-16 y FormatMessageW, solo para .cpp de Windows)
 │   └── src/                 # platform_posix.cpp o platform_windows.cpp (CMake elige uno)
-│                            # y platform_common.cpp (funciones puras)
+│                            # y platform_common.cpp (funciones puras); redirect.h/.cpp:
+│                            # mensaje y base sugerida de las respuestas 3xx
 ├── tools/                   # smoke.cpp: programa desechable para probar el núcleo;
 │                            # md_preview.cpp: vista previa del render de markdown
 ├── cli/
@@ -202,6 +203,7 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
   - 429: `RateLimited`.
   - 5xx: `Server`.
   - Otros estados no exitosos: `BadResponse`.
+  - **3xx:** `CurlTransport` nunca sigue redirecciones (sin `CURLOPT_FOLLOWLOCATION`: libcurl convertiría el POST en GET y la conversación iría a otra URL sin avisar); guarda `CURLINFO_REDIRECT_URL` en `HttpResponse::redirect_url`. Siguen siendo `BadResponse`, sin reintento, pero con `redirect_url` el mensaje dice a dónde redirige (`redirect_display`: sin query, fragmento, usuario ni controles, ≤ 200 bytes) y, si la redirección termina en el mismo path, la base sugerida (`suggest_base_url`, solo si pasa `validate_base_url` y no es la actual). Si la key aparece en la URL limpia o en la sugerencia, el mensaje genérico. En "Proveedor de IA", "Personalizado…" con una URL sin ruta (`base_url_has_path`) muestra un aviso que no bloquea: casi todos usan `/v1`.
   - `Retry-After` (segundos enteros, con tope de 60 s) se respeta en todos los errores HTTP reintentables: 429 y 5xx.
   - **Errores dentro del flujo** (evento SSE `{"error": {...}}` con estado 200, como manda NIM la sobrecarga): si `error.code` es un número o una cadena numérica, se clasifica con el mismo mapeo de estados HTTP; si no, por `error.type` sin distinguir mayúsculas (`overload`, `unavailable` o `server` → `Server`; `rate` o `exhausted` → `RateLimited`); si no, por `error.message` sin distinguir mayúsculas (`overload` o `temporarily unavailable` → `Server`; `rate limit` o `too many requests` → `RateLimited`); si nada aplica, `BadResponse`. El mensaje es `error.message`, truncado. `complete_stream` los reintenta con la regla de siempre: solo si son reintentables y no se ha entregado ningún delta.
   - Fallo de curl: `Network` o `Timeout` según el código.

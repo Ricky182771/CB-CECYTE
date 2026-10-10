@@ -20,6 +20,8 @@ namespace {
 
 /// Ancho de la columna de etiquetas del formulario.
 constexpr int kLabelWidth = 12;
+/// Filas del aviso bajo la URL base (base_url_hint): caben a 100 columnas.
+constexpr int kHintRows = 2;
 /// Ancho de la columna de categorías ("● Instrucciones del sistema" y un espacio).
 constexpr int kSectionsWidth = 28;
 /// Ancho del campo de la key.
@@ -570,6 +572,19 @@ ftxui::Element SettingsScreen::render_provider() const {
         });
     }
 
+    // Aviso de URL sin ruta: en "custom" sus kHintRows filas están siempre,
+    // vacías si no hay aviso, para que escribir la URL no mueva los campos de
+    // abajo. En pantallas angostas lo que no cabe se recorta.
+    ftxui::Element url_hint = ftxui::emptyElement();
+    if (s.provider_info().id == kCustomProvider) {
+        const std::optional<std::string> hint = s.base_url_hint();
+        url_hint = ftxui::hbox({
+                       ftxui::text("") | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kLabelWidth),
+                       ftxui::paragraph(hint.value_or("")) | notice | ftxui::flex,
+                   }) |
+                   ftxui::size(ftxui::HEIGHT, ftxui::EQUAL, kHintRows);
+    }
+
     // La key nunca se dibuja: el campo muestra "•" y el estado, enmascarado.
     ftxui::Element key;
     if (s.key_locked()) {
@@ -595,6 +610,7 @@ ftxui::Element SettingsScreen::render_provider() const {
         ftxui::hbox({label("Proveedor", dropdown_->Focused(), palette_),
                      dropdown_->Render() | ftxui::flex}),
         ftxui::hbox({label("URL base", url_input_->Focused(), palette_), std::move(url)}),
+        std::move(url_hint),
         ftxui::hbox({label("API key", key_input_->Focused(), palette_), std::move(key)}),
         ftxui::text(""),
         ftxui::hbox({label("Modelos", false, palette_),

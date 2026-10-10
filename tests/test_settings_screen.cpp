@@ -50,6 +50,7 @@ struct Harness {
     int search_key_saves = 0;
     std::string saved_search_key; ///< Lo que recibió el último guardado de la key de búsqueda.
     int closes = 0;
+    std::string base_url = "http://localhost:8080/v1"; ///< La de open(), en "custom".
     chatbot::cli::ModelsLoader loader{
         [] {
             auto transport = std::make_unique<chatbot_test::FakeTransport>();
@@ -94,7 +95,7 @@ struct Harness {
               std::size_t history_limit = 32000,
               chatbot::cli::SearchSettings search = {}) {
         chatbot::Config config;
-        config.base_url = "http://localhost:8080/v1";
+        config.base_url = base_url;
         config.model = model;
         config.history_limit_bytes = history_limit;
         chatbot::cli::ProviderSettings provider({"custom", config.base_url, std::move(model)},
@@ -106,8 +107,8 @@ struct Harness {
         REQUIRE(queue.run_until([this] { return !loader.busy(); }));
     }
 
-    ftxui::Screen draw() {
-        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(120),
+    ftxui::Screen draw(int width = 120) {
+        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                             ftxui::Dimension::Fixed(24));
         ftxui::Render(screen, settings.component()->Render());
         return screen;
@@ -190,6 +191,64 @@ TEST_CASE("configuración: rueda solo mueve el cursor dentro de la lista", "[aju
     h.save();
     REQUIRE(h.saved_model.has_value());
     CHECK(*h.saved_model == "modelo-36");
+}
+
+TEST_CASE("configuración: aviso de URL sin ruta bajo el campo, sin mover los campos",
+          "[ajustes][url]") {
+    for (const int width : {120, 100, 60, 40}) {
+        INFO("ancho " << width);
+        Harness with_path;
+        with_path.open("modelo-1");
+        const auto reference = with_path.draw(width);
+        CHECK(find(reference, "Casi todos").x < 0);
+
+        Harness root;
+        root.base_url = "http://localhost:8080";
+        root.open("modelo-1");
+        const auto screen = root.draw(width);
+        const Position url = find(screen, "URL base");
+        REQUIRE(url.x >= 0);
+        if (width >= 60) {
+            const Position shown = find(screen, "Casi todos");
+            REQUIRE(shown.x >= 0);
+            CHECK(shown.y == url.y + 1);
+            CHECK(shown.x == url.x + 12); // Alineado con el campo.
+        }
+        // Las filas están también sin aviso: los campos quedan donde estaban.
+        for (const char* field : {"URL base", "API key", "Modelos", "[ Guardar ]"}) {
+            INFO(field);
+            if (width >= 60) {
+                CHECK(find(reference, field).x >= 0);
+            }
+            CHECK(find(screen, field).y == find(reference, field).y);
+            CHECK(find(screen, field).x == find(reference, field).x);
+        }
+        // Completo en dos filas desde 100 columnas; más angosta, se recorta.
+        if (width >= 100) {
+            CHECK(find(screen, "https://servidor/v1).").y == url.y + 2);
+        }
+    }
+}
+
+TEST_CASE("configuración: el aviso de URL usa la tinta de los avisos, también con NO_COLOR",
+          "[ajustes][url][tema]") {
+    const char* no_color = GENERATE(static_cast<const char*>(nullptr), "1");
+    const chatbot_test::NoColorGuard environment(no_color);
+    Harness h;
+    h.base_url = "http://localhost:8080";
+    h.open("modelo-1");
+    const auto screen = h.draw();
+    const Position hint = find(screen, "Casi todos");
+    const Position other = find(screen, "opcional en local"); // Otro aviso (key_status).
+    REQUIRE(hint.x >= 0);
+    REQUIRE(other.x >= 0);
+    const auto& hint_cell = screen.CellAt(hint.x, hint.y);
+    const auto& other_cell = screen.CellAt(other.x, other.y);
+    CHECK(hint_cell.foreground_color == other_cell.foreground_color);
+    CHECK(hint_cell.dim == other_cell.dim);
+    if (no_color != nullptr) {
+        CHECK(hint_cell.dim);
+    }
 }
 
 TEST_CASE("configuración: NO_COLOR bloquea tema y fondo y no los guarda", "[ajustes][tema]") {

@@ -12,6 +12,8 @@ struct ParsedUrl {
     std::string scheme; ///< En minúsculas: "http", "https"...
     std::string host;   ///< En minúsculas; una IPv6 va con sus corchetes ("[::1]").
     int port = 0;       ///< 0 si la URL no trae puerto.
+    std::string path;   ///< Lo que sigue al host y al puerto, sin query ni fragmento
+                        ///< ("" si no hay; "/" si solo trae la barra).
 };
 
 /// Analiza scheme://host[:puerto][/ruta]. nullopt si no tiene esa forma: sin

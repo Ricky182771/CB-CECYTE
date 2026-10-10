@@ -65,6 +65,11 @@ public:
     [[nodiscard]] bool base_url_editable() const;
     /// false (y no cambia nada) si no es editable.
     bool set_base_url(std::string url);
+    /// Aviso que no bloquea (validate() y can_request_models() no cambian):
+    /// en "custom", si la URL efectiva es válida pero no tiene ruta
+    /// ("https://h", "https://h/"), recuerda que casi todos usan /v1. Nullopt
+    /// con un proveedor conocido, con ruta o con una URL inválida.
+    [[nodiscard]] std::optional<std::string> base_url_hint() const;
 
     // --- Key ---
     /// La key escrita en el formulario (vacía: se conserva la guardada).

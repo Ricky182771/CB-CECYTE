@@ -292,6 +292,16 @@ HttpResponse CurlTransport::perform(const HttpRequest& request, const StreamCall
     long status_code = 0;
     curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status_code);
     response.status = static_cast<int>(status_code);
+    if (response.status >= 300 && response.status <= 399) {
+        // libcurl la calcula aunque no siga la redirección (no hay
+        // CURLOPT_FOLLOWLOCATION, a propósito): absoluta y resuelta contra la
+        // URL pedida, o nullptr sin Location. Es del handle: se copia.
+        char* location = nullptr;
+        if (curl_easy_getinfo(handle, CURLINFO_REDIRECT_URL, &location) == CURLE_OK &&
+            location != nullptr) {
+            response.redirect_url = std::string{location};
+        }
+    }
     return response;
 }
 

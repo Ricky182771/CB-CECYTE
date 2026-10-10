@@ -34,6 +34,7 @@ add_executable(chatbot_tests
     test_provider_settings.cpp
     test_platform.cpp
     test_published_date.cpp
+    test_redirect.cpp
     test_response.cpp
     test_retries.cpp
     test_request_body.cpp
