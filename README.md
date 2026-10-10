@@ -94,6 +94,7 @@ Para usarlo en una PC sin MSYS2, descarga el artefacto `chatbot-windows-x64` de 
 - La configuración y la key van en `%APPDATA%\chatbot\` (`config.json` y `credentials.json`), las conversaciones en `%LOCALAPPDATA%\chatbot\conversations` y `/guardar` y `/exportar` en tu carpeta Descargas, dentro de `chatbot\`. Las variables `CHAT_*` siguen teniendo prioridad; `HOME` y `XDG_*` no se usan (MSYS2 define `HOME`).
 - `credentials.json` no necesita `chmod`: lo protege la carpeta de tu perfil de Windows, que solo tu usuario puede leer. Todavía no va cifrado.
 - `/copiar` y `[Copiar]` usan el portapapeles de Windows (con acentos y saltos de línea que el Bloc de notas respeta); por SSH, OSC 52 primero.
+- Para pegar, usa Ctrl+V, Ctrl+Shift+V o Shift+Insert: el chatbot lee el portapapeles de Windows y pega en la caja o en el campo de la configuración que tenga el foco (con el foco en la barra de conversaciones no pega nada). En Windows Terminal esos atajos los atiende la propia terminal, con el mismo resultado.
 - Los certificados HTTPS salen del almacén de Windows: no hace falta instalar nada más.
 - Al arrancar, la consola se pone en UTF-8 para que los acentos se vean bien, y al salir vuelve a la página de códigos que tenía (`chcp` muestra lo mismo que antes).
 - Ctrl+C sale limpio, también a mitad de una respuesta. Ctrl+Break y cerrar la ventana terminan el programa de golpe: lo que ya estaba guardado sigue ahí, pero la respuesta en curso se pierde y, con Ctrl+Break, `chcp` puede quedar en 65001.
@@ -238,10 +239,13 @@ Teclas:
 | Tecla | Acción |
 |---|---|
 | Enter | Envía el mensaje (no hace nada mientras hay una respuesta en curso) o ejecuta un comando (`/buscar`, `/copiar`, `/guardar`, `/exportar`) |
+| `\` + Enter | Nueva línea en la caja (el `\` justo antes del cursor se cambia por el salto) |
+| Alt+Enter | Nueva línea en la caja, en las terminales que lo mandan (en Windows no: es pantalla completa) |
+| ↑ / ↓ | Mueven el cursor entre las líneas de la caja |
 | Esc | Cancela la respuesta en curso; el texto regresa a la caja |
 | PgUp / PgDn | Sube o baja una pantalla del historial |
 | Rueda del ratón | Sube o baja unas 3 líneas (del historial, o de la barra si el puntero está sobre ella) |
-| Home / End | Con la caja vacía, va al inicio o al final del historial; con texto, mueve el cursor de la caja |
+| Home / End | Con la caja vacía, va al inicio o al final del historial; con texto, lleva el cursor al inicio o al final de todo el texto de la caja |
 | F2 | Abre o cierra la configuración |
 | Ctrl+N | Empieza una conversación nueva |
 | Ctrl+B | Muestra u oculta la barra de conversaciones |
@@ -257,6 +261,12 @@ A la izquierda está la lista de conversaciones guardadas, agrupadas por fecha: 
 - Con Ctrl+O la barra toma el foco: ↑/↓, PgUp/PgDn y Home/End para moverte (los encabezados de grupo se saltan); Enter abre; Supr borra (pide confirmación en la línea de estado: solo `s` borra); Esc vuelve a la caja de entrada. La fila seleccionada solo se resalta mientras la barra tiene el foco.
 - Con el ratón: un clic en una conversación la abre, en `+ Nueva` empieza una nueva y en `⚙ Configuración` abre la configuración.
 - Mientras hay una respuesta en curso, abrir, borrar o crear una conversación (desde la barra o con Ctrl+N) no hace nada: espera la respuesta o cancélala con Esc. Moverte por la lista sí se puede.
+
+#### Caja de entrada y pegar
+
+La caja acepta varias líneas: crece hasta 8 líneas (o un tercio de la terminal, lo que sea menor) y después se desplaza siguiendo al cursor. Enter siempre envía; para un salto de línea usa `\` + Enter o Alt+Enter (Shift+Enter y Ctrl+Enter no se distinguen de Enter en la terminal).
+
+Pega con el atajo de tu terminal (en Linux casi siempre Ctrl+Shift+V). El chatbot activa el *pegado entre corchetes* (bracketed paste): un texto pegado con varias líneas queda completo en la caja, sin enviarse, y los tabuladores pasan a 4 espacios. Si tu terminal no lo soporta, cada salto de línea pegado llega como Enter y envía el mensaje a la mitad: pega una sola línea o usa otra terminal. En los campos de una línea de la configuración (URL, keys, filtro y modelo), los saltos de línea pegados se quitan. Un pegado de más de 256 KiB se recorta y avisa.
 
 Si subes en el historial, la vista se queda donde está aunque llegue texto nuevo, y la línea de estado muestra `↓ Hay más abajo (End)`, o `(PgDn)` si hay texto en la caja (porque ahí End mueve el cursor). Al enviar un mensaje, la vista regresa abajo.
 
