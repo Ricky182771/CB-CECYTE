@@ -80,6 +80,9 @@ std::optional<ParsedUrl> parse_url(std::string_view url) {
         parsed.port = port;
     }
     parsed.host = lower(host);
+    // La ruta va de la autoridad a la primera "?" o "#".
+    const std::string_view after_authority = rest.substr(authority.size());
+    parsed.path = std::string{after_authority.substr(0, after_authority.find_first_of("?#"))};
     return parsed;
 }
 

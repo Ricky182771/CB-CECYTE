@@ -5,6 +5,7 @@
 #include "chatbot/platform.h"
 #include "config_internal.h"
 #include "error_body.h"
+#include "redirect.h"
 #include "sse.h"
 
 #include <nlohmann/json.hpp>
@@ -184,14 +185,49 @@ ChatError map_http_error(int status, const std::string& body) {
     return error;
 }
 
-/// Variante de map_http_error que ya conoce el valor crudo de Retry-After.
-ChatError map_http_error(int status, const std::string& body,
-                         const std::optional<std::string>& retry_after_raw) {
-    ChatError error = map_http_error(status, body);
+/// Mensaje de un 3xx con Location: a dónde redirige el servidor y, si se
+/// puede, la URL base sugerida. Nullopt (mensaje genérico) sin redirect_url
+/// o si la key aparece en la URL limpia o en la sugerencia (sección 9).
+std::optional<std::string> redirect_message(const Config& config, const HttpRequest& request,
+                                            const HttpResponse& response) {
+    if (response.status < 300 || response.status > 399 || !response.redirect_url.has_value()) {
+        return std::nullopt;
+    }
+    const auto has_key = [&config](std::string_view text) {
+        return !config.api_key.empty() && text.find(config.api_key) != std::string_view::npos;
+    };
+    const std::string shown = redirect_display(*response.redirect_url);
+    if (has_key(shown)) {
+        return std::nullopt;
+    }
+    // request.url = build_url(base_url, path): el path es lo que sigue a la base.
+    const std::string base = build_url(config.base_url, "");
+    const std::string_view path = std::string_view{request.url}.substr(
+        std::min(base.size(), request.url.size()));
+    const std::optional<std::string> suggestion =
+        suggest_base_url(request.url, *response.redirect_url, path);
+    if (suggestion.has_value() && !has_key(*suggestion)) {
+        return "El servidor redirige a " + shown +
+               ". Revisa la URL base: probablemente debe ser " + *suggestion +
+               " (CHAT_BASE_URL o \"base_url\").";
+    }
+    return "El servidor redirige a " + shown +
+           ". Revisa la URL base (CHAT_BASE_URL o \"base_url\"): puede faltarle o sobrarle "
+           "parte de la ruta, como /v1.";
+}
+
+/// Error HTTP de la respuesta del transporte, con el valor crudo de
+/// Retry-After y la explicación de las redirecciones.
+ChatError map_http_error(const Config& config, const HttpRequest& request,
+                         const HttpResponse& response) {
+    ChatError error = map_http_error(response.status, response.body);
+    if (std::optional<std::string> message = redirect_message(config, request, response)) {
+        error.message = std::move(*message);
+    }
     // Retry-After aplica a todos los errores HTTP reintentables (429 y 5xx,
     // típicamente 503), con el mismo tope de kMaxDelay.
     if (is_retryable(error.kind)) {
-        error.retry_after = parse_retry_after(retry_after_raw);
+        error.retry_after = parse_retry_after(response.retry_after);
     }
     return error;
 }
@@ -472,8 +508,7 @@ StreamAttemptOutcome run_stream_attempt(const Config& config, int attempt,
         return outcome;
     }
     if (response.status < 200 || response.status > 299) {
-        outcome.result = map_http_error(response.status, response.body,
-                                        response.retry_after);
+        outcome.result = map_http_error(config, request, response);
         return outcome;
     }
     // Con [DONE], o sin él pero con el flujo completo y limpio: éxito.
@@ -573,7 +608,7 @@ Result<std::string> ChatClient::send_with_retries(const HttpRequest& request,
         }
 
         // Error HTTP: mapear y decidir si se reintenta.
-        ChatError error = map_http_error(response.status, response.body, response.retry_after);
+        ChatError error = map_http_error(config_, request, response);
         if (attempt < kMaxRetries && is_retryable(error.kind)) {
             std::chrono::milliseconds wait{kBaseDelay * (1 << attempt)};
             if (error.retry_after.has_value()) {

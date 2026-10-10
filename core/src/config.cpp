@@ -254,6 +254,13 @@ bool is_local_base_url(std::string_view url) {
            is_local_host(parsed->host);
 }
 
+bool base_url_has_path(std::string_view url) {
+    const std::optional<ParsedUrl> parsed = parse_url(url);
+    // Solo barras ("/", "//") no cuentan: build_url las quita.
+    return parsed.has_value() && !validate_base_url(url).has_value() &&
+           parsed->path.find_first_not_of('/') != std::string::npos;
+}
+
 namespace {
 
 /// URL base y timeout: lo que se valida aunque falten la key o el modelo.

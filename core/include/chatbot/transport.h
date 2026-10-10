@@ -46,6 +46,10 @@ struct HttpResponse {
     std::string error;                      ///< Descripción del fallo de red (solo si status == 0).
     bool cancelled = false;                 ///< true si se canceló (callback o token).
     bool retryable = true;                  ///< false si el fallo de red no se arregla reintentando.
+    /// URL absoluta a la que redirige el servidor, ya resuelta contra la
+    /// pedida: solo en respuestas 3xx con Location. El transporte nunca sigue
+    /// la redirección. Viene del servidor: es un dato no confiable.
+    std::optional<std::string> redirect_url = std::nullopt;
 };
 
 /// Callback de streaming: recibe cada trozo crudo del cuerpo y el estado

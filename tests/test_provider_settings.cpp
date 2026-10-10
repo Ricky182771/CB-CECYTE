@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -288,4 +289,52 @@ TEST_CASE("ajustes: key vacía válida en Ollama y en un host local", "[proveedo
         CHECK_FALSE(settings.validate().has_value());
         CHECK_FALSE(settings.credential_update().has_value());
     }
+}
+
+TEST_CASE("ajustes: aviso de URL base sin ruta, sin bloquear", "[proveedor][ajustes]") {
+    for (const char* url : {"https://h", "https://h/", "https://h:8443", "http://localhost:8080"}) {
+        INFO(url);
+        ProviderSettings settings(saved("custom", url, "m"),
+                                  credentials_with(chatbot::credentials_key("custom", url), kSecret),
+                                  {});
+        const std::optional<std::string> hint = settings.base_url_hint();
+        REQUIRE(hint.has_value());
+        CHECK_THAT(*hint, Catch::Matchers::ContainsSubstring("/v1"));
+        // Solo es un aviso: se puede guardar y pedir modelos.
+        CHECK(settings.validate() == std::nullopt);
+        CHECK(settings.can_request_models());
+    }
+    for (const char* url :
+         {"https://h/v1", "https://h:8443/openai/v1", "http://h", "no es url", ""}) {
+        INFO(url);
+        ProviderSettings settings(saved("custom", url, "m"), {}, {});
+        CHECK_FALSE(settings.base_url_hint().has_value());
+    }
+
+    // Se actualiza al escribir.
+    ProviderSettings typing(saved("custom", "https://h/v1", "m"), {}, {});
+    CHECK_FALSE(typing.base_url_hint().has_value());
+    REQUIRE(typing.set_base_url("https://h"));
+    CHECK(typing.base_url_hint().has_value());
+
+    // Un proveedor conocido nunca, aunque CHAT_BASE_URL no tenga ruta.
+    for (std::size_t i = 0; i < chatbot::cli::providers().size(); ++i) {
+        if (chatbot::cli::providers()[i].id == chatbot::cli::kCustomProvider) {
+            continue;
+        }
+        ProviderSettings settings(saved("custom", "https://h", "m"), {}, {});
+        settings.select_provider(i);
+        CHECK_FALSE(settings.base_url_hint().has_value());
+        SettingsEnv env;
+        env.base_url = "https://h";
+        ProviderSettings locked(saved(std::string{chatbot::cli::providers()[i].id}, "", "m"), {},
+                                env);
+        CHECK_FALSE(locked.base_url_hint().has_value());
+    }
+
+    // En "custom" cuenta la URL efectiva: CHAT_BASE_URL.
+    SettingsEnv env;
+    env.base_url = "https://h";
+    ProviderSettings locked(saved("custom", "https://h/v1", "m"), {}, env);
+    CHECK(locked.base_url_hint().has_value());
 }

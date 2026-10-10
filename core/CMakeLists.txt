@@ -17,6 +17,7 @@ add_library(chatbot_core STATIC
     src/error_body.cpp
     src/history.cpp
     src/published_date.cpp
+    src/redirect.cpp
     src/config.cpp
     src/sleeper.cpp
     src/sse.cpp

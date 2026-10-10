@@ -114,6 +114,17 @@ bool ProviderSettings::base_url_editable() const {
     return provider_info().id == kCustomProvider && !base_url_locked();
 }
 
+std::optional<std::string> ProviderSettings::base_url_hint() const {
+    const std::string& url = effective_base_url();
+    // Hay servidores que sirven en la raíz: es solo un aviso.
+    if (provider_info().id != kCustomProvider || validate_base_url(url).has_value() ||
+        base_url_has_path(url)) {
+        return std::nullopt;
+    }
+    return "Casi todos los servidores compatibles con OpenAI usan una ruta como /v1 "
+           "(p. ej. https://servidor/v1).";
+}
+
 bool ProviderSettings::set_base_url(std::string url) {
     if (!base_url_editable()) {
         return false;

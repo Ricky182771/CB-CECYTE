@@ -91,6 +91,11 @@ struct ConfigOptions {
 /// la key es opcional.
 [[nodiscard]] bool is_local_base_url(std::string_view url);
 
+/// true si la URL es válida (validate_base_url) y trae una ruta después del
+/// host y el puerto que no sea solo barras (sin contar query ni fragmento):
+/// "https://h/v1" sí; "https://h", "https://h/" y "https://h:8443" no.
+[[nodiscard]] bool base_url_has_path(std::string_view url);
+
 /// Llave de la key de búsqueda web (Tavily) en credentials.json.
 inline constexpr std::string_view kSearchCredentialsKey = "search:tavily";
 
