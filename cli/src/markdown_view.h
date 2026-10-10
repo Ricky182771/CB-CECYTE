@@ -35,7 +35,8 @@ namespace chatbot::cli::md {
 [[nodiscard]] std::string code_title(int number, std::string_view info);
 
 /// Texto plano (sin markdown) filtrado con sanitize() y ajustado a width
-/// columnas con las mismas reglas; conserva los espacios repetidos. style
+/// columnas con las mismas reglas; conserva los espacios repetidos y la
+/// sangría de cada línea (las líneas de un mensaje pegado). style
 /// (por ejemplo, Palette::ink) se aplica solo al texto de cada línea, no al
 /// relleno hasta el borde.
 [[nodiscard]] ftxui::Element render_plain(std::string_view text, int width,

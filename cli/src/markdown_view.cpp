@@ -124,6 +124,28 @@ void push_words(std::vector<Atom>& atoms, const std::string& text, const Look& l
     flush();
 }
 
+/// Texto plano por líneas: como push_words sin colapsar, pero la sangría de
+/// cada línea va como una palabra de espacios (layout descarta los espacios
+/// al inicio de una línea, y el código pegado los necesita).
+void push_plain_lines(std::vector<Atom>& atoms, const std::string& text) {
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t end = text.find('\n', start);
+        const std::string line =
+            text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        const std::size_t indent = std::min(line.find_first_not_of(' '), line.size());
+        if (indent > 0) {
+            atoms.push_back(Atom{Atom::Kind::Word, line.substr(0, indent), Look{}});
+        }
+        push_words(atoms, line.substr(indent), Look{}, false);
+        if (end == std::string::npos) {
+            return;
+        }
+        atoms.push_back(Atom{Atom::Kind::Break, {}, Look{}});
+        start = end + 1;
+    }
+}
+
 void push_space(std::vector<Atom>& atoms, const Look& look) {
     atoms.push_back(Atom{Atom::Kind::Space, " ", look});
 }
@@ -1044,7 +1066,7 @@ std::string hyperlink_target(std::string_view url) {
 
 Element render_plain(std::string_view text, int width, const ftxui::Decorator& style) {
     std::vector<Atom> atoms;
-    push_words(atoms, sanitize(text), Look{}, false);
+    push_plain_lines(atoms, sanitize(text));
     // Sin Look, la paleta no se usa.
     return lines_element(flow(atoms, std::max(width, 1)), terminal_palette(), style);
 }

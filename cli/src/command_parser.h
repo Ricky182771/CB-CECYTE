@@ -37,11 +37,13 @@ inline constexpr std::string_view kSaveUsage = "Uso: /guardar [número de bloque
 inline constexpr std::string_view kExportUsage = "Uso: /exportar (sin argumentos)";
 
 /// Parsea el texto de entrada para detectar un comando.
-/// - `/buscar <consulta>`: devuelve Search con la consulta (sin espacios en los extremos).
+/// - `/buscar <consulta>`: devuelve Search con la consulta (sin espacios en los
+///   extremos y con cada salto de línea cambiado por un espacio).
 /// - `/buscar` sin consulta: devuelve SearchEmpty.
 /// - `/copiar [n]`, `/guardar [n [nombre]]` y `/exportar`: Copy, Save y
 ///   Export; con otros argumentos, CopyUsage, SaveUsage y ExportUsage. n son
-///   solo dígitos (a lo más 9); los argumentos se separan con espacios.
+///   solo dígitos (a lo más 9); los argumentos se separan con espacios o
+///   saltos de línea.
 /// - Cualquier otro texto (incluido `/buscarx`, `/copiarx` u otros comandos): devuelve Normal.
 ParsedCommand parse_command(std::string_view input);
 
