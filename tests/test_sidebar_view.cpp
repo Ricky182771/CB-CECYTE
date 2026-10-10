@@ -194,3 +194,15 @@ TEST_CASE("barra: lista vacía y vista desplazada", "[barra][vista]") {
     CHECK(drawn[3].find("roto.json") != std::string::npos);
     CHECK(drawn[1].find("+ Nueva") == std::string::npos);
 }
+
+TEST_CASE("barra: un título con saltos de línea ocupa una sola fila", "[barra][vista][varias]") {
+    // make_title ya los quita; esto cubre un archivo editado a mano.
+    Sidebar sidebar;
+    sidebar.open({item("a", "uno\ndos\ntres", "2026-10-04T10:00:00-06:00"),
+                  item("b", "otra", "2026-10-04T09:00:00-06:00")},
+                 "b");
+    const auto rows = rows_of(draw(sidebar, 24, 8, false));
+    const int first = row_with(rows, "uno dos tres");
+    REQUIRE(first >= 0);
+    CHECK(row_with(rows, "otra") == first + 1);
+}

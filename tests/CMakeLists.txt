@@ -29,8 +29,11 @@ add_executable(chatbot_tests
     test_provider_core.cpp
     test_error_mapping.cpp
     test_history.cpp
+    test_input_edit.cpp
+    test_key_log.cpp
     test_markdown.cpp
     test_models_loader.cpp
+    test_paste.cpp
     test_provider_settings.cpp
     test_platform.cpp
     test_published_date.cpp
@@ -70,6 +73,7 @@ add_executable(chatbot_ui_tests
     ${PROJECT_SOURCE_DIR}/cli/src/settings_screen.cpp
     test_settings_screen.cpp
     test_history_view.cpp
+    test_input_box.cpp
     test_input_style.cpp
     test_sidebar_view.cpp
     test_status_line.cpp

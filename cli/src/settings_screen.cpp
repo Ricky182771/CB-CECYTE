@@ -263,6 +263,32 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
 
 void SettingsScreen::focus() { categories_->TakeFocus(); }
 
+PasteTarget SettingsScreen::paste_target() const {
+    if (!settings_ || confirm_discard_ || dropdown_open_) {
+        return PasteTarget::None;
+    }
+    if (prompt_input_->Focused()) {
+        return PasteTarget::MultiLine;
+    }
+    for (const ftxui::Component& field :
+         {url_input_, key_input_, filter_input_, model_input_, search_key_input_}) {
+        if (field->Focused()) {
+            return PasteTarget::SingleLine;
+        }
+    }
+    return PasteTarget::None;
+}
+
+std::vector<std::pair<std::string_view, bool>> SettingsScreen::debug_focus() const {
+    return {{"root", root_->Focused()},
+            {"url", url_input_->Focused()},
+            {"key", key_input_->Focused()},
+            {"filter", filter_input_->Focused()},
+            {"model", model_input_->Focused()},
+            {"prompt", prompt_input_->Focused()},
+            {"search_key", search_key_input_->Focused()}};
+}
+
 Appearance SettingsScreen::chosen_appearance() const {
     Appearance appearance;
     appearance.theme = &themes()[static_cast<std::size_t>(theme_selected_)];

@@ -214,4 +214,8 @@ bool copy_to_native_clipboard(std::string_view /*text*/) {
     return false; // Sin API de portapapeles del sistema: programas u OSC 52.
 }
 
+std::optional<std::string> read_native_clipboard() {
+    return std::nullopt; // Solo Windows: en POSIX la terminal pega sola.
+}
+
 } // namespace chatbot::cli

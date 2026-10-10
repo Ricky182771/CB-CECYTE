@@ -131,3 +131,15 @@ TEST_CASE("exportar: fecha y nombre del archivo", "[exportar]") {
     const std::time_t when = std::mktime(&local);
     CHECK(chatbot::cli::export_file_name("", when) == "conversacion-20261008-140509.md");
 }
+
+TEST_CASE("exportar: un mensaje del usuario de varias líneas conserva sus saltos",
+          "[exportar][varias]") {
+    Conversation conversation{""};
+    REQUIRE(conversation.submit("Revisa esto:\n\nint x = 1;\nint y = 2;\n").has_value());
+    answer(conversation, "Listo.", "modelo");
+    const std::string markdown =
+        chatbot::cli::export_markdown(conversation.to_stored("2026-10-05T10:00:00-06:00"),
+                                      "2026-10-05 10:00");
+    CHECK(markdown.find("## Tú\n\nRevisa esto:\n\nint x = 1;\nint y = 2;\n\n## Asistente") !=
+          std::string::npos);
+}

@@ -811,3 +811,25 @@ TEST_CASE("botones: [✓] en la versión compacta", "[historial][botones]") {
     const ftxui::Screen screen = draw_view(view, entries, 25, 5, 0, {1});
     CHECK(row_text(screen, 1).find("[✓] [G]╮") != std::string::npos);
 }
+
+TEST_CASE("historial: un mensaje del usuario de varias líneas conserva sus saltos",
+          "[historial][varias]") {
+    HistoryView view;
+    const std::string text =
+        draw(view, {make(EntryKind::User, "primera línea\nsegunda\n\n    if (x) {\n    }")}, 40);
+    std::vector<std::string> rows;
+    std::size_t start = 0;
+    for (std::size_t end = text.find('\n'); end != std::string::npos;
+         start = end + 1, end = text.find('\n', start)) {
+        std::string row = text.substr(start, end - start);
+        row.erase(row.find_last_not_of(' ') + 1); // Sin el relleno de la derecha.
+        rows.push_back(row);
+    }
+    const auto at = std::find(rows.begin(), rows.end(), "primera línea");
+    REQUIRE(at != rows.end());
+    REQUIRE(rows.end() - at >= 5);
+    CHECK(*(at + 1) == "segunda");
+    CHECK(*(at + 2) == "");
+    CHECK(*(at + 3) == "    if (x) {");
+    CHECK(*(at + 4) == "    }");
+}

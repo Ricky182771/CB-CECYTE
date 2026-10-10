@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 #include <vector>
 
 namespace chatbot::cli {
@@ -109,8 +110,8 @@ ParsedCommand parse_command(std::string_view input) {
         return {ParsedCommand::Type::SearchEmpty, "", std::nullopt, ""};
     }
 
-    // Debe haber un espacio después de "/buscar".
-    if (input[kSearchCommand.size()] != ' ') {
+    // Debe haber un espacio (o un salto de línea) después de "/buscar".
+    if (!is_space(input[kSearchCommand.size()])) {
         // Es algo como "/buscarx", no es el comando.
         return {ParsedCommand::Type::Normal, std::string{input}, std::nullopt, ""};
     }
@@ -131,7 +132,10 @@ ParsedCommand parse_command(std::string_view input) {
         return {ParsedCommand::Type::SearchEmpty, "", std::nullopt, ""};
     }
 
-    return {ParsedCommand::Type::Search, std::string{query}, std::nullopt, ""};
+    // Tavily recibe una sola línea: los saltos pasan a espacios.
+    std::string text{query};
+    std::replace(text.begin(), text.end(), '\n', ' ');
+    return {ParsedCommand::Type::Search, std::move(text), std::nullopt, ""};
 }
 
 }  // namespace chatbot::cli

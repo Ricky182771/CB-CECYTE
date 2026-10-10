@@ -126,3 +126,9 @@ TEST_CASE("título: [Exportar] activo y atenuado se distinguen en cada tema", "[
         CHECK((a.foreground_color != b.foreground_color || a.dim != b.dim));
     }
 }
+
+TEST_CASE("barra de título: un título con saltos de línea queda en una fila",
+          "[titulo][varias]") {
+    const Drawn drawn = draw_bar("Chatbot CECyTE — modelo — uno\ndos", 80);
+    CHECK(drawn.text.find("uno dos") != std::string::npos);
+}

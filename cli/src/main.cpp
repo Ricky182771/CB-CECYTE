@@ -6,6 +6,7 @@
 // App::Post.
 
 #include "block_actions.h"
+#include "clipboard.h"
 #include "code_blocks.h"
 #include "command_parser.h"
 #include "conversation.h"
@@ -13,9 +14,12 @@
 #include "conversation_store.h"
 #include "downloads.h"
 #include "history_view.h"
+#include "input_edit.h"
 #include "input_style.h"
+#include "key_log.h"
 #include "markdown.h"
 #include "models_loader.h"
+#include "paste.h"
 #include "provider_settings.h"
 #include "request_runner.h"
 #include "search_context.h"
@@ -51,10 +55,12 @@
 #include <ftxui/screen/terminal.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -126,6 +132,64 @@ chatbot::cli::ListKey list_key(const ftxui::Event& event) {
         }
     }
     return ListKey::Other;
+}
+
+/// Traduce un evento de FTXUI para el acumulador del pegado entre corchetes.
+chatbot::cli::PasteKey paste_key(const ftxui::Event& event) {
+    using chatbot::cli::PasteKey;
+    // Event::Custom es Special("\0"): también un NUL pegado, que se descarta.
+    if (event.is_mouse() || event == ftxui::Event::Custom) {
+        return PasteKey::Passthrough;
+    }
+    if (event == ftxui::Event::Special(chatbot::cli::kPasteStartMark)) {
+        return PasteKey::Start;
+    }
+    if (event == ftxui::Event::Special(chatbot::cli::kPasteEndMark)) {
+        return PasteKey::End;
+    }
+    if (event.is_character()) {
+        return PasteKey::Character;
+    }
+    if (event == ftxui::Event::Return) {
+        return PasteKey::Return;
+    }
+    if (event == ftxui::Event::Tab) {
+        return PasteKey::Tab;
+    }
+    return PasteKey::Other;
+}
+
+/// Atajos de pegado de Windows: Ctrl+V (Ctrl+Shift+V llega igual, como el
+/// byte 0x16) y Shift+Insert (ESC [ 2 ; 2 ~ = 1b 5b 32 3b 32 7e, que FTXUI
+/// v7.0.3 entrega tal cual como Event::Special). Bytes confirmados en conhost
+/// (Windows 11 LTSC 2024) con CHAT_DEBUG_KEYS.
+bool is_paste_shortcut(const ftxui::Event& event) {
+    return event == ftxui::Event::CtrlV ||
+           event == ftxui::Event::Special(chatbot::cli::kShiftInsert);
+}
+
+/// Traduce un evento de FTXUI para el registro de teclas (key_log.h). La
+/// vista apunta a event: debe vivir mientras se use.
+chatbot::cli::KeyLogEvent key_log_event(ftxui::Event& event) { // mouse() no es const.
+    using Kind = chatbot::cli::KeyLogEvent::Kind;
+    chatbot::cli::KeyLogEvent out;
+    if (event == ftxui::Event::Custom) {
+        out.kind = Kind::Custom;
+    } else if (event.is_mouse()) {
+        static constexpr std::string_view kButtons[] = {
+            "left", "middle", "right", "none", "wheel-up", "wheel-down", "wheel-left", "wheel-right"};
+        static constexpr std::string_view kMotions[] = {"released", "pressed", "moved"};
+        const ftxui::Mouse& mouse = event.mouse();
+        out.kind = Kind::Mouse;
+        out.button = mouse.button < std::size(kButtons) ? kButtons[mouse.button] : "?";
+        out.motion = mouse.motion < std::size(kMotions) ? kMotions[mouse.motion] : "?";
+        out.x = mouse.x;
+        out.y = mouse.y;
+    } else {
+        out.kind = event.is_character() ? Kind::Character : Kind::Special;
+        out.input = event.input();
+    }
+    return out;
 }
 
 /// Igual que ftxui::reflect, pero guarda la caja completa que recibe el
@@ -289,6 +353,7 @@ int main() {
     const chatbot::cli::ConversationStore store{chatbot::cli::default_data_dir().value_or("")};
     chatbot::cli::Conversation conversation{system_prompt};
     std::string input_text;
+    int input_cursor = 0; ///< Cursor de la caja (InputOption::cursor_position), en bytes.
     Scroll scroll;
     chatbot::cli::HistoryView history;
     chatbot::cli::CodeBlockIndex code_blocks; ///< Números de los bloques (/copiar, /guardar).
@@ -372,6 +437,7 @@ int main() {
             }
             if (!result.error || always_clear) {
                 input_text.clear();
+                input_cursor = chatbot::cli::cursor_at_end(input_text);
             }
             scroll.to_bottom();
         };
@@ -463,12 +529,13 @@ int main() {
             return; // Caja vacía.
         }
         input_text.clear();
+        input_cursor = chatbot::cli::cursor_at_end(input_text);
         scroll.to_bottom();
         const auto on_delta = [&conversation](std::string delta) {
             conversation.append_delta(delta);
         };
         const auto on_done =
-            [&conversation, &input_text, &last_dropped, &store, &sidebar, &model,
+            [&conversation, &input_text, &input_cursor, &last_dropped, &store, &sidebar, &model,
              &searching](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
                 searching = false;
                 last_dropped = dropped;
@@ -485,6 +552,7 @@ int main() {
                 // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
                 if (restored.has_value() && input_text.empty()) {
                     input_text = *restored;
+                    input_cursor = chatbot::cli::cursor_at_end(input_text);
                 }
             };
         if (!search) {
@@ -517,7 +585,12 @@ int main() {
     };
 
     ftxui::InputOption input_option;
+    // Varias líneas sin multiline: en FTXUI v7.0.3 multiline solo cambia lo
+    // que hace Enter (con true, inserta "\n" y además llama a on_enter). El
+    // dibujo ya parte el contenido por "\n" y ↑/↓ ya mueven el cursor entre
+    // líneas. Enter envía; "\" + Enter y Alt+Enter hacen el salto (root).
     input_option.multiline = false;
+    input_option.cursor_position = &input_cursor;
     // Sin el fondo invertido del transform por defecto (ver input_style.h).
     input_option.transform = [&palette](ftxui::InputState state) {
         return chatbot::cli::input_transform(std::move(state.element), state.hovered,
@@ -826,8 +899,9 @@ int main() {
                               notice});
         }
 
-        placeholder = runner != nullptr ? "Escribe tu mensaje y presiona Enter"
-                                        : std::string{kSetupNotice} + " (F2)";
+        placeholder = runner != nullptr
+                          ? std::string{chatbot::cli::input_placeholder(width - 2)}
+                          : std::string{kSetupNotice} + " (F2)";
         const std::string title =
             "Chatbot CECyTE — " + (model.empty() ? std::string{"sin configurar"} : model) + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
@@ -838,10 +912,16 @@ int main() {
             std::move(body),
             ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
             chatbot::cli::status_line(status, width),
-            // El prompt en negritas marca la caja sin un bloque de color.
+            // El prompt en negritas marca la caja sin un bloque de color. La
+            // caja crece con sus líneas hasta su tope; más allá, su frame
+            // sigue la línea del cursor (Input la marca con focus).
             ftxui::hbox({ftxui::text("> ") | ftxui::bold |
                              palette.ink(&chatbot::cli::Theme::user_label),
-                         input->Render() | ftxui::flex}),
+                         input->Render() |
+                             ftxui::size(ftxui::HEIGHT, ftxui::EQUAL,
+                                         chatbot::cli::input_height(
+                                             input_text, ftxui::Terminal::Size().dimy)) |
+                             ftxui::flex}),
         });
         if (sidebar_visible) {
             // Un espacio entre el borde de la barra y la conversación.
@@ -1000,9 +1080,99 @@ int main() {
         return false;
     };
 
+    // Pegado entre corchetes (DECSET 2004): se activa con la primera tarea
+    // del loop, cuando FTXUI ya instaló la terminal (en conhost, el modo VT
+    // de salida lo activa FTXUI) y se desactiva antes de salir del loop.
+    // Todo va por std::cout, el canal de FTXUI, entre cuadros.
+    chatbot::cli::BracketedPaste bracketed_paste;
+    bool paste_mode_lost = false; ///< POSIX: se suspendió con Ctrl+Z (se desactivó).
+    const auto quit = [&] {
+        (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOff);
+        screen.Exit();
+    };
+
+    // Aviso en la línea de estado o, con la configuración abierta, bajo su
+    // formulario (la línea de estado no se ve).
+    const auto notify = [&](std::string_view notice) {
+        if (settings.is_open()) {
+            settings.show_notice(std::string{notice});
+        } else {
+            flash = std::string{notice};
+        }
+    };
+    // A dónde iría un pegado según el foco (paste.h).
+    const auto current_paste_target = [&] {
+        return chatbot::cli::paste_target(
+            sidebar_visible && sidebar_panel->Focused(), settings.is_open(),
+            settings.is_open() ? settings.paste_target() : chatbot::cli::PasteTarget::None);
+    };
+    // Inserta un pegado (entre corchetes o con un atajo) donde está el foco:
+    // un solo Event::Character con todo el texto, que Input::HandleCharacter
+    // inserta de una vez en el cursor. Así sirve en la caja y en todos los
+    // campos de la configuración. Con la barra lateral, se ignora.
+    // Devuelve true si insertó algo.
+    const auto deliver_paste = [&](std::string_view raw, bool truncated) {
+        const std::optional<chatbot::cli::SanitizedPaste> paste =
+            chatbot::cli::prepare_paste(raw, current_paste_target());
+        if (!paste.has_value()) {
+            return false;
+        }
+        const ftxui::Event event = ftxui::Event::Character(paste->text);
+        if (settings.is_open()) {
+            (void)settings.component()->OnEvent(event);
+        } else if (event == ftxui::Event::Return) {
+            // Event compara solo el texto: un "\n" pegado solo sería Enter
+            // para la caja y enviaría el mensaje.
+            chatbot::cli::insert_at_cursor(input_text, input_cursor, paste->text);
+        } else {
+            (void)input->OnEvent(event);
+        }
+        if (truncated || paste->truncated) {
+            notify(chatbot::cli::kPasteTruncated);
+        }
+        return true;
+    };
+
+    // Registro de teclas para diagnosticar (CHAT_DEBUG_KEYS, key_log.h).
+    chatbot::cli::KeyLog key_log{chatbot::cli::environment_value("CHAT_DEBUG_KEYS")};
+    const auto log_event = [&](ftxui::Event& event) {
+        chatbot::cli::KeyLogState state;
+        state.settings_open = settings.is_open();
+        state.sidebar_focused = sidebar_visible && sidebar_panel->Focused();
+        state.paste_target = current_paste_target();
+        state.bracketed_paste_open = bracketed_paste.active();
+        if (settings.is_open()) {
+            state.focused_fields = settings.debug_focus();
+        }
+        key_log.write(chatbot::cli::format_key_event(
+            chatbot::cli::key_log_time(std::chrono::system_clock::now()), key_log_event(event),
+            state));
+    };
+
     const ftxui::Component root = ftxui::CatchEvent(layout, [&](ftxui::Event event) {
+        if (key_log.enabled()) {
+            log_event(event);
+        }
+        if (paste_mode_lost) {
+            // De vuelta de Ctrl+Z (fg): el shell pudo haberlo desactivado.
+            (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOn);
+            paste_mode_lost = false;
+        }
+        // Lo que llega entre las marcas del pegado es texto, aunque sea
+        // Enter, Tab o Ctrl+C. Sin 201~ y tras una pausa de más de
+        // kPasteIdleLimit, el pegado se entrega y este evento sigue normal
+        // (así Ctrl+C siempre puede salir).
+        const chatbot::cli::BracketedPaste::Step pasted = bracketed_paste.feed(
+            paste_key(event), event.is_character() ? event.character() : std::string{});
+        if (pasted.text.has_value()) {
+            flash.clear(); // Como cualquier tecla.
+            deliver_paste(*pasted.text, pasted.truncated);
+        }
+        if (pasted.consumed) {
+            return true;
+        }
         if (event == ftxui::Event::CtrlC) {
-            screen.Exit();
+            quit();
             return true;
         }
         if (event == ftxui::Event::Custom) {
@@ -1012,6 +1182,38 @@ int main() {
             return handle_mouse(std::move(event));
         }
         flash.clear(); // El aviso dura hasta la siguiente tecla.
+        if (event == ftxui::Event::CtrlZ && chatbot::current_os() == chatbot::Os::Posix) {
+            // FTXUI suspende el proceso (SIGTSTP): el shell no debe recibir
+            // las marcas. Al volver se activa otra vez (arriba).
+            (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOff);
+            paste_mode_lost = true;
+            return false;
+        }
+        if (chatbot::current_os() == chatbot::Os::Windows && is_paste_shortcut(event)) {
+            // conhost no pega con la entrada en modo VT (la activa FTXUI):
+            // la app lee el portapapeles. En Linux la terminal pega sola.
+            const chatbot::cli::PasteTarget target = current_paste_target();
+            if (target == chatbot::cli::PasteTarget::None) {
+                // Una lista, un botón o una pregunta: aviso. La barra lateral: nada.
+                if (const auto notice = chatbot::cli::paste_shortcut_notice(
+                        sidebar_visible && sidebar_panel->Focused(), target)) {
+                    notify(*notice);
+                }
+                key_log.write(chatbot::cli::key_log_time(std::chrono::system_clock::now()) +
+                              " paste-shortcut ignored target=none");
+                return true;
+            }
+            const std::optional<std::string> text = chatbot::cli::read_native_clipboard();
+            const bool delivered = text.has_value() && deliver_paste(*text, false);
+            if (!text.has_value()) {
+                notify(chatbot::cli::kClipboardNoText);
+            }
+            key_log.write(chatbot::cli::format_paste_shortcut(
+                chatbot::cli::key_log_time(std::chrono::system_clock::now()),
+                text.has_value() ? std::optional<std::size_t>{text->size()} : std::nullopt,
+                delivered));
+            return true;
+        }
         if (event == ftxui::Event::F2) {
             if (settings.is_open()) {
                 (void)settings.request_close();
@@ -1058,9 +1260,21 @@ int main() {
             (void)settings.component()->OnEvent(event);
             return true;
         }
-        // ←/→ y Tab son de la caja: si llegaran al contenedor del split,
-        // moverían el foco a la barra.
+        // "\" + Enter: salto de línea en lugar de enviar.
+        if (event == ftxui::Event::Return &&
+            chatbot::cli::backslash_newline(input_text, input_cursor)) {
+            return true;
+        }
+        // Alt+Enter (donde llega: en Windows es pantalla completa).
+        if (event == ftxui::Event::Special(chatbot::cli::kAltEnter) ||
+            event == ftxui::Event::Special(chatbot::cli::kAltEnterLf)) {
+            chatbot::cli::insert_at_cursor(input_text, input_cursor, "\n");
+            return true;
+        }
+        // ←/→, ↑/↓ y Tab son de la caja: si llegaran al contenedor del
+        // split, moverían el foco a la barra.
         if (event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight ||
+            event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown ||
             event == ftxui::Event::Tab || event == ftxui::Event::TabReverse) {
             input->OnEvent(event);
             return true;
@@ -1103,6 +1317,7 @@ int main() {
     } else {
         input->TakeFocus();
     }
+    screen.Post([] { (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOn); });
     screen.Loop(root);
 
     // Al regresar de Loop(), el runner se destruye antes que screen y client

@@ -60,7 +60,10 @@ add_library(chatbot_cli_lib STATIC
     src/conversation_store.cpp
     src/downloads.cpp
     src/markdown.cpp
+    src/input_edit.cpp
+    src/key_log.cpp
     src/models_loader.cpp
+    src/paste.cpp
     src/provider_settings.cpp
     src/providers.cpp
     src/request_runner.cpp

@@ -150,3 +150,38 @@ TEST_CASE("parse_command manda como mensaje normal los comandos parecidos", "[co
         CHECK(result.text == input);
     }
 }
+
+TEST_CASE("parse_command acepta saltos de línea entre argumentos", "[command_parser]") {
+    SECTION("/copiar y /guardar") {
+        const auto copy = parse_command("/copiar\n2");
+        REQUIRE(copy.type == ParsedCommand::Type::Copy);
+        REQUIRE(copy.block == 2);
+
+        const auto save = parse_command("/guardar 3\nnotas.txt\n");
+        REQUIRE(save.type == ParsedCommand::Type::Save);
+        REQUIRE(save.block == 3);
+        REQUIRE(save.file_name == "notas.txt");
+
+        REQUIRE(parse_command("/guardar\n3\nuno\ndos").type == ParsedCommand::Type::SaveUsage);
+    }
+    SECTION("/exportar con un salto final sigue sin argumentos") {
+        REQUIRE(parse_command("/exportar\n").type == ParsedCommand::Type::Export);
+        REQUIRE(parse_command("/exportar\nalgo").type == ParsedCommand::Type::ExportUsage);
+    }
+    SECTION("/buscar seguido de un salto de línea") {
+        const auto result = parse_command("/buscar\nclima en Toluca");
+        REQUIRE(result.type == ParsedCommand::Type::Search);
+        REQUIRE(result.text == "clima en Toluca");
+        REQUIRE(parse_command("/buscar\n\n").type == ParsedCommand::Type::SearchEmpty);
+    }
+    SECTION("La consulta de /buscar va en una línea") {
+        const auto result = parse_command("/buscar receta de\nmole\npoblano\n");
+        REQUIRE(result.type == ParsedCommand::Type::Search);
+        REQUIRE(result.text == "receta de mole poblano");
+    }
+    SECTION("Un mensaje normal conserva sus saltos") {
+        const auto result = parse_command("hola\n\nmundo");
+        REQUIRE(result.type == ParsedCommand::Type::Normal);
+        REQUIRE(result.text == "hola\n\nmundo");
+    }
+}
