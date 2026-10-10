@@ -115,6 +115,15 @@ struct CopyResult {
 /// con to_crlf. true si se pudo. En POSIX, siempre false.
 [[nodiscard]] bool copy_to_native_clipboard(std::string_view text);
 
+/// Lee el texto del portapapeles de Windows (clipboard_windows.cpp):
+/// OpenClipboard con los mismos reintentos que al copiar,
+/// IsClipboardFormatAvailable(CF_UNICODETEXT), GetClipboardData y
+/// GlobalLock, con la longitud acotada por GlobalSize (sin confiar en el
+/// L'\0' final) y a lo más kMaxPasteBytes + 1 unidades UTF-16 (lo demás lo
+/// recortaría sanitize_paste). nullopt si no hay texto o algo falla. En
+/// POSIX, siempre nullopt: ahí pega la terminal.
+[[nodiscard]] std::optional<std::string> read_native_clipboard();
+
 /// Escribe en std::cout (la terminal de FTXUI) y hace flush.
 [[nodiscard]] bool write_to_terminal(std::string_view sequence);
 

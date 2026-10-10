@@ -2,12 +2,16 @@
 // programas. CMake lo compila en lugar de clipboard_posix.cpp en Windows.
 
 #include "clipboard.h"
+#include "paste.h"
 
 #include "chatbot/platform_windows.h"
 
 #include <windows.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <string>
 
 namespace chatbot::cli {
 
@@ -82,6 +86,25 @@ private:
     HGLOBAL handle_;
 };
 
+/// GlobalLock mientras vive (GlobalUnlock al salir).
+class GlobalLockGuard {
+public:
+    explicit GlobalLockGuard(HGLOBAL memory)
+        : memory_(memory), data_(::GlobalLock(memory)) {}
+    ~GlobalLockGuard() {
+        if (data_ != nullptr) {
+            ::GlobalUnlock(memory_);
+        }
+    }
+    GlobalLockGuard(const GlobalLockGuard&) = delete;
+    GlobalLockGuard& operator=(const GlobalLockGuard&) = delete;
+    [[nodiscard]] const void* data() const { return data_; }
+
+private:
+    HGLOBAL memory_;
+    void* data_;
+};
+
 } // namespace
 
 bool find_in_path(std::string_view /*program*/) {
@@ -122,6 +145,38 @@ bool copy_to_native_clipboard(std::string_view text) {
     }
     memory.release();
     return true;
+}
+
+std::optional<std::string> read_native_clipboard() {
+    if (::IsClipboardFormatAvailable(CF_UNICODETEXT) == 0) {
+        return std::nullopt;
+    }
+    // Para leer no hace falta ser dueño: OpenClipboard(nullptr) basta.
+    const OpenedClipboard clipboard(nullptr);
+    if (!clipboard.is_open()) {
+        return std::nullopt;
+    }
+    const HANDLE data = ::GetClipboardData(CF_UNICODETEXT);
+    if (data == nullptr) {
+        return std::nullopt;
+    }
+    const SIZE_T bytes = ::GlobalSize(data);
+    const GlobalLockGuard lock(data);
+    if (lock.data() == nullptr) {
+        return std::nullopt;
+    }
+    // Sin confiar en el L'\0' final: a lo más lo que mide el bloque. Cada
+    // unidad UTF-16 da al menos un byte de UTF-8, así que con
+    // kMaxPasteBytes + 1 unidades sanitize_paste todavía sabe que recortó.
+    const auto* text = static_cast<const wchar_t*>(lock.data());
+    const std::size_t limit =
+        std::min<std::size_t>(bytes / sizeof(wchar_t), kMaxPasteBytes + 1);
+    std::size_t length = 0;
+    while (length < limit && text[length] != L'\0') {
+        ++length;
+    }
+    const std::wstring wide(text, length);
+    return chatbot::utf16_to_utf8(wide);
 }
 
 } // namespace chatbot::cli

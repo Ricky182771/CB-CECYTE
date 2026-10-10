@@ -73,4 +73,93 @@ SanitizedPaste sanitize_paste(std::string_view text, bool multiline) {
     return out;
 }
 
+PasteTarget paste_target(bool sidebar_focused, bool settings_open, PasteTarget settings_field) {
+    if (sidebar_focused) {
+        return PasteTarget::None;
+    }
+    return settings_open ? settings_field : PasteTarget::MultiLine;
+}
+
+std::optional<SanitizedPaste> prepare_paste(std::string_view raw, PasteTarget target) {
+    if (target == PasteTarget::None) {
+        return std::nullopt;
+    }
+    SanitizedPaste paste = sanitize_paste(raw, target == PasteTarget::MultiLine);
+    if (paste.text.empty()) {
+        return std::nullopt;
+    }
+    return paste;
+}
+
+void BracketedPaste::append(std::string_view piece) {
+    if (truncated_) {
+        return;
+    }
+    if (buffer_.size() + piece.size() > kMaxPasteBytes) {
+        truncated_ = true; // Lo demás se descarta hasta la marca de fin.
+        return;
+    }
+    buffer_ += piece;
+}
+
+BracketedPaste::Step BracketedPaste::finish() {
+    Step step{true, std::move(buffer_), truncated_};
+    buffer_.clear();
+    truncated_ = false;
+    active_ = false;
+    return step;
+}
+
+BracketedPaste::Step BracketedPaste::feed(PasteKey key, std::string_view character) {
+    const std::chrono::steady_clock::time_point now = clock_();
+    // Un pegado sin fin después de una pausa: se entrega y el evento sigue
+    // como si no hubiera pegado.
+    Step closed;
+    if (active_ && now - last_ > kPasteIdleLimit) {
+        closed = finish();
+        closed.consumed = false;
+    }
+    Step step = process(key, character);
+    if (active_ && step.consumed) {
+        last_ = now;
+    }
+    if (closed.text.has_value()) {
+        // Sin pegado activo, process nunca entrega texto.
+        step.text = std::move(closed.text);
+        step.truncated = closed.truncated;
+    }
+    return step;
+}
+
+BracketedPaste::Step BracketedPaste::process(PasteKey key, std::string_view character) {
+    switch (key) {
+    case PasteKey::Passthrough:
+        return {};
+    case PasteKey::Start: {
+        // Un Start sin End antes: lo que había también se pegó.
+        Step step = active_ ? finish() : Step{true, std::nullopt, false};
+        active_ = true;
+        return step;
+    }
+    case PasteKey::End:
+        return active_ ? finish() : Step{true, std::nullopt, false};
+    case PasteKey::Character:
+    case PasteKey::Return:
+    case PasteKey::Tab:
+    case PasteKey::Other:
+        break;
+    }
+    if (!active_) {
+        return {};
+    }
+    if (key == PasteKey::Character) {
+        append(character);
+    } else if (key == PasteKey::Return) {
+        append("\n");
+    } else if (key == PasteKey::Tab) {
+        append("\t");
+    }
+    return Step{true, std::nullopt, false};
+}
+
 } // namespace chatbot::cli

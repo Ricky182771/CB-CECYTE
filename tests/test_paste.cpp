@@ -4,9 +4,14 @@
 
 #include "chatbot/utf8.h"
 
+#include <chrono>
 #include <string>
 
+using chatbot::cli::BracketedPaste;
 using chatbot::cli::kMaxPasteBytes;
+using chatbot::cli::PasteKey;
+using chatbot::cli::PasteTarget;
+using chatbot::cli::prepare_paste;
 using chatbot::cli::sanitize_paste;
 
 TEST_CASE("sanitize_paste convierte CRLF y CR en LF", "[paste]") {
@@ -101,5 +106,249 @@ TEST_CASE("sanitize_paste recorta a kMaxPasteBytes sin partir un carácter", "[p
         const auto paste = sanitize_paste(text, true);
         CHECK(paste.truncated);
         CHECK(paste.text.size() == kMaxPasteBytes - 3);
+    }
+}
+
+TEST_CASE("prepare_paste según el destino", "[paste]") {
+    SECTION("Con la barra lateral, el pegado se ignora") {
+        const PasteTarget target = chatbot::cli::paste_target(true, false, PasteTarget::None);
+        CHECK(target == PasteTarget::None);
+        CHECK_FALSE(prepare_paste("hola\nmundo", target).has_value());
+        // Aunque la configuración esté abierta detrás.
+        CHECK(chatbot::cli::paste_target(true, true, PasteTarget::MultiLine) ==
+              PasteTarget::None);
+    }
+    SECTION("Sin barra ni configuración, la caja de la conversación (varias líneas)") {
+        const PasteTarget target = chatbot::cli::paste_target(false, false, PasteTarget::None);
+        CHECK(target == PasteTarget::MultiLine);
+        CHECK(prepare_paste("a\r\nb", target)->text == "a\nb");
+    }
+    SECTION("Con la configuración, el campo que tiene el foco") {
+        CHECK(chatbot::cli::paste_target(false, true, PasteTarget::SingleLine) ==
+              PasteTarget::SingleLine);
+        CHECK(prepare_paste("key\n", PasteTarget::SingleLine)->text == "key");
+        CHECK(chatbot::cli::paste_target(false, true, PasteTarget::None) == PasteTarget::None);
+    }
+    SECTION("Nada que insertar") {
+        CHECK_FALSE(prepare_paste("", PasteTarget::MultiLine).has_value());
+        CHECK_FALSE(prepare_paste("\x01\x02", PasteTarget::MultiLine).has_value());
+        CHECK_FALSE(prepare_paste("\n", PasteTarget::SingleLine).has_value());
+    }
+    SECTION("Un salto de línea solo sí se pega con varias líneas") {
+        CHECK(prepare_paste("\r\n", PasteTarget::MultiLine)->text == "\n");
+    }
+}
+
+namespace {
+
+/// Reloj falso: solo avanza cuando la prueba lo mueve.
+struct FakeClock {
+    std::chrono::steady_clock::time_point now{std::chrono::hours{1}};
+    BracketedPaste::Clock clock() {
+        return [this] { return now; };
+    }
+};
+
+/// Pasa un texto como lo entrega FTXUI: un Character por carácter, "\n"
+/// como Return y "\t" como Tab.
+void feed_text(BracketedPaste& paste, std::string_view text) {
+    std::size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '\n') {
+            CHECK(paste.feed(PasteKey::Return).consumed);
+            ++i;
+            continue;
+        }
+        if (text[i] == '\t') {
+            CHECK(paste.feed(PasteKey::Tab).consumed);
+            ++i;
+            continue;
+        }
+        const std::size_t start = i;
+        REQUIRE(chatbot::utf8::next_code_point(text, i).has_value());
+        const auto step = paste.feed(PasteKey::Character, text.substr(start, i - start));
+        CHECK(step.consumed);
+        CHECK_FALSE(step.text.has_value());
+    }
+}
+
+} // namespace
+
+TEST_CASE("BracketedPaste acumula entre las marcas", "[paste]") {
+    FakeClock time;
+    BracketedPaste paste{time.clock()};
+    SECTION("Fuera de un pegado no consume nada") {
+        CHECK_FALSE(paste.active());
+        CHECK_FALSE(paste.feed(PasteKey::Character, "a").consumed);
+        CHECK_FALSE(paste.feed(PasteKey::Return).consumed);
+        CHECK_FALSE(paste.feed(PasteKey::Tab).consumed);
+        CHECK_FALSE(paste.feed(PasteKey::Other).consumed);
+    }
+    SECTION("Texto con Return y Tab en medio") {
+        const auto start = paste.feed(PasteKey::Start);
+        CHECK(start.consumed);
+        CHECK_FALSE(start.text.has_value());
+        CHECK(paste.active());
+        feed_text(paste, "int main() {\n\treturn 0; // ñ\n}");
+        const auto end = paste.feed(PasteKey::End);
+        CHECK(end.consumed);
+        REQUIRE(end.text.has_value());
+        CHECK(*end.text == "int main() {\n\treturn 0; // ñ\n}");
+        CHECK_FALSE(end.truncated);
+        CHECK_FALSE(paste.active());
+        // Después vuelve a dejar pasar las teclas.
+        CHECK_FALSE(paste.feed(PasteKey::Return).consumed);
+    }
+    SECTION("Los eventos especiales se descartan") {
+        (void)paste.feed(PasteKey::Start);
+        feed_text(paste, "a");
+        CHECK(paste.feed(PasteKey::Other).consumed);
+        feed_text(paste, "b");
+        CHECK(*paste.feed(PasteKey::End).text == "ab");
+    }
+    SECTION("El ratón y Event::Custom no rompen el acumulador") {
+        (void)paste.feed(PasteKey::Start);
+        feed_text(paste, "uno");
+        const auto mouse = paste.feed(PasteKey::Passthrough);
+        CHECK_FALSE(mouse.consumed);
+        CHECK_FALSE(mouse.text.has_value());
+        CHECK(paste.active());
+        feed_text(paste, "\ndos");
+        CHECK(*paste.feed(PasteKey::End).text == "uno\ndos");
+    }
+    SECTION("Un inicio sin fin seguido de otro inicio entrega el primero") {
+        (void)paste.feed(PasteKey::Start);
+        feed_text(paste, "primero");
+        const auto again = paste.feed(PasteKey::Start);
+        CHECK(again.consumed);
+        REQUIRE(again.text.has_value());
+        CHECK(*again.text == "primero");
+        CHECK(paste.active());
+        feed_text(paste, "segundo");
+        CHECK(*paste.feed(PasteKey::End).text == "segundo");
+    }
+    SECTION("Un fin sin inicio se descarta") {
+        const auto end = paste.feed(PasteKey::End);
+        CHECK(end.consumed);
+        CHECK_FALSE(end.text.has_value());
+        CHECK_FALSE(paste.active());
+    }
+    SECTION("Un pegado vacío entrega texto vacío") {
+        (void)paste.feed(PasteKey::Start);
+        const auto end = paste.feed(PasteKey::End);
+        REQUIRE(end.text.has_value());
+        CHECK(end.text->empty());
+    }
+}
+
+TEST_CASE("BracketedPaste deja de acumular en kMaxPasteBytes", "[paste]") {
+    FakeClock time;
+    BracketedPaste paste{time.clock()};
+    (void)paste.feed(PasteKey::Start);
+    bool all_consumed = true;
+    for (std::size_t i = 0; i < kMaxPasteBytes; ++i) {
+        all_consumed = paste.feed(PasteKey::Character, "a").consumed && all_consumed;
+    }
+    REQUIRE(all_consumed);
+    // Lo que sigue se consume (no llega a la caja) pero no se guarda.
+    CHECK(paste.feed(PasteKey::Character, "\xC3\xB1").consumed);
+    CHECK(paste.feed(PasteKey::Return).consumed);
+    CHECK(paste.feed(PasteKey::Character, "b").consumed);
+    const auto end = paste.feed(PasteKey::End);
+    REQUIRE(end.text.has_value());
+    CHECK(end.text->size() == kMaxPasteBytes);
+    CHECK(end.text->find('b') == std::string::npos);
+    CHECK(end.truncated);
+
+    // El siguiente pegado empieza limpio.
+    (void)paste.feed(PasteKey::Start);
+    (void)paste.feed(PasteKey::Character, "x");
+    const auto next = paste.feed(PasteKey::End);
+    CHECK(*next.text == "x");
+    CHECK_FALSE(next.truncated);
+}
+
+TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[paste]") {
+    using namespace std::chrono_literals;
+    FakeClock time;
+    BracketedPaste paste{time.clock()};
+
+    SECTION("Un pegado normal, sin pausas, no se cierra antes de tiempo") {
+        (void)paste.feed(PasteKey::Start);
+        for (const char* piece : {"a", "b", "c"}) {
+            time.now += 400ms; // Lento, pero sin pasar del límite.
+            const auto step = paste.feed(PasteKey::Character, piece);
+            CHECK(step.consumed);
+            CHECK_FALSE(step.text.has_value());
+        }
+        time.now += 500ms; // Justo el límite todavía no cierra.
+        CHECK(paste.feed(PasteKey::Return).consumed);
+        const auto end = paste.feed(PasteKey::End);
+        REQUIRE(end.text.has_value());
+        CHECK(*end.text == "abc\n");
+    }
+    SECTION("Pausa de 600 ms y Ctrl+C: entrega lo pegado y Ctrl+C sigue (la app sale)") {
+        (void)paste.feed(PasteKey::Start);
+        feed_text(paste, "hola\nmundo");
+        time.now += 600ms;
+        // main.cpp traduce Ctrl+C (Event::CtrlC) como Other.
+        const auto step = paste.feed(PasteKey::Other);
+        CHECK_FALSE(step.consumed);
+        REQUIRE(step.text.has_value());
+        CHECK(*step.text == "hola\nmundo");
+        CHECK_FALSE(paste.active());
+    }
+    SECTION("Pausa y un carácter: va a la caja, no al pegado") {
+        (void)paste.feed(PasteKey::Start);
+        feed_text(paste, "pegado");
+        time.now += 600ms;
+        const auto step = paste.feed(PasteKey::Character, "x");
+        CHECK_FALSE(step.consumed);
+        REQUIRE(step.text.has_value());
+        CHECK(*step.text == "pegado");
+        CHECK_FALSE(paste.active());
+        // Las siguientes teclas tampoco son del pegado.
+        CHECK_FALSE(paste.feed(PasteKey::Character, "y").consumed);
+        // Y un 201~ que llegue tarde se descarta.
+        const auto late = paste.feed(PasteKey::End);
+        CHECK(late.consumed);
+        CHECK_FALSE(late.text.has_value());
+    }
+    SECTION("Pausa y otro inicio: entrega el anterior y empieza otro") {
+        (void)paste.feed(PasteKey::Start);
+        feed_text(paste, "uno");
+        time.now += 2s;
+        const auto step = paste.feed(PasteKey::Start);
+        CHECK(step.consumed);
+        CHECK(*step.text == "uno");
+        CHECK(paste.active());
+        feed_text(paste, "dos");
+        CHECK(*paste.feed(PasteKey::End).text == "dos");
+    }
+    SECTION("La pausa se mide desde el último evento del pegado, no desde el inicio") {
+        (void)paste.feed(PasteKey::Start);
+        for (int i = 0; i < 5; ++i) {
+            time.now += 300ms;
+            CHECK(paste.feed(PasteKey::Character, "a").consumed);
+        }
+        CHECK(*paste.feed(PasteKey::End).text == "aaaaa");
+    }
+    SECTION("El ratón tras la pausa también cierra, y no se consume") {
+        (void)paste.feed(PasteKey::Start);
+        feed_text(paste, "z");
+        time.now += 600ms;
+        const auto step = paste.feed(PasteKey::Passthrough);
+        CHECK_FALSE(step.consumed);
+        CHECK(*step.text == "z");
+        CHECK_FALSE(paste.active());
+    }
+    SECTION("Un pegado recortado avisa también al cerrarse por la pausa") {
+        (void)paste.feed(PasteKey::Start);
+        (void)paste.feed(PasteKey::Character, std::string(kMaxPasteBytes, 'a'));
+        (void)paste.feed(PasteKey::Character, "b");
+        time.now += 600ms;
+        const auto step = paste.feed(PasteKey::Other);
+        CHECK(step.truncated);
+        CHECK(step.text->size() == kMaxPasteBytes);
     }
 }

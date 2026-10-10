@@ -2,6 +2,7 @@
 #define CHATBOT_CLI_SETTINGS_SCREEN_H
 
 #include "models_loader.h"
+#include "paste.h"
 #include "provider_settings.h"
 #include "search_settings.h"
 #include "theme.h"
@@ -14,6 +15,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace chatbot::cli {
@@ -68,6 +70,13 @@ public:
     [[nodiscard]] ftxui::Component component() const { return root_; }
     /// Da el foco al primer campo.
     void focus();
+    /// A dónde iría un pegado: el campo de texto con el foco (MultiLine en
+    /// "Instrucciones del sistema", SingleLine en los demás) o None si el
+    /// foco no está en un campo, hay una lista abierta o se está
+    /// preguntando "¿Descartar los cambios?".
+    [[nodiscard]] PasteTarget paste_target() const;
+    /// Aviso bajo el formulario (por ejemplo, un pegado recortado).
+    void show_notice(std::string notice) { status_ = std::move(notice); }
 
 private:
     /// Categorías del menú de la izquierda.

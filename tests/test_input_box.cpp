@@ -2,6 +2,7 @@
 // ftxui::Input de FTXUI v7.0.3 (si cambia al actualizar FTXUI, falla aquí).
 
 #include "input_edit.h"
+#include "paste.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -86,4 +87,29 @@ TEST_CASE("caja de varias líneas: el frame sigue la línea del cursor", "[entra
         REQUIRE(screen.dimy() == 4);
         CHECK(row_text(screen, 3).rfind("línea 20", 0) == 0);
     }
+}
+
+TEST_CASE("caja de varias líneas: un pegado se inserta de una vez en el cursor",
+          "[entrada][varias]") {
+    std::string text = "antes  después";
+    int cursor = 6;
+    ftxui::InputOption option;
+    option.multiline = false;
+    option.cursor_position = &cursor;
+    int enters = 0;
+    option.on_enter = [&enters] { ++enters; };
+    const ftxui::Component input = ftxui::Input(&text, option);
+    input->TakeFocus();
+
+    const auto paste =
+        chatbot::cli::prepare_paste("uno\r\ndos\n", chatbot::cli::PasteTarget::MultiLine);
+    REQUIRE(paste.has_value());
+    REQUIRE(input->OnEvent(ftxui::Event::Character(paste->text)));
+    CHECK(text == "antes uno\ndos\n después");
+    CHECK(cursor == 6 + 8);
+    CHECK(enters == 0);
+
+    // Por qué main.cpp inserta a mano un "\n" pegado solo: Event compara solo
+    // el texto, así que para la caja sería Enter.
+    CHECK(ftxui::Event::Character("\n") == ftxui::Event::Return);
 }

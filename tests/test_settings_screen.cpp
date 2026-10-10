@@ -575,3 +575,89 @@ TEST_CASE("configuración: descartar una key de búsqueda escrita pregunta",
     CHECK_FALSE(h.settings.is_open());
     CHECK(h.search_key_saves == 0);
 }
+
+TEST_CASE("configuración: a dónde va un pegado según el foco", "[ajustes][pegar]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    using chatbot::cli::PasteTarget;
+    Harness h;
+    h.open("modelo-0", {}, "");
+    // Al abrir, el foco está en las categorías: el pegado se ignora.
+    CHECK(h.settings.paste_target() == PasteTarget::None);
+
+    h.go_to_prompt();
+    REQUIRE(h.settings.paste_target() == PasteTarget::MultiLine);
+    // Como lo hace main.cpp: un solo Event::Character con todo el texto.
+    const auto paste = chatbot::cli::prepare_paste("Primera\r\n\tSegunda\n", PasteTarget::MultiLine);
+    REQUIRE(paste.has_value());
+    REQUIRE(h.key(ftxui::Event::Character(paste->text)));
+    auto screen = h.draw();
+    const Position first = find(screen, "Primera");
+    const Position second = find(screen, "    Segunda");
+    REQUIRE(first.x >= 0);
+    REQUIRE(second.y == first.y + 1);
+
+    REQUIRE(h.key(ftxui::Event::Tab)); // Restaurar: un botón.
+    CHECK(h.settings.paste_target() == PasteTarget::None);
+    REQUIRE(h.key(ftxui::Event::TabReverse));
+    CHECK(h.settings.paste_target() == PasteTarget::MultiLine);
+
+    // Con la pregunta de descartar, un pegado no la contesta.
+    REQUIRE(h.key(ftxui::Event::Escape));
+    REQUIRE(find(h.draw(), "¿Descartar los cambios? (s/n)").x >= 0);
+    CHECK(h.settings.paste_target() == PasteTarget::None);
+}
+
+TEST_CASE("configuración: pegar una key con salto de línea, sin mostrarla", "[ajustes][pegar]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    using chatbot::cli::PasteTarget;
+    Harness h;
+    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+           chatbot::cli::SearchSettings{"", std::nullopt});
+    h.go_to_search();
+    REQUIRE(h.key(ftxui::Event::Tab)); // El campo de la key.
+    REQUIRE(h.settings.paste_target() == PasteTarget::SingleLine);
+    const std::string key = "tvly-clave-ficticia-de-prueba-WXYZ";
+    const auto paste = chatbot::cli::prepare_paste(key + "\r\n", PasteTarget::SingleLine);
+    REQUIRE(paste.has_value());
+    REQUIRE(h.key(ftxui::Event::Character(paste->text)));
+    // El aviso de un pegado recortado no lleva el texto.
+    h.settings.show_notice(std::string{chatbot::cli::kPasteTruncated});
+    const auto screen = h.draw();
+    CHECK(find(screen, "tvly").x < 0);
+    CHECK(find(screen, "WXYZ").x < 0);
+    CHECK(find(screen, "se pegaron los primeros 256 KiB.").x >= 0);
+
+    h.save();
+    CHECK(h.search_key_saves == 1);
+    CHECK(h.saved_search_key == key);
+}
+
+TEST_CASE("configuración: pegar solo un salto de línea en las instrucciones", "[ajustes][pegar]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    using chatbot::cli::PasteTarget;
+    Harness h;
+    h.open("modelo-0", {}, "ab");
+    h.go_to_prompt();
+    REQUIRE(h.settings.paste_target() == PasteTarget::MultiLine);
+    REQUIRE(h.key(ftxui::Event::End));
+    REQUIRE(h.key(ftxui::Event::ArrowLeft)); // El cursor entre "a" y "b".
+    const auto paste = chatbot::cli::prepare_paste("\r\n", PasteTarget::MultiLine);
+    REQUIRE(paste.has_value());
+    REQUIRE(paste->text == "\n");
+    // Como lo hace main.cpp. Event compara solo el texto: para el campo es
+    // Enter, que con multiline inserta "\n" y llama a on_enter (vacío).
+    REQUIRE(h.key(ftxui::Event::Character(paste->text)));
+    const auto screen = h.draw();
+    CHECK(find(screen, "3 / 8000 bytes").x >= 0); // "a\nb".
+    // Nada más: no guarda, no cierra, no mueve el foco ni pregunta.
+    CHECK(h.prompt_saves == 0);
+    CHECK(h.closes == 0);
+    CHECK(h.settings.is_open());
+    CHECK(h.settings.paste_target() == PasteTarget::MultiLine);
+    CHECK(find(screen, "¿Descartar los cambios? (s/n)").x < 0);
+    // Lo siguiente que se escribe va después del salto.
+    REQUIRE(h.key(ftxui::Event::Character("x")));
+    h.save();
+    CHECK(h.prompt_saves == 1);
+    CHECK(h.saved_prompt == std::string{"a\nxb"});
+}

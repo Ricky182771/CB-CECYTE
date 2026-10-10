@@ -6,6 +6,7 @@
 // App::Post.
 
 #include "block_actions.h"
+#include "clipboard.h"
 #include "code_blocks.h"
 #include "command_parser.h"
 #include "conversation.h"
@@ -17,6 +18,7 @@
 #include "input_style.h"
 #include "markdown.h"
 #include "models_loader.h"
+#include "paste.h"
 #include "provider_settings.h"
 #include "request_runner.h"
 #include "search_context.h"
@@ -127,6 +129,39 @@ chatbot::cli::ListKey list_key(const ftxui::Event& event) {
         }
     }
     return ListKey::Other;
+}
+
+/// Traduce un evento de FTXUI para el acumulador del pegado entre corchetes.
+chatbot::cli::PasteKey paste_key(const ftxui::Event& event) {
+    using chatbot::cli::PasteKey;
+    // Event::Custom es Special("\0"): también un NUL pegado, que se descarta.
+    if (event.is_mouse() || event == ftxui::Event::Custom) {
+        return PasteKey::Passthrough;
+    }
+    if (event == ftxui::Event::Special(chatbot::cli::kPasteStartMark)) {
+        return PasteKey::Start;
+    }
+    if (event == ftxui::Event::Special(chatbot::cli::kPasteEndMark)) {
+        return PasteKey::End;
+    }
+    if (event.is_character()) {
+        return PasteKey::Character;
+    }
+    if (event == ftxui::Event::Return) {
+        return PasteKey::Return;
+    }
+    if (event == ftxui::Event::Tab) {
+        return PasteKey::Tab;
+    }
+    return PasteKey::Other;
+}
+
+/// Atajos de pegado de Windows: Ctrl+V (Ctrl+Shift+V llega igual, como el
+/// byte 0x16) y Shift+Insert (ESC [ 2 ; 2 ~, que FTXUI v7.0.3 entrega tal
+/// cual como Event::Special).
+bool is_paste_shortcut(const ftxui::Event& event) {
+    return event == ftxui::Event::CtrlV ||
+           event == ftxui::Event::Special(chatbot::cli::kShiftInsert);
 }
 
 /// Igual que ftxui::reflect, pero guarda la caja completa que recibe el
@@ -1017,9 +1052,78 @@ int main() {
         return false;
     };
 
+    // Pegado entre corchetes (DECSET 2004): se activa con la primera tarea
+    // del loop, cuando FTXUI ya instaló la terminal (en conhost, el modo VT
+    // de salida lo activa FTXUI) y se desactiva antes de salir del loop.
+    // Todo va por std::cout, el canal de FTXUI, entre cuadros.
+    chatbot::cli::BracketedPaste bracketed_paste;
+    bool paste_mode_lost = false; ///< POSIX: se suspendió con Ctrl+Z (se desactivó).
+    const auto quit = [&] {
+        (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOff);
+        screen.Exit();
+    };
+
+    // Aviso en la línea de estado o, con la configuración abierta, bajo su
+    // formulario (la línea de estado no se ve).
+    const auto notify = [&](std::string_view notice) {
+        if (settings.is_open()) {
+            settings.show_notice(std::string{notice});
+        } else {
+            flash = std::string{notice};
+        }
+    };
+    // A dónde iría un pegado según el foco (paste.h).
+    const auto current_paste_target = [&] {
+        return chatbot::cli::paste_target(
+            sidebar_visible && sidebar_panel->Focused(), settings.is_open(),
+            settings.is_open() ? settings.paste_target() : chatbot::cli::PasteTarget::None);
+    };
+    // Inserta un pegado (entre corchetes o con un atajo) donde está el foco:
+    // un solo Event::Character con todo el texto, que Input::HandleCharacter
+    // inserta de una vez en el cursor. Así sirve en la caja y en todos los
+    // campos de la configuración. Con la barra lateral, se ignora.
+    const auto deliver_paste = [&](std::string_view raw, bool truncated) {
+        const std::optional<chatbot::cli::SanitizedPaste> paste =
+            chatbot::cli::prepare_paste(raw, current_paste_target());
+        if (!paste.has_value()) {
+            return;
+        }
+        const ftxui::Event event = ftxui::Event::Character(paste->text);
+        if (settings.is_open()) {
+            (void)settings.component()->OnEvent(event);
+        } else if (event == ftxui::Event::Return) {
+            // Event compara solo el texto: un "\n" pegado solo sería Enter
+            // para la caja y enviaría el mensaje.
+            chatbot::cli::insert_at_cursor(input_text, input_cursor, paste->text);
+        } else {
+            (void)input->OnEvent(event);
+        }
+        if (truncated || paste->truncated) {
+            notify(chatbot::cli::kPasteTruncated);
+        }
+    };
+
     const ftxui::Component root = ftxui::CatchEvent(layout, [&](ftxui::Event event) {
+        if (paste_mode_lost) {
+            // De vuelta de Ctrl+Z (fg): el shell pudo haberlo desactivado.
+            (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOn);
+            paste_mode_lost = false;
+        }
+        // Lo que llega entre las marcas del pegado es texto, aunque sea
+        // Enter, Tab o Ctrl+C. Sin 201~ y tras una pausa de más de
+        // kPasteIdleLimit, el pegado se entrega y este evento sigue normal
+        // (así Ctrl+C siempre puede salir).
+        const chatbot::cli::BracketedPaste::Step pasted = bracketed_paste.feed(
+            paste_key(event), event.is_character() ? event.character() : std::string{});
+        if (pasted.text.has_value()) {
+            flash.clear(); // Como cualquier tecla.
+            deliver_paste(*pasted.text, pasted.truncated);
+        }
+        if (pasted.consumed) {
+            return true;
+        }
         if (event == ftxui::Event::CtrlC) {
-            screen.Exit();
+            quit();
             return true;
         }
         if (event == ftxui::Event::Custom) {
@@ -1029,6 +1133,26 @@ int main() {
             return handle_mouse(std::move(event));
         }
         flash.clear(); // El aviso dura hasta la siguiente tecla.
+        if (event == ftxui::Event::CtrlZ && chatbot::current_os() == chatbot::Os::Posix) {
+            // FTXUI suspende el proceso (SIGTSTP): el shell no debe recibir
+            // las marcas. Al volver se activa otra vez (arriba).
+            (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOff);
+            paste_mode_lost = true;
+            return false;
+        }
+        if (chatbot::current_os() == chatbot::Os::Windows && is_paste_shortcut(event)) {
+            // conhost no pega con la entrada en modo VT (la activa FTXUI):
+            // la app lee el portapapeles. En Linux la terminal pega sola.
+            if (current_paste_target() == chatbot::cli::PasteTarget::None) {
+                return true; // La barra lateral, una lista o un botón.
+            }
+            if (const std::optional<std::string> text = chatbot::cli::read_native_clipboard()) {
+                deliver_paste(*text, false);
+            } else {
+                notify(chatbot::cli::kClipboardNoText);
+            }
+            return true;
+        }
         if (event == ftxui::Event::F2) {
             if (settings.is_open()) {
                 (void)settings.request_close();
@@ -1132,6 +1256,7 @@ int main() {
     } else {
         input->TakeFocus();
     }
+    screen.Post([] { (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOn); });
     screen.Loop(root);
 
     // Al regresar de Loop(), el runner se destruye antes que screen y client
