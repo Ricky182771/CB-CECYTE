@@ -104,20 +104,24 @@ md::Document sources_document(const std::vector<SearchResult>& sources) {
 
 /// Etiquetas de los botones de un bloque: completas o compactas.
 struct ButtonLabels {
-    std::string_view copy;
-    std::string_view save;
+    std::string copy;
+    std::string save;
 };
-constexpr ButtonLabels kFullLabels{"[Copiar]", "[Guardar]"};
-constexpr ButtonLabels kShortLabels{"[C]", "[G]"};
-/// Después de copiar, el botón de copiar cambia a estas.
-constexpr ButtonLabels kFullCopied{"[✓ Copiado]", "[Guardar]"};
-constexpr ButtonLabels kShortCopied{"[✓]", "[G]"};
+/// Las etiquetas completas o compactas; copied: después de copiar, el botón
+/// de copiar cambia a "[✓ Copiado]" ("[✓]"), con la marca de glyph_table().
+ButtonLabels button_labels(bool full, bool copied, Symbols symbols) {
+    if (!copied) {
+        return full ? ButtonLabels{"[Copiar]", "[Guardar]"} : ButtonLabels{"[C]", "[G]"};
+    }
+    const std::string check{glyph(Glyph::Check, symbols)};
+    return full ? ButtonLabels{"[" + check + " Copiado]", "[Guardar]"}
+                : ButtonLabels{"[" + check + "]", "[G]"};
+}
 /// Columnas libres entre el título del marco y los botones.
 constexpr int kTitleMargin = 2;
 
 int labels_width(const ButtonLabels& labels) {
-    return ftxui::string_width(std::string{labels.copy}) + 1 +
-           ftxui::string_width(std::string{labels.save});
+    return ftxui::string_width(labels.copy) + 1 + ftxui::string_width(labels.save);
 }
 
 /// Las etiquetas que caben en un marco de frame_width columnas con un título
@@ -125,9 +129,10 @@ int labels_width(const ButtonLabels& labels) {
 /// y empiezan al menos kTitleMargin columnas después del título (que va
 /// desde la columna 1). nullopt si ni las compactas caben. copied: con
 /// [✓ Copiado], que también tiene que caber.
-std::optional<ButtonLabels> fitting_labels(int frame_width, int title_width, bool copied) {
-    for (const ButtonLabels& labels :
-         {copied ? kFullCopied : kFullLabels, copied ? kShortCopied : kShortLabels}) {
+std::optional<ButtonLabels> fitting_labels(int frame_width, int title_width, bool copied,
+                                           Symbols symbols) {
+    for (const bool full : {true, false}) {
+        ButtonLabels labels = button_labels(full, copied, symbols);
         const int start = frame_width - 1 - labels_width(labels);
         if (start >= 1 + title_width + kTitleMargin) {
             return labels;
@@ -194,7 +199,7 @@ private:
         const int right = box_.x_min + frame.box.x_max;
         const std::optional<ButtonLabels> labels =
             fitting_labels(right - left + 1, frame.title_width,
-                           frame.number == view_.copied_block_);
+                           frame.number == view_.copied_block_, view_.palette_.symbols());
         if (!labels.has_value()) {
             return;
         }
@@ -206,7 +211,7 @@ private:
             screen.CellAt(x - 1, row).character = " ";
         }
         x = put(screen, x, row, labels->copy);
-        hit(screen, x - ftxui::string_width(std::string{labels->copy}), x - 1, row, frame.number,
+        hit(screen, x - ftxui::string_width(labels->copy), x - 1, row, frame.number,
             BlockAction::Copy);
         x = put(screen, x, row, " ", false);
         const int save_begin = x;

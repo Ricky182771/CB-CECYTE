@@ -504,6 +504,7 @@ Result<AppearanceValues> load_appearance_values(const std::string& path) {
         };
         values.theme = field("theme");
         values.background = field("background");
+        values.symbols = field("symbols");
     } catch (const std::exception&) {
         return ChatError{ErrorKind::Config, 0,
                          "Archivo de configuración inválido (" + path + "): no es un objeto "
@@ -519,8 +520,15 @@ std::optional<ChatError> save_appearance(const std::string& path,
         if (!appearance.is_object()) {
             appearance = ordered::object();
         }
-        appearance["theme"] = values.theme;
-        appearance["background"] = values.background;
+        // Vacío: la llave se queda como estaba.
+        const auto set = [&appearance](const char* name, const std::string& value) {
+            if (!value.empty()) {
+                appearance[name] = value;
+            }
+        };
+        set("theme", values.theme);
+        set("background", values.background);
+        set("symbols", values.symbols);
     });
 }
 

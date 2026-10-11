@@ -1,5 +1,5 @@
 // Símbolos de la interfaz (glyphs.h): detección automática, modo guardado,
-// tabla de reemplazos.
+// tabla de reemplazos y que ningún símbolo se escriba fuera de la tabla.
 
 #include "glyphs.h"
 
@@ -26,6 +26,61 @@ using chatbot::Os;
 using chatbot::cli::Glyph;
 using chatbot::cli::SymbolMode;
 using chatbot::cli::Symbols;
+
+/// Quita los comentarios de un archivo de C++ (// y /* */) y deja los
+/// literales (también los raw strings), con los saltos de línea en su lugar
+/// para que los números de línea sigan valiendo.
+std::string strip_comments(std::string_view source) {
+    std::string out;
+    std::size_t i = 0;
+    const auto copy_until = [&](std::string_view end) {
+        const std::size_t found = source.find(end, i);
+        const std::size_t stop = found == std::string_view::npos ? source.size() : found + end.size();
+        out.append(source.substr(i, stop - i));
+        i = stop;
+    };
+    while (i < source.size()) {
+        const std::string_view rest = source.substr(i);
+        if (rest.starts_with("//")) {
+            i = std::min(source.size(), source.find('\n', i));
+            continue;
+        }
+        if (rest.starts_with("/*")) {
+            const std::size_t end = source.find("*/", i + 2);
+            const std::size_t stop = end == std::string_view::npos ? source.size() : end + 2;
+            out.append(static_cast<std::size_t>(
+                           std::count(source.begin() + static_cast<std::ptrdiff_t>(i),
+                                      source.begin() + static_cast<std::ptrdiff_t>(stop), '\n')),
+                       '\n');
+            i = stop;
+            continue;
+        }
+        if (rest.starts_with("R\"")) {
+            const std::size_t open = source.find('(', i);
+            const std::string delimiter{source.substr(i + 2, open - i - 2)};
+            copy_until(")" + delimiter + "\"");
+            continue;
+        }
+        const char c = source[i];
+        if (c == '"' || c == '\'') {
+            out += c;
+            ++i;
+            while (i < source.size() && source[i] != c && source[i] != '\n') {
+                if (source[i] == '\\' && i + 1 < source.size()) {
+                    out += source[i++];
+                }
+                out += source[i++];
+            }
+            if (i < source.size()) {
+                out += source[i++];
+            }
+            continue;
+        }
+        out += c;
+        ++i;
+    }
+    return out;
+}
 
 std::string encode(std::uint32_t code_point) {
     std::string out;
@@ -57,6 +112,15 @@ bool is_spanish(std::string_view character) {
 bool is_kept(std::string_view character) {
     const auto kept = chatbot::cli::kept_glyphs();
     return std::find(kept.begin(), kept.end(), character) != kept.end();
+}
+
+bool in_table(std::string_view character) {
+    for (const chatbot::cli::GlyphInfo& info : chatbot::cli::glyph_table()) {
+        if (info.unicode == character) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// true si text es ASCII o solo lleva símbolos de kept_glyphs().
@@ -150,4 +214,65 @@ TEST_CASE("símbolos: la tabla", "[simbolos]") {
         CHECK_FALSE(is_spanish(kept));
         CHECK(ascii_or_kept(kept));
     }
+}
+
+TEST_CASE("símbolos: ninguno se escribe fuera de la tabla en cli/src", "[simbolos]") {
+    namespace fs = std::filesystem;
+    const fs::path dir{CHATBOT_CLI_SOURCE_DIR};
+    REQUIRE(fs::is_directory(dir));
+    std::vector<std::string> problems;
+    std::size_t files = 0;
+    for (const fs::directory_entry& entry : fs::directory_iterator(dir)) {
+        const fs::path& path = entry.path();
+        if (path.extension() != ".cpp" && path.extension() != ".h") {
+            continue;
+        }
+        ++files;
+        std::ifstream file{path, std::ios::binary};
+        const std::string source{std::istreambuf_iterator<char>{file},
+                                 std::istreambuf_iterator<char>{}};
+        const std::string code = strip_comments(source);
+        const bool is_table = path.filename() == "glyphs.cpp";
+        int line = 1;
+        std::size_t i = 0;
+        while (i < code.size()) {
+            if (code[i] == '\n') {
+                ++line;
+            }
+            const std::size_t start = i;
+            const std::optional<std::uint32_t> code_point = chatbot::utf8::next_code_point(code, i);
+            if (!code_point.has_value()) {
+                problems.push_back(path.filename().string() + ":" + std::to_string(line) +
+                                   ": UTF-8 inválido");
+                ++i;
+                continue;
+            }
+            if (*code_point < 0x80) {
+                continue;
+            }
+            const std::string character = code.substr(start, i - start);
+            if (is_spanish(character) || is_kept(character) || (is_table && in_table(character))) {
+                continue;
+            }
+            problems.push_back(path.filename().string() + ":" + std::to_string(line) + ": " +
+                               character +
+                               (in_table(character) ? " (usa glyph() o Palette::glyph())"
+                                                    : " (agrégalo a glyphs.cpp)"));
+        }
+    }
+    CHECK(files > 50);
+    for (const std::string& problem : problems) {
+        UNSCOPED_INFO(problem);
+    }
+    CHECK(problems.empty());
+}
+
+TEST_CASE("símbolos: el detector de comentarios del recorrido", "[simbolos]") {
+    // Los comentarios se quitan; los literales (también con // adentro) no.
+    CHECK(strip_comments("a // ⚠ b\nc") == "a \nc");
+    CHECK(strip_comments("a /* ⚠\n */ b") == "a \n b");
+    CHECK(strip_comments("\"https://x\" ⚠") == "\"https://x\" ⚠");
+    CHECK(strip_comments("\"a\\\"// b\" c") == "\"a\\\"// b\" c");
+    CHECK(strip_comments("R\"(// ⚠)\" // x") == "R\"(// ⚠)\" ");
+    CHECK(strip_comments("'/' // ⚠") == "'/' ");
 }

@@ -395,6 +395,39 @@ TEST_CASE("load_config_file_values lee config.json sin el entorno", "[proveedor]
     CHECK(invalid.error().kind == ErrorKind::Config);
 }
 
+TEST_CASE("save_appearance guarda symbols; un valor vacío deja la llave como estaba",
+          "[apariencia][config][simbolos]") {
+    const ScopedTempDir dir;
+    const std::filesystem::path config = dir.path() / "chatbot" / "config.json";
+
+    // Sin "symbols": vacío (cli/ lo toma como Automático).
+    write(config, R"({"appearance": {"theme": "terminal", "background": "theme"}})", 0600);
+    REQUIRE(chatbot::load_appearance_values(config.string()).value().symbols.empty());
+
+    REQUIRE_FALSE(
+        chatbot::save_appearance(config.string(), {"catppuccin-mocha", "terminal", "simple"})
+            .has_value());
+    auto loaded = chatbot::load_appearance_values(config.string());
+    REQUIRE(loaded.is_ok());
+    CHECK(loaded.value().theme == "catppuccin-mocha");
+    CHECK(loaded.value().background == "terminal");
+    CHECK(loaded.value().symbols == "simple");
+
+    // Con NO_COLOR, cli/ solo manda los símbolos: el tema y el fondo quedan.
+    REQUIRE_FALSE(chatbot::save_appearance(config.string(), {"", "", "unicode"}).has_value());
+    loaded = chatbot::load_appearance_values(config.string());
+    REQUIRE(loaded.is_ok());
+    CHECK(loaded.value().theme == "catppuccin-mocha");
+    CHECK(loaded.value().background == "terminal");
+    CHECK(loaded.value().symbols == "unicode");
+
+    // Un valor que no es cadena se lee vacío; uno desconocido se lee tal cual.
+    write(config, R"({"appearance": {"symbols": 3}})", 0600);
+    CHECK(chatbot::load_appearance_values(config.string()).value().symbols.empty());
+    write(config, R"({"appearance": {"symbols": "raros"}})", 0600);
+    CHECK(chatbot::load_appearance_values(config.string()).value().symbols == "raros");
+}
+
 TEST_CASE("save_appearance conserva las demás llaves; load_appearance_values la lee",
           "[apariencia][config]") {
     const ScopedTempDir dir;
@@ -410,7 +443,7 @@ TEST_CASE("save_appearance conserva las demás llaves; load_appearance_values la
           R"({"model": "m", "desconocida": [1, 2], "appearance": {"theme": "viejo", "extra": true}, "zeta": 3})",
           0640);
     REQUIRE_FALSE(
-        chatbot::save_appearance(config.string(), {"catppuccin-mocha", "terminal"}).has_value());
+        chatbot::save_appearance(config.string(), {"catppuccin-mocha", "terminal", ""}).has_value());
     const std::string text = read(config);
     // Las demás llaves (también las de "appearance") siguen, en su orden.
     CHECK(text.find("\"model\": \"m\"") < text.find("\"desconocida\""));
@@ -436,7 +469,7 @@ TEST_CASE("save_appearance conserva las demás llaves; load_appearance_values la
     // "appearance" que no es objeto: se lee vacía y se reemplaza al guardar.
     write(config, R"({"appearance": "rara", "otra": 1})", 0600);
     REQUIRE(chatbot::load_appearance_values(config.string()).value().theme.empty());
-    REQUIRE_FALSE(chatbot::save_appearance(config.string(), {"terminal", "theme"}).has_value());
+    REQUIRE_FALSE(chatbot::save_appearance(config.string(), {"terminal", "theme", ""}).has_value());
     CHECK(chatbot::load_appearance_values(config.string()).value().theme == "terminal");
     CHECK(read(config).find("\"otra\": 1") != std::string::npos);
 
@@ -445,6 +478,6 @@ TEST_CASE("save_appearance conserva las demás llaves; load_appearance_values la
     const auto invalid = chatbot::load_appearance_values(config.string());
     REQUIRE(invalid.is_error());
     CHECK(invalid.error().kind == chatbot::ErrorKind::Config);
-    CHECK(chatbot::save_appearance(config.string(), {"terminal", "theme"}).has_value());
+    CHECK(chatbot::save_appearance(config.string(), {"terminal", "theme", ""}).has_value());
     CHECK(read(config) == "{roto");
 }

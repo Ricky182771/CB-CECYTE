@@ -571,13 +571,13 @@ private:
     /// ancho de la marca, alineadas con el texto. Solo es dibujo: el árbol
     /// (y lo que se guarda o se manda a la API) no cambia.
     Element subheading(const Block& block, const Look& base, int width) const {
-        static const std::string kMark = "▍ ";
-        const int mark_width = ftxui::string_width(kMark);
+        const std::string mark = std::string{palette_.glyph(Glyph::HeadingMark)} + " ";
+        const int mark_width = ftxui::string_width(mark);
         std::vector<Line> lines;
         for (const Line& source : flow(atoms_of(block, base), width - mark_width)) {
             Line line;
             if (lines.empty()) {
-                line.append(kMark, mark_width, base);
+                line.append(mark, mark_width, base);
             } else {
                 pad(line, mark_width);
             }
@@ -602,6 +602,11 @@ private:
         return ftxui::hbox({ftxui::text(marker), blocks(children, width - marker_width, spaced)});
     }
 
+    /// Casilla de una tarea y un espacio (glyph_table()).
+    std::string task_mark(bool checked) const {
+        return std::string{palette_.glyph(checked ? Glyph::TaskDone : Glyph::TaskOpen)} + " ";
+    }
+
     Element list(const Block& block, int width) {
         static constexpr std::string_view kBullets[] = {"•", "◦", "▪"};
         const bool ordered = block.kind == Block::Kind::OrderedList;
@@ -623,10 +628,10 @@ private:
                                      ' ') +
                          digits + ". ";
                 if (item.task) {
-                    marker += item.checked ? "☑ " : "☐ ";
+                    marker += task_mark(item.checked);
                 }
             } else if (item.task) {
-                marker = item.checked ? "☑ " : "☐ ";
+                marker = task_mark(item.checked);
             } else {
                 marker = bullet + " ";
             }
@@ -673,11 +678,13 @@ private:
         const std::string label = code_title(next_code_ > 0 ? next_code_++ : 0, block.info);
         Element frame;
         if (label.empty()) {
-            frame = ftxui::borderRounded(std::move(content)) | palette_.ink(&Theme::border);
+            frame = std::move(content) | ftxui::borderStyled(palette_.rounded_border()) |
+                    palette_.ink(&Theme::border);
         } else {
             Element title = ftxui::text(label) | palette_.inside_border() |
                             palette_.ink(&Theme::notice);
-            frame = ftxui::window(std::move(title), std::move(content)) |
+            frame = ftxui::window(std::move(title), std::move(content),
+                                  palette_.rounded_border()) |
                     palette_.ink(&Theme::border);
         }
         if (code_boxes_ != nullptr && code_index_ < code_boxes_->size()) {

@@ -16,6 +16,7 @@
 #include "conversation_list.h"
 #include "conversation_store.h"
 #include "downloads.h"
+#include "glyphs.h"
 #include "history_view.h"
 #include "input_edit.h"
 #include "input_style.h"
@@ -306,16 +307,21 @@ int main() {
     chatbot::Config config = initial.value(); ///< La vigente; cambia al guardar la configuración.
     std::string model;                       ///< Modelo del cliente; vacío sin configuración.
 
-    // Tema y fondo de config.json ("appearance"). Un valor desconocido usa
-    // el de por defecto y deja un aviso en la línea de estado.
+    // Tema, fondo y símbolos de config.json ("appearance"). Un valor
+    // desconocido usa el de por defecto y deja un aviso en la línea de
+    // estado. Símbolos "Automático": Sencillos solo en la consola de Windows 10.
+    const chatbot::cli::Symbols detected_symbols = chatbot::cli::detect_symbols(
+        chatbot::current_os(), chatbot::windows_build(), env_value("WT_SESSION").has_value(),
+        env_value("TERM_PROGRAM").has_value());
     std::string appearance_warning;
-    chatbot::cli::Appearance appearance = chatbot::cli::resolve_appearance("", "");
+    chatbot::cli::Appearance appearance =
+        chatbot::cli::resolve_appearance(chatbot::AppearanceValues{}, detected_symbols);
     if (const std::optional<std::string> path = chatbot::default_config_path()) {
         const chatbot::Result<chatbot::AppearanceValues> saved =
             chatbot::load_appearance_values(*path);
         if (saved.is_ok()) {
-            appearance = chatbot::cli::resolve_appearance(
-                saved.value().theme, saved.value().background, &appearance_warning);
+            appearance = chatbot::cli::resolve_appearance(saved.value(), detected_symbols,
+                                                          &appearance_warning);
         } else {
             appearance_warning = saved.error().message;
         }
@@ -687,15 +693,22 @@ int main() {
             if (!config_path.has_value()) {
                 return chatbot::missing_config_dir_message(chatbot::current_os());
             }
+            // Con NO_COLOR el tema y el fondo no se eligen: se quedan como
+            // están en config.json (vacíos no se escriben).
+            const bool no_color = chatbot::cli::no_color_enabled();
             const chatbot::AppearanceValues values{
-                std::string{chosen.theme->id},
-                std::string{chatbot::cli::background_id(chosen.background)}};
+                no_color ? std::string{} : std::string{chosen.theme->id},
+                no_color ? std::string{}
+                         : std::string{chatbot::cli::background_id(chosen.background)},
+                std::string{chatbot::cli::symbol_mode_id(chosen.symbol_mode)}};
             if (const auto error = chatbot::save_appearance(*config_path, values)) {
                 return error->message;
             }
             // Se aplica sin reiniciar: la caché del historial se invalida
-            // sola (su llave incluye el tema y el fondo).
+            // sola (su llave incluye el tema, el fondo y los símbolos).
             appearance = chosen;
+            appearance.symbols =
+                chatbot::cli::resolve_symbols(chosen.symbol_mode, detected_symbols);
             palette = chatbot::cli::Palette{appearance};
             return std::nullopt;
         },
@@ -1127,7 +1140,8 @@ int main() {
             code_blocks.update(conversation.entries());
             const chatbot::cli::ActionResult result = chatbot::cli::run_block_action(
                 code_blocks.blocks(), hit->block, hit->action, chatbot::cli::real_clipboard(),
-                chatbot::cli::default_download_dir(chatbot::cli::environment_value), home);
+                chatbot::cli::default_download_dir(chatbot::cli::environment_value), home,
+                palette.symbols());
             flash = result.message;
             if (!result.error && hit->action == chatbot::cli::BlockAction::Copy) {
                 history.show_copied(hit->block);

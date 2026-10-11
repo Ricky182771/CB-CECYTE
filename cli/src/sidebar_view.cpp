@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <string>
 #include <utility>
 
 namespace chatbot::cli {
@@ -16,7 +17,7 @@ namespace {
 constexpr std::string_view kTitle = " Conversaciones ";
 constexpr std::string_view kNew = "+ Nueva";
 constexpr std::string_view kNewKey = "  (Ctrl+N)";
-constexpr std::string_view kSettings = "⚙ Configuración";
+constexpr std::string_view kSettings = "Configuración"; ///< Con Glyph::Gear delante.
 constexpr std::string_view kSettingsKey = "  (F2)";
 constexpr std::string_view kUnreadable = " (ilegible)";
 
@@ -54,10 +55,12 @@ ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int co
     case SidebarRow::Kind::Settings: {
         // La tecla, tenue, solo si cabe entera.
         const bool is_new = row.kind == SidebarRow::Kind::New;
-        const std::string_view label = is_new ? kNew : kSettings;
+        const std::string label =
+            is_new ? std::string{kNew}
+                   : std::string{palette.glyph(Glyph::Gear)} + " " + std::string{kSettings};
         const std::string_view key = is_new ? kNewKey : kSettingsKey;
-        if (ftxui::string_width(std::string{label} + std::string{key}) <= content_width) {
-            add(std::string{label}, {});
+        if (ftxui::string_width(label + std::string{key}) <= content_width) {
+            add(label, {});
             add(std::string{key}, notice);
         } else {
             add(fit_width(label, content_width), {});

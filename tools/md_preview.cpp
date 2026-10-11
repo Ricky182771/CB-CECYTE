@@ -1,6 +1,7 @@
 // md_preview: dibuja un archivo markdown como lo muestra el chatbot, para
 // revisar el render sin la API.
-// Uso: md_preview [--width N] [--theme ID] [--background theme|terminal] archivo.md
+// Uso: md_preview [--width N] [--theme ID] [--background theme|terminal]
+//                  [--symbols unicode|simple] archivo.md
 // Con colores si la salida es una terminal; si no, texto plano. Sin --theme,
 // el tema por defecto del chatbot.
 
@@ -28,7 +29,7 @@ constexpr int kMaxWidth = 1000;
 
 void usage() {
     std::cerr << "Uso: md_preview [--width N] [--theme ID] [--background theme|terminal] "
-                 "archivo.md\n";
+                 "[--symbols unicode|simple] archivo.md\n";
 }
 
 /// Texto plano de la pantalla, sin estilos (como Screen::ToString).
@@ -57,6 +58,7 @@ int main(int argc, char** argv) {
     std::string path;
     const chatbot::cli::Theme* theme = &chatbot::cli::default_theme();
     chatbot::cli::BackgroundMode background = chatbot::cli::BackgroundMode::FromTheme;
+    chatbot::cli::Symbols symbols = chatbot::cli::Symbols::Unicode;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if (arg == "--width" && i + 1 < argc) {
@@ -85,6 +87,13 @@ int main(int argc, char** argv) {
                 return 2;
             }
             background = *mode;
+        } else if (arg == "--symbols" && i + 1 < argc) {
+            const auto mode = chatbot::cli::parse_symbol_mode(argv[++i]);
+            if (!mode.has_value() || *mode == chatbot::cli::SymbolMode::Auto) {
+                std::cerr << "md_preview: --symbols debe ser unicode o simple.\n";
+                return 2;
+            }
+            symbols = chatbot::cli::resolve_symbols(*mode, symbols);
         } else if (path.empty() && !arg.empty() && arg.front() != '-') {
             path = arg;
         } else {
@@ -104,7 +113,7 @@ int main(int argc, char** argv) {
     std::ostringstream content;
     content << file.rdbuf();
 
-    const chatbot::cli::Palette palette(*theme, background);
+    const chatbot::cli::Palette palette(*theme, background, symbols);
     ftxui::Element element =
         chatbot::cli::md::render(chatbot::cli::md::parse(content.str()), width, palette) |
         palette.base();

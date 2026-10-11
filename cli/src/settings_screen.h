@@ -97,6 +97,8 @@ private:
     [[nodiscard]] ftxui::Element render_models() const;
     [[nodiscard]] ftxui::Element render_provider() const;
     [[nodiscard]] ftxui::Element render_appearance() const;
+    /// Fila "Símbolos" de Colores y Accesibilidad (también con NO_COLOR).
+    [[nodiscard]] ftxui::Element render_symbols() const;
     [[nodiscard]] ftxui::Element render_system_prompt() const;
     [[nodiscard]] ftxui::Element render_search() const;
     /// Tema y fondo elegidos en el formulario.
@@ -129,6 +131,8 @@ private:
     int theme_selected_ = 0;
     std::vector<std::string> background_names_;
     int background_selected_ = 0;
+    std::vector<std::string> symbol_names_; ///< En el orden de kSymbolModes.
+    int symbols_selected_ = 0;
     std::vector<std::string> provider_names_;
     int provider_selected_ = 0;
     bool dropdown_open_ = false;
@@ -144,6 +148,7 @@ private:
     ftxui::Component categories_;
     ftxui::Component theme_list_;
     ftxui::Component background_list_;
+    ftxui::Component symbol_list_;
     ftxui::Component dropdown_;
     ftxui::Component url_input_;
     ftxui::Component key_input_;

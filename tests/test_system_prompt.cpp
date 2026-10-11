@@ -136,7 +136,7 @@ TEST_CASE("save_system_prompt conserva las demás llaves y su orden", "[sistema]
     CHECK(chatbot::load_system_prompt_value(config.string()).value() == std::string{});
 
     // Las otras funciones de guardado no tocan la llave.
-    REQUIRE_FALSE(chatbot::save_appearance(config.string(), {"terminal", "theme"}).has_value());
+    REQUIRE_FALSE(chatbot::save_appearance(config.string(), {"terminal", "theme", ""}).has_value());
     REQUIRE_FALSE(chatbot::save_config_file(config.string(),
                                             {"openai", "https://api.openai.com/v1", "x"})
                       .has_value());

@@ -548,3 +548,55 @@ TEST_CASE("NO_COLOR: el botón con el puntero encima va invertido", "[tema][boto
     CHECK(screen.CellAt(copy.x, copy.y).inverted);
     CHECK_FALSE(screen.CellAt(copy.x, copy.y).dim);
 }
+
+TEST_CASE("apariencia: símbolos de config.json", "[tema][config][simbolos]") {
+    using chatbot::cli::SymbolMode;
+    using chatbot::cli::Symbols;
+    const char* no_color = GENERATE(static_cast<const char*>(nullptr), "1");
+    const chatbot_test::NoColorGuard environment(no_color);
+    for (const Symbols detected : {Symbols::Unicode, Symbols::Simple}) {
+        std::string warning = "viejo";
+        // Ausente: Automático, sin aviso.
+        auto appearance = chatbot::cli::resolve_appearance(
+            chatbot::AppearanceValues{"catppuccin-mocha", "theme", ""}, detected, &warning);
+        CHECK(appearance.symbol_mode == SymbolMode::Auto);
+        CHECK(appearance.symbols == detected);
+        CHECK(warning.empty());
+
+        // Elegidos: ganan a la detección (también con NO_COLOR).
+        appearance = chatbot::cli::resolve_appearance(
+            chatbot::AppearanceValues{"catppuccin-mocha", "theme", "simple"}, detected, &warning);
+        CHECK(appearance.symbol_mode == SymbolMode::Simple);
+        CHECK(appearance.symbols == Symbols::Simple);
+        CHECK(warning.empty());
+        appearance = chatbot::cli::resolve_appearance(
+            chatbot::AppearanceValues{"", "", "unicode"}, detected, &warning);
+        CHECK(appearance.symbols == Symbols::Unicode);
+
+        // Desconocido: Automático con aviso; el tema se resuelve igual.
+        appearance = chatbot::cli::resolve_appearance(
+            chatbot::AppearanceValues{"catppuccin-mocha", "theme", "ascii"}, detected, &warning);
+        CHECK(appearance.symbol_mode == SymbolMode::Auto);
+        CHECK(appearance.symbols == detected);
+        CHECK(warning.find("«ascii»") != std::string::npos);
+        CHECK(warning.find("Automático") != std::string::npos);
+        CHECK(appearance.theme->id == (no_color == nullptr ? "catppuccin-mocha" : "terminal"));
+
+        // Tema y símbolos desconocidos: los dos avisos.
+        appearance = chatbot::cli::resolve_appearance(
+            chatbot::AppearanceValues{"borrado", "theme", "ascii"}, detected, &warning);
+        CHECK(warning.find("«ascii»") != std::string::npos);
+        CHECK((warning.find("«borrado»") != std::string::npos) == (no_color == nullptr));
+    }
+}
+
+TEST_CASE("paleta: los símbolos son parte de la llave de la caché", "[tema][simbolos]") {
+    const chatbot::cli::Palette unicode;
+    const chatbot::cli::Palette simple{chatbot::cli::default_theme(), BackgroundMode::FromTheme,
+                                       chatbot::cli::Symbols::Simple};
+    CHECK(unicode.key() != simple.key());
+    CHECK(unicode.glyph(chatbot::cli::Glyph::Gear) == "⚙");
+    CHECK(simple.glyph(chatbot::cli::Glyph::Gear) == "*");
+    CHECK(unicode.rounded_border() == ftxui::ROUNDED);
+    CHECK(simple.rounded_border() == ftxui::LIGHT);
+}

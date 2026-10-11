@@ -4,6 +4,7 @@
 #include "clipboard.h"
 #include "code_blocks.h"
 #include "conversation.h"
+#include "glyphs.h"
 
 #include <ctime>
 #include <optional>
@@ -24,7 +25,8 @@ struct ActionResult {
 /// Cómo se escriben los avisos: Long para los comandos (van al historial),
 /// Short para los botones (van a la línea de estado, de una fila): solo lo
 /// que el botón no dice, con lo importante primero ("#1 copiado con
-/// wl-copy", "⚠ #1 incompleto (aún no termina) · copiado con wl-copy").
+/// wl-copy", "⚠ #1 incompleto (aún no termina) · copiado con wl-copy"; la
+/// marca ⚠ sale de glyph_table() con los Symbols que se pasen).
 enum class Wording { Long, Short };
 
 /// Qué hace un botón de un bloque de código.
@@ -53,7 +55,8 @@ struct ClipboardAccess {
 /// pega, usa [Guardar]", "⚠ #3 incompleto (se canceló) · copiado con ..." o
 /// "No se pudo copiar #3 · usa [Guardar]".
 [[nodiscard]] ActionResult copy_block(const CodeBlock& block, const ClipboardAccess& clipboard,
-                                      Wording wording = Wording::Long);
+                                      Wording wording = Wording::Long,
+                                      Symbols symbols = Symbols::Unicode);
 
 /// Guarda el bloque en <download_base>/chatbot (que crea si falta) con
 /// file_name, o "bloque-<n>.<ext>" si está vacío (block_file_name), sin
@@ -64,16 +67,18 @@ struct ClipboardAccess {
 /// delante si hace falta; los errores de escritura no cambian.
 [[nodiscard]] ActionResult save_block(const CodeBlock& block, std::string_view file_name,
                                       const std::string& download_base, const std::string& home,
-                                      Wording wording = Wording::Long);
+                                      Wording wording = Wording::Long,
+                                      Symbols symbols = Symbols::Unicode);
 
 /// Lo que hace un botón del bloque con ese número (de collect_code_blocks):
 /// copy_block, o save_block con el nombre por defecto en download_base
-/// (default_download_dir; nullopt es un error, no_download_dir_message), con Wording::Short. Un
-/// número que ya no existe es un error (choose_code_block).
+/// (default_download_dir; nullopt es un error, no_download_dir_message), con Wording::Short y
+/// los símbolos de la interfaz. Un número que ya no existe es un error
+/// (choose_code_block).
 [[nodiscard]] ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
                                             BlockAction action, const ClipboardAccess& clipboard,
                                             const std::optional<std::string>& download_base,
-                                            const std::string& home);
+                                            const std::string& home, Symbols symbols);
 
 /// Exporta los pares guardados de la conversación a Markdown en
 /// <download_base>/chatbot (export_markdown, export_file_name). Sin pares es
