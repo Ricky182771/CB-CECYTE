@@ -267,6 +267,77 @@ TEST_CASE("símbolos: ninguno se escribe fuera de la tabla en cli/src", "[simbol
     CHECK(problems.empty());
 }
 
+namespace {
+
+/// Un símbolo de un solo carácter como código.
+std::uint32_t code_point_of(std::string_view character) {
+    std::size_t i = 0;
+    const std::optional<std::uint32_t> code = chatbot::utf8::next_code_point(character, i);
+    REQUIRE(code.has_value());
+    REQUIRE(i == character.size());
+    return *code;
+}
+
+/// Los códigos hexadecimales (0x...) de la lista "$name = @( ... )" del
+/// script, sin los comentarios de PowerShell (#).
+std::set<std::uint32_t> script_list(const std::string& block, std::string_view name) {
+    const std::string open = "$" + std::string{name} + " = @(";
+    const std::size_t start = block.find(open);
+    REQUIRE(start != std::string::npos);
+    const std::size_t end = block.find("\n)", start);
+    REQUIRE(end != std::string::npos);
+    std::set<std::uint32_t> codes;
+    std::size_t line_start = start + open.size();
+    while (line_start < end) {
+        std::size_t line_end = block.find('\n', line_start);
+        if (line_end == std::string::npos || line_end > end) {
+            line_end = end;
+        }
+        std::string line = block.substr(line_start, line_end - line_start);
+        line = line.substr(0, line.find('#'));
+        std::size_t at = 0;
+        while ((at = line.find("0x", at)) != std::string::npos) {
+            std::size_t used = 0;
+            const unsigned long value = std::stoul(line.substr(at + 2), &used, 16);
+            REQUIRE(used > 0);
+            CHECK(codes.insert(static_cast<std::uint32_t>(value)).second); // Sin repetidos.
+            at += 2 + used;
+        }
+        line_start = line_end + 1;
+    }
+    return codes;
+}
+
+} // namespace
+
+TEST_CASE("símbolos: tools/check_glyphs.ps1 revisa los mismos que glyphs.cpp", "[simbolos]") {
+    const std::filesystem::path path =
+        std::filesystem::path{CHATBOT_TOOLS_DIR} / "check_glyphs.ps1";
+    std::ifstream file{path, std::ios::binary};
+    REQUIRE(file.is_open());
+    const std::string script{std::istreambuf_iterator<char>{file},
+                             std::istreambuf_iterator<char>{}};
+    const std::size_t begin = script.find("# glyphs: inicio");
+    const std::size_t end = script.find("# glyphs: fin");
+    REQUIRE(begin != std::string::npos);
+    REQUIRE(end != std::string::npos);
+    REQUIRE(begin < end);
+    // \r\n por si alguien lo guarda así en Windows.
+    std::string block = script.substr(begin, end - begin);
+    block.erase(std::remove(block.begin(), block.end(), '\r'), block.end());
+
+    std::set<std::uint32_t> table;
+    for (const chatbot::cli::GlyphInfo& info : chatbot::cli::glyph_table()) {
+        table.insert(code_point_of(info.unicode));
+    }
+    std::set<std::uint32_t> kept;
+    for (const std::string_view character : chatbot::cli::kept_glyphs()) {
+        kept.insert(code_point_of(character));
+    }
+    CHECK(script_list(block, "faltan") == table);
+    CHECK(script_list(block, "quedan") == kept);
+}
+
 TEST_CASE("símbolos: el detector de comentarios del recorrido", "[simbolos]") {
     // Los comentarios se quitan; los literales (también con // adentro) no.
     CHECK(strip_comments("a // ⚠ b\nc") == "a \nc");
