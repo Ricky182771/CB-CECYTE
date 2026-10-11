@@ -60,6 +60,9 @@ enum class Glyph : std::uint8_t {
     DropdownOpen,  ///< Lista de proveedores abierta (configuración).
     DropdownClosed,
     HeadingMark,   ///< Marca de los títulos H3-H6.
+    ChosenMark,    ///< Elegido en las listas (list_style.h).
+    BulletLevel2,  ///< Viñeta del segundo nivel de una lista de markdown.
+    BulletLevel3,  ///< Viñeta del tercer nivel (el primero, "•", se queda).
     // Los de FTXUI: los cambia Palette (border_style, vscroll).
     RoundedTopLeft, ///< borderRounded y window.
     RoundedTopRight,

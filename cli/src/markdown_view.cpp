@@ -607,10 +607,22 @@ private:
         return std::string{palette_.glyph(checked ? Glyph::TaskDone : Glyph::TaskOpen)} + " ";
     }
 
+    /// Viñeta de una lista sin numerar: "•", y en los niveles 2 y 3 los de
+    /// glyph_table(); después se repiten.
+    std::string_view bullet_for(int depth) const {
+        switch (depth % 3) {
+        case 1:
+            return palette_.glyph(Glyph::BulletLevel2);
+        case 2:
+            return palette_.glyph(Glyph::BulletLevel3);
+        default:
+            return "•";
+        }
+    }
+
     Element list(const Block& block, int width) {
-        static constexpr std::string_view kBullets[] = {"•", "◦", "▪"};
         const bool ordered = block.kind == Block::Kind::OrderedList;
-        const std::string bullet{kBullets[static_cast<std::size_t>(bullet_depth_ % 3)]};
+        const std::string bullet{bullet_for(bullet_depth_)};
         const unsigned last = block.start + static_cast<unsigned>(block.children.size()) -
                               (block.children.empty() ? 0U : 1U);
         const int number_width = ftxui::string_width(std::to_string(last));

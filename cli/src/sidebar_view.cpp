@@ -73,8 +73,8 @@ ftxui::Element row_content(const Sidebar& sidebar, const SidebarRow& row, int co
     case SidebarRow::Kind::Conversation: {
         const ConversationSummary& item = sidebar.list().items()[row.index];
         const bool current = sidebar.list().is_current(row.index);
-        const int title_width = content_width - ftxui::string_width(kChosenMark);
-        used += ftxui::string_width(kChosenMark);
+        const int title_width = content_width - ftxui::string_width(kNotChosenMark);
+        used += ftxui::string_width(kNotChosenMark);
         parts.push_back(chosen_mark(current, palette));
         const std::string title = clean_title(item.title);
         if (item.readable) {

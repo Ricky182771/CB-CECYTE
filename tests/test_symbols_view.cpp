@@ -115,6 +115,9 @@ TEST_CASE("símbolos sencillos: barra lateral", "[simbolos][barra]") {
                           chatbot::cli::BackgroundMode::FromTheme, Symbols::Simple});
     CHECK(screen_text(unicode).find("⚙ Configuración") != std::string::npos);
     CHECK(screen_text(simple).find("* Configuración  (F2)") != std::string::npos);
+    // La abierta: "●" falta en Lucida Console; con Sencillos, "•".
+    CHECK(screen_text(unicode).find("● Recursividad") != std::string::npos);
+    CHECK(screen_text(simple).find("• Recursividad") != std::string::npos);
 }
 
 TEST_CASE("símbolos sencillos: menú de comandos", "[simbolos][menu]") {
@@ -156,6 +159,10 @@ TEST_CASE("símbolos sencillos: bloques de código con botones", "[simbolos][bot
     (void)view.render(entries, 40, simple, {0, 1});
     const std::string text = screen_text(draw_fit(view.render(entries, 40, simple, {0, 1}), 40));
     CHECK(text.find("▌ Ejemplo") != std::string::npos);
+    // Los tres niveles de viñeta se siguen distinguiendo.
+    CHECK(text.find("\n• uno") != std::string::npos);
+    CHECK(text.find("\n  o dos") != std::string::npos);
+    CHECK(text.find("\n    - tres") != std::string::npos);
     CHECK(text.find("[√ Copiado] [Guardar]┐") != std::string::npos);
     CHECK(text.find("┌") != std::string::npos);
     CHECK(text.find("╭") == std::string::npos);

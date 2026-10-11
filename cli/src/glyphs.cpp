@@ -9,7 +9,8 @@ namespace {
 
 // Los que faltan en Consolas o en Lucida Console (ver el README, "Símbolos").
 // Un respaldo de otro ancho lo dice; donde se usa, el layout mide el texto.
-constexpr std::array<GlyphInfo, 15> kGlyphs{{
+// Comprobado con el cmap de consola.ttf y lucon.ttf (tools/check_glyphs.ps1).
+constexpr std::array<GlyphInfo, 18> kGlyphs{{
     {Glyph::Gear, "⚙", "*"},
     {Glyph::Check, "✓", "√"},
     {Glyph::Warning, "⚠", "!"},
@@ -18,6 +19,11 @@ constexpr std::array<GlyphInfo, 15> kGlyphs{{
     {Glyph::DropdownOpen, "▴", "^"},
     {Glyph::DropdownClosed, "▾", "v"},
     {Glyph::HeadingMark, "▍", "▌"},
+    // Faltan solo en Lucida Console. Los niveles de viñeta siguen siendo
+    // distintos: "•", "o", "-".
+    {Glyph::ChosenMark, "●", "•"},
+    {Glyph::BulletLevel2, "◦", "o"},
+    {Glyph::BulletLevel3, "▪", "-"},
     {Glyph::RoundedTopLeft, "╭", "┌"},
     {Glyph::RoundedTopRight, "╮", "┐"},
     {Glyph::RoundedBottomLeft, "╰", "└"},
@@ -27,11 +33,12 @@ constexpr std::array<GlyphInfo, 15> kGlyphs{{
     {Glyph::ScrollThumbBottom, "╻", "▄"},
 }};
 
-constexpr std::array<std::string_view, 28> kKept{
+constexpr std::array<std::string_view, 25> kKept{
     // Texto y avisos.
     "·", "«", "»", "—", "…", "→", "↑", "↓",
-    // Listas: viñetas, elegido y la key enmascarada de FTXUI (password).
-    "•", "◦", "▪", "●",
+    // Viñeta del primer nivel, respaldo del elegido y la key enmascarada de
+    // FTXUI (password).
+    "•",
     // Bordes y separadores rectos (los de FTXUI y los de las tablas).
     "─", "│", "┌", "┐", "└", "┘", "├", "┤", "┬", "┴", "┼",
     // Respaldos que no son ASCII.
