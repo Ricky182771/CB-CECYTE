@@ -26,6 +26,9 @@ constexpr int kHintRows = 2;
 constexpr int kSectionsWidth = 28;
 /// Ancho del campo de la key.
 constexpr int kKeyWidth = 24;
+/// "Símbolos: Automático / Unicode / Sencillos", en ese orden.
+constexpr SymbolMode kSymbolModes[] = {SymbolMode::Auto, SymbolMode::Unicode,
+                                       SymbolMode::Simple};
 
 /// Etiqueta de un campo en su columna; con el foco, con la selección.
 ftxui::Element label(const char* text, bool focused, const Palette& palette) {
@@ -89,6 +92,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         theme_names_.emplace_back(theme.name);
     }
     background_names_ = {"Del tema", "Transparente"};
+    symbol_names_ = {"Automático", "Unicode", "Sencillos"};
     for (const ProviderInfo& provider : providers()) {
         provider_names_.emplace_back(provider.name);
     }
@@ -112,6 +116,12 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
     background_list.transform = row_transform(palette_, true);
     background_list_ = ftxui::Radiobox(background_list);
 
+    ftxui::RadioboxOption symbol_list;
+    symbol_list.entries = &symbol_names_;
+    symbol_list.selected = &symbols_selected_;
+    symbol_list.transform = row_transform(palette_, true);
+    symbol_list_ = ftxui::Radiobox(symbol_list);
+
     ftxui::DropdownOption dropdown;
     dropdown.open = &dropdown_open_;
     dropdown.radiobox.entries = &provider_names_;
@@ -126,9 +136,11 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         status_.clear();
     };
     dropdown.radiobox.transform = row_transform(palette_, true);
-    dropdown.checkbox.transform = [](const ftxui::EntryState& state) {
+    dropdown.checkbox.transform = [this](const ftxui::EntryState& state) {
+        const std::string arrow{
+            palette_.glyph(state.state ? Glyph::DropdownOpen : Glyph::DropdownClosed)};
         ftxui::Element element = ftxui::hbox({ftxui::text("[ "), ftxui::text(state.label) | ftxui::flex,
-                                              ftxui::text(state.state ? " ▴]" : " ▾]")});
+                                              ftxui::text(" " + arrow + "]")});
         return state.focused ? element | ftxui::bold : element;
     };
     dropdown.transform = [this](bool open, ftxui::Element checkbox, ftxui::Element radiobox) {
@@ -211,6 +223,8 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         ftxui::Maybe(theme_list_, [this] { return !no_color_; }),
         // Con un tema sin fondo propio, el fondo no aplica: no toma el foco.
         ftxui::Maybe(background_list_, [this] { return background_enabled(); }),
+        // Los símbolos se eligen también con NO_COLOR.
+        symbol_list_,
     });
     const ftxui::Component prompt_form =
         ftxui::Container::Vertical({prompt_input_, restore_button_});
@@ -234,7 +248,9 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
     base_ = std::move(base);
     no_color_ = no_color_enabled();
     if (no_color_) {
-        appearance = resolve_appearance("", "");
+        const Appearance plain = resolve_appearance("", "");
+        appearance.theme = plain.theme;
+        appearance.background = plain.background;
     }
     saved_appearance_ = appearance;
     category_ = kProvider;
@@ -246,6 +262,12 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
         }
     }
     background_selected_ = appearance.background == BackgroundMode::Transparent ? 1 : 0;
+    symbols_selected_ = 0;
+    for (std::size_t i = 0; i < std::size(kSymbolModes); ++i) {
+        if (kSymbolModes[i] == appearance.symbol_mode) {
+            symbols_selected_ = static_cast<int>(i);
+        }
+    }
     saved_prompt_ = system_prompt;
     prompt_text_ = std::move(system_prompt);
     search_ = std::move(search);
@@ -294,14 +316,20 @@ Appearance SettingsScreen::chosen_appearance() const {
     appearance.theme = &themes()[static_cast<std::size_t>(theme_selected_)];
     appearance.background =
         background_selected_ == 1 ? BackgroundMode::Transparent : BackgroundMode::FromTheme;
+    appearance.symbol_mode = kSymbolModes[static_cast<std::size_t>(symbols_selected_)];
+    // Quien guarda resuelve symbols (Automático depende del sistema).
+    appearance.symbols = saved_appearance_.symbols;
     return appearance;
 }
 
 bool SettingsScreen::appearance_dirty() const {
-    if (no_color_) {
-        return false;
-    }
     const Appearance chosen = chosen_appearance();
+    if (chosen.symbol_mode != saved_appearance_.symbol_mode) {
+        return true;
+    }
+    if (no_color_) {
+        return false; // Tema y fondo no se eligen con NO_COLOR.
+    }
     return chosen.theme != saved_appearance_.theme ||
            chosen.background != saved_appearance_.background;
 }
@@ -434,6 +462,7 @@ void SettingsScreen::move_focus(int step) {
         if (background_enabled()) {
             order.push_back(background_list_);
         }
+        order.push_back(symbol_list_);
     } else if (category_ == kSystemPrompt) {
         order.push_back(prompt_input_);
         order.push_back(restore_button_);
@@ -648,6 +677,18 @@ ftxui::Element SettingsScreen::render_provider() const {
     });
 }
 
+ftxui::Element SettingsScreen::render_symbols() const {
+    return ftxui::hbox({
+        label("Símbolos", symbol_list_->Focused(), palette_),
+        ftxui::vbox({
+            symbol_list_->Render(),
+            ftxui::paragraph("Automático: Sencillos solo en la consola de Windows 10 "
+                             "(sin Windows Terminal).") |
+                palette_.ink(&Theme::notice),
+        }) | ftxui::flex,
+    });
+}
+
 ftxui::Element SettingsScreen::render_appearance() const {
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
     if (no_color_) {
@@ -657,6 +698,10 @@ ftxui::Element SettingsScreen::render_appearance() const {
             ftxui::hbox({label("Tema", false, palette_), ftxui::text("De la terminal") | notice}),
             ftxui::hbox({label("Fondo", false, palette_), ftxui::text("Transparente") | notice}),
             ftxui::text("Desactivado por NO_COLOR") | notice,
+            ftxui::text(""),
+            render_symbols(),
+            ftxui::text(""),
+            ftxui::text("Se aplica al guardar.") | notice,
             ftxui::filler(),
         });
     }
@@ -680,6 +725,8 @@ ftxui::Element SettingsScreen::render_appearance() const {
         ftxui::text(""),
         ftxui::hbox({label("Fondo", background_list_->Focused(), palette_),
                      std::move(background) | ftxui::flex}),
+        ftxui::text(""),
+        render_symbols(),
         ftxui::text(""),
         ftxui::text("Se aplica al guardar.") | notice,
         ftxui::filler(),

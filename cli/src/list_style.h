@@ -17,16 +17,17 @@ namespace chatbot::cli {
 // Selección y foco, iguales en toda la interfaz:
 // - Cursor: la fila completa con Palette::selection(), sin prefijo "> ".
 //   Solo mientras la lista tiene el foco.
-// - Elegido: "● " en heading_accent y negritas; las demás filas llevan dos
-//   espacios. Se ve tenga o no el foco la lista.
+// - Elegido: "● " ("• " con símbolos Sencillos) en heading_accent y
+//   negritas; las demás filas llevan dos espacios. Se ve tenga o no el
+//   foco la lista.
 // - Lo demás, con el color de texto normal (sin dim).
 
-/// Marca del elegido y lo que llevan las demás filas en su lugar.
-inline constexpr std::string_view kChosenMark = "● ";
+/// Lo que llevan las filas no elegidas en lugar de la marca: el mismo ancho
+/// que Glyph::ChosenMark y un espacio, con Unicode y con Sencillos.
 inline constexpr std::string_view kNotChosenMark = "  ";
 
-/// Marca de la fila: "● " en heading_accent y negritas si chosen; si no, dos
-/// espacios.
+/// Marca de la fila: Glyph::ChosenMark y un espacio, en heading_accent y
+/// negritas, si chosen; si no, kNotChosenMark.
 [[nodiscard]] ftxui::Element chosen_mark(bool chosen, const Palette& palette);
 
 /// Fila de una lista: la marca y label (ya sin controles de terminal). Con

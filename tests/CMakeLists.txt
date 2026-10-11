@@ -28,6 +28,7 @@ add_executable(chatbot_tests
     test_conversation_store.cpp
     test_debug_sse.cpp
     test_downloads.cpp
+    test_glyphs.cpp
     test_provider_core.cpp
     test_error_mapping.cpp
     test_history.cpp
@@ -53,6 +54,7 @@ add_executable(chatbot_tests
     test_system_prompt.cpp
     test_system_prompt_invariants.cpp
     test_tavily_search.cpp
+    test_terminal_reply.cpp
     test_web_search.cpp)
 
 target_compile_features(chatbot_tests PRIVATE cxx_std_20)
@@ -61,8 +63,12 @@ target_include_directories(chatbot_tests PRIVATE
 target_link_libraries(chatbot_tests PRIVATE
     chatbot::core chatbot_cli_lib Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 # Archivos de tests/data (solo lectura).
+# cli/src: test_glyphs.cpp revisa que ningún símbolo se escriba fuera de la tabla.
+# tools: test_glyphs.cpp compara la lista de check_glyphs.ps1 con la de glyphs.cpp.
 target_compile_definitions(chatbot_tests PRIVATE
-    CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+    CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    CHATBOT_CLI_SOURCE_DIR="${PROJECT_SOURCE_DIR}/cli/src"
+    CHATBOT_TOOLS_DIR="${PROJECT_SOURCE_DIR}/tools")
 
 chatbot_set_warnings(chatbot_tests)
 chatbot_windows_manifest(chatbot_tests)
@@ -80,6 +86,7 @@ add_executable(chatbot_ui_tests
     test_input_style.cpp
     test_sidebar_view.cpp
     test_status_line.cpp
+    test_symbols_view.cpp
     test_markdown_view.cpp
     test_theme.cpp
     test_title_bar.cpp)

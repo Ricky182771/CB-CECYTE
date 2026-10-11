@@ -27,18 +27,21 @@ WriteResult write_download(const std::string& base, const std::string& home,
 }
 
 /// Inicio de un aviso corto: "⚠ #3 incompleto (se canceló) · " si el bloque
-/// está incompleto; si no, "#3 " (y el verbo sigue en minúsculas).
-std::string short_prefix(const CodeBlock& block) {
+/// está incompleto (la marca, de glyph_table()); si no, "#3 " (y el verbo
+/// sigue en minúsculas).
+std::string short_prefix(const CodeBlock& block, Symbols symbols) {
     const std::string number = "#" + std::to_string(block.number);
+    const std::string incomplete =
+        std::string{glyph(Glyph::Warning, symbols)} + " " + number + " incompleto ";
     switch (block.complete ? IncompleteReason::None : block.reason) {
     case IncompleteReason::None:
         break;
     case IncompleteReason::Cancelled:
-        return "⚠ " + number + " incompleto (se canceló) · ";
+        return incomplete + "(se canceló) · ";
     case IncompleteReason::Error:
-        return "⚠ " + number + " incompleto (se cortó) · ";
+        return incomplete + "(se cortó) · ";
     case IncompleteReason::InProgress:
-        return "⚠ " + number + " incompleto (aún no termina) · ";
+        return incomplete + "(aún no termina) · ";
     }
     return number + " ";
 }
@@ -57,7 +60,7 @@ ClipboardAccess real_clipboard() {
 }
 
 ActionResult copy_block(const CodeBlock& block, const ClipboardAccess& clipboard,
-                        Wording wording) {
+                        Wording wording, Symbols symbols) {
     const CopyResult copied = copy_to_clipboard(block.code, clipboard.methods, clipboard.tmux,
                                                 clipboard.run, clipboard.write, clipboard.native);
     if (wording == Wording::Short) {
@@ -65,7 +68,7 @@ ActionResult copy_block(const CodeBlock& block, const ClipboardAccess& clipboard
             return {"No se pudo copiar #" + std::to_string(block.number) + " · usa [Guardar]",
                     true};
         }
-        return {short_prefix(block) + "copiado con " + copied.method +
+        return {short_prefix(block, symbols) + "copiado con " + copied.method +
                     (copied.fallback ? " · si no pega, usa [Guardar]" : ""),
                 false};
     }
@@ -88,7 +91,7 @@ ActionResult copy_block(const CodeBlock& block, const ClipboardAccess& clipboard
 
 ActionResult save_block(const CodeBlock& block, std::string_view file_name,
                         const std::string& download_base, const std::string& home,
-                        Wording wording) {
+                        Wording wording, Symbols symbols) {
     if (!file_name.empty()) {
         if (std::optional<std::string> reason = validate_file_name(file_name)) {
             return {std::move(*reason), true};
@@ -101,7 +104,7 @@ ActionResult save_block(const CodeBlock& block, std::string_view file_name,
         return {written.error, true};
     }
     if (wording == Wording::Short) {
-        return {short_prefix(block) + "guardado en " + written.path, false};
+        return {short_prefix(block, symbols) + "guardado en " + written.path, false};
     }
     const std::string warning = incomplete_warning(block);
     return {"Guardado en " + written.path + (warning.empty() ? "" : "." + warning), false};
@@ -110,18 +113,18 @@ ActionResult save_block(const CodeBlock& block, std::string_view file_name,
 ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
                               BlockAction action, const ClipboardAccess& clipboard,
                               const std::optional<std::string>& download_base,
-                              const std::string& home) {
+                              const std::string& home, Symbols symbols) {
     const CodeBlockChoice choice = choose_code_block(blocks, number);
     if (choice.block == nullptr) {
         return {choice.problem, true};
     }
     if (action == BlockAction::Copy) {
-        return copy_block(*choice.block, clipboard, Wording::Short);
+        return copy_block(*choice.block, clipboard, Wording::Short, symbols);
     }
     if (!download_base.has_value()) {
         return {std::string{no_download_dir_message(current_os())}, true};
     }
-    return save_block(*choice.block, {}, *download_base, home, Wording::Short);
+    return save_block(*choice.block, {}, *download_base, home, Wording::Short, symbols);
 }
 
 ActionResult export_conversation(const Conversation& conversation, std::time_t now,

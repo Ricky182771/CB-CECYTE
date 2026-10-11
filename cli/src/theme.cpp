@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
 namespace chatbot::cli {
@@ -155,13 +157,14 @@ private:
     Color color_;
 };
 
-/// ftxui::vscroll_indicator, y luego el color de la columna de la barra
-/// (vscroll_indicator la dibuja en stencil.x_max sin tocar el color).
-class ColoredScrollbar : public ftxui::Node {
+/// ftxui::vscroll_indicator, y luego, en la columna de la barra (la dibuja
+/// en stencil.x_max sin tocar el color), el color scrollbar si hay y, en
+/// modo Sencillos, los respaldos de glyph_table().
+class Scrollbar : public ftxui::Node {
 public:
-    ColoredScrollbar(ftxui::Element child, Color color)
+    Scrollbar(ftxui::Element child, std::optional<Color> color, bool simple)
         : ftxui::Node(ftxui::Elements{ftxui::vscroll_indicator(std::move(child))}),
-          color_(color) {}
+          color_(color), simple_(simple) {}
 
     void ComputeRequirement() override {
         ftxui::Node::ComputeRequirement();
@@ -182,12 +185,21 @@ public:
         const int y_begin = std::max(box_.y_min, screen.stencil.y_min);
         const int y_end = std::min(box_.y_max, screen.stencil.y_max);
         for (int y = y_begin; y <= y_end; ++y) {
-            screen.CellAt(x, y).foreground_color = color_;
+            ftxui::Cell& cell = screen.CellAt(x, y);
+            if (color_.has_value()) {
+                cell.foreground_color = *color_;
+            }
+            if (simple_) {
+                if (const std::optional<std::string_view> simple = simple_for(cell.character)) {
+                    cell.character = std::string{*simple};
+                }
+            }
         }
     }
 
 private:
-    Color color_;
+    std::optional<Color> color_;
+    bool simple_;
 };
 
 double channel(std::uint32_t value) {
@@ -263,6 +275,26 @@ Appearance resolve_appearance(std::string_view theme_id, std::string_view backgr
     return appearance;
 }
 
+Appearance resolve_appearance(const AppearanceValues& values, Symbols detected,
+                              std::string* warning) {
+    std::string notes;
+    Appearance appearance = resolve_appearance(values.theme, values.background, &notes);
+    if (!values.symbols.empty()) {
+        if (const std::optional<SymbolMode> mode = parse_symbol_mode(values.symbols)) {
+            appearance.symbol_mode = *mode;
+        } else {
+            notes += (notes.empty() ? "" : " ") +
+                     std::string{"Símbolos desconocidos en config.json («"} + values.symbols +
+                     "»): se usa Automático.";
+        }
+    }
+    appearance.symbols = resolve_symbols(appearance.symbol_mode, detected);
+    if (warning != nullptr) {
+        *warning = std::move(notes);
+    }
+    return appearance;
+}
+
 double relative_luminance(std::uint32_t color) {
     return 0.2126 * channel(color >> 16U) + 0.7152 * channel(color >> 8U) +
            0.0722 * channel(color);
@@ -288,12 +320,16 @@ ftxui::Color to_ftxui(const ThemeColor& color) {
     return Color(Color::Default);
 }
 
-Palette::Palette(const Theme& theme, BackgroundMode background)
-    : theme_(theme), background_(background) {
+Palette::Palette(const Theme& theme, BackgroundMode background, Symbols symbols)
+    : theme_(theme), background_(background), symbols_(symbols) {
     if (background_ == BackgroundMode::Transparent) {
         theme_.background = kNoColor;
         theme_.text = kNoColor;
     }
+}
+
+ftxui::BorderStyle Palette::rounded_border() const {
+    return symbols_ == Symbols::Simple ? ftxui::LIGHT : ftxui::ROUNDED;
 }
 
 bool Palette::paints_background() const { return has_color(theme_.background); }
@@ -371,14 +407,20 @@ ftxui::Decorator Palette::inside_border() const {
 }
 
 ftxui::Element Palette::vscroll(ftxui::Element element) const {
-    if (!has_color(theme_.scrollbar)) {
+    const bool simple = symbols_ == Symbols::Simple;
+    if (!has_color(theme_.scrollbar) && !simple) {
         return ftxui::vscroll_indicator(std::move(element));
     }
-    return std::make_shared<ColoredScrollbar>(std::move(element), to_ftxui(theme_.scrollbar));
+    std::optional<Color> color;
+    if (has_color(theme_.scrollbar)) {
+        color = to_ftxui(theme_.scrollbar);
+    }
+    return std::make_shared<Scrollbar>(std::move(element), color, simple);
 }
 
 std::string Palette::key() const {
-    return std::string{theme_.id} + "/" + std::string{background_id(background_)};
+    return std::string{theme_.id} + "/" + std::string{background_id(background_)} + "/" +
+           (symbols_ == Symbols::Simple ? "simple" : "unicode");
 }
 
 const Palette& terminal_palette() {

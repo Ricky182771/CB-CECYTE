@@ -198,24 +198,28 @@ TEST_CASE("run_block_action: copia o guarda el bloque con ese número", "[block_
     const chatbot_test::ScopedTempDir dir;
 
     ActionResult result = chatbot::cli::run_block_action(
-        blocks, 2, BlockAction::Copy, fake.access({program("xclip")}), dir.string(), "");
+        blocks, 2, BlockAction::Copy, fake.access({program("xclip")}), dir.string(), "",
+        chatbot::cli::Symbols::Unicode);
     CHECK_FALSE(result.error);
     CHECK(fake.input == "x = 1\n");
     CHECK(result.message == "#2 copiado con xclip"); // Botones: aviso corto.
 
     result = chatbot::cli::run_block_action(blocks, 1, BlockAction::Save,
-                                            fake.access({program("xclip")}), dir.string(), "");
+                                            fake.access({program("xclip")}), dir.string(), "",
+        chatbot::cli::Symbols::Unicode);
     CHECK_FALSE(result.error);
     CHECK(read_text(dir.string() + "/chatbot/bloque-1.cpp") == "int a;\n");
     CHECK(fake.programs.size() == 1); // Guardar no copia.
 
     result = chatbot::cli::run_block_action(blocks, 1, BlockAction::Save,
-                                            fake.access({program("xclip")}), std::nullopt, "");
+                                            fake.access({program("xclip")}), std::nullopt, "",
+        chatbot::cli::Symbols::Unicode);
     CHECK(result.error);
     CHECK(result.message == chatbot::cli::no_download_dir_message(chatbot::current_os()));
 
     result = chatbot::cli::run_block_action(blocks, 3, BlockAction::Copy,
-                                            fake.access({program("xclip")}), dir.string(), "");
+                                            fake.access({program("xclip")}), dir.string(), "",
+        chatbot::cli::Symbols::Unicode);
     CHECK(result.error);
     CHECK(result.message.find("No existe el bloque #3") != std::string::npos);
 }
@@ -231,10 +235,16 @@ TEST_CASE("run_block_action: un bloque de la respuesta en curso se copia como va
     FakeClipboard fake;
     const ActionResult result = chatbot::cli::run_block_action(
         index.blocks(), 1, chatbot::cli::BlockAction::Copy, fake.access({program("wl-copy")}),
-        std::nullopt, "");
+        std::nullopt, "",
+        chatbot::cli::Symbols::Unicode);
     CHECK_FALSE(result.error);
     CHECK(fake.input == "int a;\nint b\n");
     CHECK(result.message == "⚠ #1 incompleto (aún no termina) · copiado con wl-copy");
+    // Con símbolos sencillos, la marca de glyph_table().
+    CHECK(chatbot::cli::run_block_action(index.blocks(), 1, chatbot::cli::BlockAction::Copy,
+                                         fake.access({program("wl-copy")}), std::nullopt, "",
+                                         chatbot::cli::Symbols::Simple)
+              .message == "! #1 incompleto (aún no termina) · copiado con wl-copy");
     // No tocó la conversación.
     CHECK(conversation.entries().size() == 2);
     CHECK(conversation.busy());

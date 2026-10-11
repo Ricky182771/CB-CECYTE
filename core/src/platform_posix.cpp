@@ -87,6 +87,8 @@ bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
 std::optional<std::string> known_folder(KnownFolder /*folder*/) { return std::nullopt; }
 
+std::optional<std::uint32_t> windows_build() { return std::nullopt; }
+
 // La terminal de POSIX no tiene página de códigos que cambiar.
 ConsoleCodePages set_console_utf8() { return {}; }
 

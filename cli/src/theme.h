@@ -1,6 +1,10 @@
 #ifndef CHATBOT_CLI_THEME_H
 #define CHATBOT_CLI_THEME_H
 
+#include "glyphs.h"
+
+#include "chatbot/config.h"
+
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/cell.hpp>
 #include <ftxui/screen/color.hpp>
@@ -85,10 +89,13 @@ enum class BackgroundMode { FromTheme, Transparent };
 [[nodiscard]] std::string_view background_id(BackgroundMode mode);
 [[nodiscard]] std::optional<BackgroundMode> parse_background(std::string_view id);
 
-/// Tema y modo de fondo elegidos, ya resueltos a partir de config.json.
+/// Tema, modo de fondo y símbolos elegidos, ya resueltos a partir de
+/// config.json.
 struct Appearance {
     const Theme* theme = &default_theme();
     BackgroundMode background = BackgroundMode::FromTheme;
+    SymbolMode symbol_mode = SymbolMode::Auto; ///< Lo elegido (lo que se guarda).
+    Symbols symbols = Symbols::Unicode;        ///< Lo que se dibuja.
 };
 
 /// NO_COLOR definida y no vacía desactiva la elección de colores.
@@ -101,6 +108,14 @@ struct Appearance {
                                             std::string_view background_id,
                                             std::string* warning = nullptr);
 
+/// Resuelve todo "appearance" de config.json: tema y fondo como la de
+/// arriba, y los símbolos con resolve_symbols (detected es lo que da
+/// Automático, de detect_symbols). Un modo de símbolos desconocido usa
+/// Automático y deja un aviso en warning; con NO_COLOR los símbolos se
+/// resuelven igual.
+[[nodiscard]] Appearance resolve_appearance(const AppearanceValues& values, Symbols detected,
+                                            std::string* warning = nullptr);
+
 /// Razón de contraste WCAG 2.x entre dos colores 0xRRGGBB (de 1 a 21).
 [[nodiscard]] double contrast_ratio(std::uint32_t a, std::uint32_t b);
 /// Luminancia relativa WCAG 2.x de un color 0xRRGGBB (de 0 a 1).
@@ -109,19 +124,28 @@ struct Appearance {
 /// El color de FTXUI (Color::Default si no tiene).
 [[nodiscard]] ftxui::Color to_ftxui(const ThemeColor& color);
 
-/// Tema aplicado con su modo de fondo: lo que usan las vistas para dibujar.
-/// Con fondo transparente, background y text quedan sin color; los acentos
-/// conservan los del tema.
+/// Tema aplicado con su modo de fondo y el juego de símbolos: lo que usan
+/// las vistas para dibujar. Con fondo transparente, background y text quedan
+/// sin color; los acentos conservan los del tema.
 class Palette {
 public:
     explicit Palette(const Theme& theme = default_theme(),
-                     BackgroundMode background = BackgroundMode::FromTheme);
+                     BackgroundMode background = BackgroundMode::FromTheme,
+                     Symbols symbols = Symbols::Unicode);
     explicit Palette(const Appearance& appearance)
-        : Palette(*appearance.theme, appearance.background) {}
+        : Palette(*appearance.theme, appearance.background, appearance.symbols) {}
 
     /// El tema ya resuelto (con fondo transparente, sin background ni text).
     [[nodiscard]] const Theme& theme() const { return theme_; }
     [[nodiscard]] BackgroundMode background() const { return background_; }
+    [[nodiscard]] Symbols symbols() const { return symbols_; }
+    /// Un símbolo de glyph_table() en el juego de esta paleta.
+    [[nodiscard]] std::string_view glyph(Glyph which) const {
+        return chatbot::cli::glyph(which, symbols_);
+    }
+    /// Estilo de los marcos redondeados (borderRounded, window): ROUNDED, o
+    /// LIGHT (esquinas rectas) en modo Sencillos.
+    [[nodiscard]] ftxui::BorderStyle rounded_border() const;
     /// true si se pinta el fondo del tema en toda la pantalla.
     [[nodiscard]] bool paints_background() const;
 
@@ -146,15 +170,18 @@ public:
     /// La selección sobre una celda, como selection(): selection_fg sobre
     /// selection_bg, o invertida (sin dim) si el tema invierte la selección.
     void select_cell(ftxui::Cell& cell) const;
-    /// Como ftxui::vscroll_indicator, con la barra en el color scrollbar.
+    /// Como ftxui::vscroll_indicator, con la barra en el color scrollbar y,
+    /// en modo Sencillos, con los respaldos de glyph_table() (█ ▀ ▄).
     [[nodiscard]] ftxui::Element vscroll(ftxui::Element element) const;
 
-    /// Id del tema y modo de fondo, para las cachés de lo ya dibujado.
+    /// Id del tema, modo de fondo y símbolos, para las cachés de lo ya
+    /// dibujado.
     [[nodiscard]] std::string key() const;
 
 private:
     Theme theme_;
     BackgroundMode background_;
+    Symbols symbols_;
 };
 
 /// Paleta del tema "De la terminal" (los colores de antes de los temas).

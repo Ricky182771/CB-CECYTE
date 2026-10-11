@@ -6,10 +6,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -221,4 +223,15 @@ TEST_CASE("std::random_device no es determinista", "[plataforma]") {
         b.push_back(second());
     }
     CHECK(a != b);
+}
+
+TEST_CASE("windows_build: el build real en Windows; nada en POSIX", "[plataforma][simbolos]") {
+    const std::optional<std::uint32_t> build = chatbot::windows_build();
+    if (chatbot::current_os() == chatbot::Os::Windows) {
+        REQUIRE(build.has_value());
+        CHECK(*build >= 10240); // El primer build de Windows 10.
+        WARN("Windows build " << *build);
+    } else {
+        CHECK_FALSE(build.has_value());
+    }
 }

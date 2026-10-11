@@ -162,6 +162,30 @@ void restore_console_input_mode(const ConsoleInputMode& previous) {
     }
 }
 
+std::optional<std::uint32_t> windows_build() {
+    // RtlGetVersion no está en los headers de Win32 (es de wdm.h), pero
+    // ntdll.dll la exporta y siempre está cargada. Devuelve STATUS_SUCCESS (0).
+    using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
+    const HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    if (ntdll == nullptr) {
+        return std::nullopt;
+    }
+    const FARPROC proc = ::GetProcAddress(ntdll, "RtlGetVersion");
+    if (proc == nullptr) {
+        return std::nullopt;
+    }
+    // Por void*: FARPROC no tiene la firma de RtlGetVersion
+    // (-Wcast-function-type).
+    const auto rtl_get_version =
+        reinterpret_cast<RtlGetVersionFn>(reinterpret_cast<void*>(proc));
+    RTL_OSVERSIONINFOW info{};
+    info.dwOSVersionInfoSize = sizeof(info);
+    if (rtl_get_version(&info) != 0) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(info.dwBuildNumber);
+}
+
 std::optional<std::string> known_folder(KnownFolder folder) {
     const KNOWNFOLDERID* id = &FOLDERID_RoamingAppData;
     switch (folder) {

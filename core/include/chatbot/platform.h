@@ -1,6 +1,7 @@
 #ifndef CHATBOT_PLATFORM_H
 #define CHATBOT_PLATFORM_H
 
+#include <cstdint>
 #include <ctime>
 #include <optional>
 #include <string>
@@ -104,6 +105,13 @@ public:
 private:
     ConsoleInputMode previous_;
 };
+
+/// Número de build de Windows (19044 en Windows 10 21H2; 22000 o más en
+/// Windows 11), o nullopt si no se puede leer. Usa RtlGetVersion de
+/// ntdll.dll, que da la versión real: GetVersionExW da la versión para la
+/// que está hecho el manifiesto y su documentación dice que puede cambiar
+/// después de Windows 8.1. En POSIX, siempre nullopt.
+[[nodiscard]] std::optional<std::uint32_t> windows_build();
 
 /// Carpetas conocidas de Windows (FOLDERID_*).
 enum class KnownFolder {

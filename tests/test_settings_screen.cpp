@@ -4,6 +4,7 @@
 #include "blocking_transport.hpp"
 #include "fake_transport.hpp"
 #include "no_color_guard.hpp"
+#include "symbols_check.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -44,6 +45,7 @@ struct Harness {
     chatbot::cli::Palette palette{chatbot::cli::resolve_appearance("", "")};
     std::optional<std::string> saved_model;
     int appearance_saves = 0;
+    std::optional<chatbot::cli::Appearance> saved_appearance; ///< La del último guardado.
     int prompt_saves = 0;
     std::optional<std::string> saved_prompt; ///< Lo que recibió el último guardado.
     std::optional<std::string> prompt_error; ///< Error que devuelve el guardado.
@@ -74,8 +76,9 @@ struct Harness {
             saved_model = provider.model();
             return std::nullopt;
         },
-        [this](const chatbot::cli::Appearance&) -> std::optional<std::string> {
+        [this](const chatbot::cli::Appearance& appearance) -> std::optional<std::string> {
             ++appearance_saves;
+            saved_appearance = appearance;
             return std::nullopt;
         },
         [this](const std::optional<std::string>& prompt) -> std::optional<std::string> {
@@ -260,6 +263,12 @@ TEST_CASE("configuración: NO_COLOR bloquea tema y fondo y no los guarda", "[aju
     CHECK(find(screen, "Desactivado por NO_COLOR").x >= 0);
     CHECK(find(screen, "De la terminal").x >= 0);
     CHECK(find(screen, "Transparente").x >= 0);
+    // Tab: los símbolos (se eligen también con NO_COLOR) y luego Guardar.
+    REQUIRE(h.settings.component()->OnEvent(ftxui::Event::Tab));
+    screen = h.draw();
+    const Position automatic = find(screen, "● Automático");
+    REQUIRE(automatic.x >= 0);
+    CHECK(screen.CellAt(automatic.x, automatic.y).inverted);
     REQUIRE(h.settings.component()->OnEvent(ftxui::Event::Tab));
     screen = h.draw();
     const Position save = find(screen, "[ Guardar ]");
@@ -267,6 +276,36 @@ TEST_CASE("configuración: NO_COLOR bloquea tema y fondo y no los guarda", "[aju
     CHECK(screen.CellAt(save.x, save.y).inverted);
     REQUIRE(h.settings.component()->OnEvent(ftxui::Event::Return));
     CHECK(h.appearance_saves == 0);
+    CHECK_FALSE(h.settings.is_open());
+}
+
+TEST_CASE("configuración: Símbolos se elige y se guarda, también con NO_COLOR",
+          "[ajustes][simbolos]") {
+    const char* no_color = GENERATE(static_cast<const char*>(nullptr), "1");
+    const chatbot_test::NoColorGuard environment(no_color);
+    Harness h;
+    h.open("modelo-0");
+    REQUIRE(h.key(ftxui::Event::ArrowDown)); // Colores y Accesibilidad.
+    auto screen = h.draw();
+    CHECK(find(screen, "Símbolos").x >= 0);
+    CHECK(find(screen, "● Automático").x >= 0);
+    CHECK(find(screen, "  Unicode").x >= 0);
+    CHECK(find(screen, "  Sencillos").x >= 0);
+
+    // Tab hasta la lista de símbolos (con colores: tema y fondo antes).
+    const int tabs = no_color == nullptr ? 3 : 1;
+    for (int i = 0; i < tabs; ++i) {
+        REQUIRE(h.key(ftxui::Event::Tab));
+    }
+    REQUIRE(h.key(ftxui::Event::ArrowDown));
+    REQUIRE(h.key(ftxui::Event::ArrowDown));
+    REQUIRE(h.key(ftxui::Event::Return));
+    screen = h.draw();
+    CHECK(find(screen, "● Sencillos").x >= 0);
+    h.save();
+    CHECK(h.appearance_saves == 1);
+    REQUIRE(h.saved_appearance.has_value());
+    CHECK(h.saved_appearance->symbol_mode == chatbot::cli::SymbolMode::Simple);
     CHECK_FALSE(h.settings.is_open());
 }
 
@@ -660,4 +699,54 @@ TEST_CASE("configuración: pegar solo un salto de línea en las instrucciones", 
     h.save();
     CHECK(h.prompt_saves == 1);
     CHECK(h.saved_prompt == std::string{"a\nxb"});
+}
+
+TEST_CASE("configuración: símbolos sencillos con la lista de proveedores abierta",
+          "[ajustes][simbolos]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    const std::vector<chatbot::cli::Palette> unicode =
+        chatbot_test::palettes_with(chatbot::cli::Symbols::Unicode);
+    const std::vector<chatbot::cli::Palette> simple =
+        chatbot_test::palettes_with(chatbot::cli::Symbols::Simple);
+    // La misma pantalla con cada juego de símbolos.
+    const auto compare = [](Harness& h, const chatbot::cli::Palette& a,
+                            const chatbot::cli::Palette& b) {
+        h.palette = a;
+        const ftxui::Screen first = h.draw(100);
+        h.palette = b;
+        ftxui::Screen second = h.draw(100);
+        chatbot_test::check_simple_matches(first, second);
+        return std::pair{chatbot_test::table_glyphs_in(first), std::move(second)};
+    };
+    for (std::size_t i = 0; i < unicode.size(); ++i) {
+        INFO("paleta " << unicode[i].key());
+        {
+            // Proveedor, con la lista de proveedores abierta: barra y ▴.
+            Harness h;
+            h.open("modelo-0");
+            REQUIRE(h.key(ftxui::Event::Tab));
+            REQUIRE(h.key(ftxui::Event::Return));
+            const auto [glyphs, screen] = compare(h, unicode[i], simple[i]);
+            CHECK(glyphs > 0);
+            CHECK(find(screen, " ^]").x >= 0);
+            CHECK(find(screen, "█").x >= 0); // La barra de la lista.
+        }
+        {
+            // Cerrada (▾), con la lista de modelos y su barra.
+            Harness h;
+            h.open("modelo-0");
+            const auto [glyphs, screen] = compare(h, unicode[i], simple[i]);
+            CHECK(glyphs > 0);
+            CHECK(find(screen, " v]").x >= 0);
+        }
+        {
+            // Colores y Accesibilidad.
+            Harness h;
+            h.open("modelo-0");
+            REQUIRE(h.key(ftxui::Event::ArrowDown));
+            const auto [glyphs, screen] = compare(h, unicode[i], simple[i]);
+            CHECK(find(screen, "Símbolos").x >= 0);
+            (void)glyphs;
+        }
+    }
 }

@@ -126,10 +126,12 @@ struct ConfigFileValues {
                                                         const ConfigFileValues& values);
 
 /// "appearance" de config.json: {"theme": "<id>", "background": "theme" |
-/// "terminal"}. El núcleo solo la lee y la escribe; la interpreta cli/.
+/// "terminal", "symbols": "auto" | "unicode" | "simple"}. El núcleo solo la
+/// lee y la escribe; la interpreta cli/.
 struct AppearanceValues {
     std::string theme;
     std::string background;
+    std::string symbols;
 };
 
 /// Lee "appearance" tal como está en config.json (vacíos si falta o no es
@@ -137,8 +139,10 @@ struct AppearanceValues {
 /// JSON válido, error Config.
 [[nodiscard]] Result<AppearanceValues> load_appearance_values(const std::string& path);
 
-/// Escribe theme y background en "appearance" de forma atómica, conservando
-/// las demás llaves del archivo (y las de "appearance"). Si el archivo
+/// Escribe theme, background y symbols en "appearance" de forma atómica,
+/// conservando las demás llaves del archivo (y las de "appearance"). Un valor
+/// vacío deja esa llave como estaba (con NO_COLOR solo se guardan los
+/// símbolos: el tema y el fondo elegidos no se pierden). Si el archivo
 /// existe pero no es un objeto JSON válido, no lo toca y devuelve el error
 /// Config.
 [[nodiscard]] std::optional<ChatError> save_appearance(const std::string& path,

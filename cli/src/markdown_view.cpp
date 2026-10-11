@@ -571,13 +571,13 @@ private:
     /// ancho de la marca, alineadas con el texto. Solo es dibujo: el árbol
     /// (y lo que se guarda o se manda a la API) no cambia.
     Element subheading(const Block& block, const Look& base, int width) const {
-        static const std::string kMark = "▍ ";
-        const int mark_width = ftxui::string_width(kMark);
+        const std::string mark = std::string{palette_.glyph(Glyph::HeadingMark)} + " ";
+        const int mark_width = ftxui::string_width(mark);
         std::vector<Line> lines;
         for (const Line& source : flow(atoms_of(block, base), width - mark_width)) {
             Line line;
             if (lines.empty()) {
-                line.append(kMark, mark_width, base);
+                line.append(mark, mark_width, base);
             } else {
                 pad(line, mark_width);
             }
@@ -602,10 +602,27 @@ private:
         return ftxui::hbox({ftxui::text(marker), blocks(children, width - marker_width, spaced)});
     }
 
+    /// Casilla de una tarea y un espacio (glyph_table()).
+    std::string task_mark(bool checked) const {
+        return std::string{palette_.glyph(checked ? Glyph::TaskDone : Glyph::TaskOpen)} + " ";
+    }
+
+    /// Viñeta de una lista sin numerar: "•", y en los niveles 2 y 3 los de
+    /// glyph_table(); después se repiten.
+    std::string_view bullet_for(int depth) const {
+        switch (depth % 3) {
+        case 1:
+            return palette_.glyph(Glyph::BulletLevel2);
+        case 2:
+            return palette_.glyph(Glyph::BulletLevel3);
+        default:
+            return "•";
+        }
+    }
+
     Element list(const Block& block, int width) {
-        static constexpr std::string_view kBullets[] = {"•", "◦", "▪"};
         const bool ordered = block.kind == Block::Kind::OrderedList;
-        const std::string bullet{kBullets[static_cast<std::size_t>(bullet_depth_ % 3)]};
+        const std::string bullet{bullet_for(bullet_depth_)};
         const unsigned last = block.start + static_cast<unsigned>(block.children.size()) -
                               (block.children.empty() ? 0U : 1U);
         const int number_width = ftxui::string_width(std::to_string(last));
@@ -623,10 +640,10 @@ private:
                                      ' ') +
                          digits + ". ";
                 if (item.task) {
-                    marker += item.checked ? "☑ " : "☐ ";
+                    marker += task_mark(item.checked);
                 }
             } else if (item.task) {
-                marker = item.checked ? "☑ " : "☐ ";
+                marker = task_mark(item.checked);
             } else {
                 marker = bullet + " ";
             }
@@ -673,11 +690,13 @@ private:
         const std::string label = code_title(next_code_ > 0 ? next_code_++ : 0, block.info);
         Element frame;
         if (label.empty()) {
-            frame = ftxui::borderRounded(std::move(content)) | palette_.ink(&Theme::border);
+            frame = std::move(content) | ftxui::borderStyled(palette_.rounded_border()) |
+                    palette_.ink(&Theme::border);
         } else {
             Element title = ftxui::text(label) | palette_.inside_border() |
                             palette_.ink(&Theme::notice);
-            frame = ftxui::window(std::move(title), std::move(content)) |
+            frame = ftxui::window(std::move(title), std::move(content),
+                                  palette_.rounded_border()) |
                     palette_.ink(&Theme::border);
         }
         if (code_boxes_ != nullptr && code_index_ < code_boxes_->size()) {

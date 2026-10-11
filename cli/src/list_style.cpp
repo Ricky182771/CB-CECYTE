@@ -8,7 +8,7 @@ ftxui::Element chosen_mark(bool chosen, const Palette& palette) {
     if (!chosen) {
         return ftxui::text(std::string{kNotChosenMark});
     }
-    return ftxui::text(std::string{kChosenMark}) | ftxui::bold |
+    return ftxui::text(std::string{palette.glyph(Glyph::ChosenMark)} + " ") | ftxui::bold |
            palette.ink(&Theme::heading_accent);
 }
 

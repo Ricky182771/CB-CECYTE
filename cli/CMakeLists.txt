@@ -61,6 +61,7 @@ add_library(chatbot_cli_lib STATIC
     src/conversation_list.cpp
     src/conversation_store.cpp
     src/downloads.cpp
+    src/glyphs.cpp
     src/markdown.cpp
     src/input_edit.cpp
     src/key_log.cpp
@@ -72,7 +73,8 @@ add_library(chatbot_cli_lib STATIC
     src/search_context.cpp
     src/search_settings.cpp
     src/sidebar.cpp
-    src/system_prompt.cpp)
+    src/system_prompt.cpp
+    src/terminal_reply.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 find_package(nlohmann_json 3.9 REQUIRED)
