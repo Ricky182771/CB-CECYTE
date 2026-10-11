@@ -31,7 +31,9 @@ struct ParsedCommand {
     std::string file_name;
 };
 
-/// Avisos de uso de /copiar, /guardar y /exportar.
+/// Avisos de uso de /buscar, /copiar, /guardar y /exportar. Los argumentos
+/// coinciden con los del registro de comandos (commands.h).
+inline constexpr std::string_view kSearchUsage = "Uso: /buscar <consulta>";
 inline constexpr std::string_view kCopyUsage = "Uso: /copiar [número de bloque]";
 inline constexpr std::string_view kSaveUsage = "Uso: /guardar [número de bloque [nombre]]";
 inline constexpr std::string_view kExportUsage = "Uso: /exportar (sin argumentos)";

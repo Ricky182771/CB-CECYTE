@@ -516,7 +516,7 @@ int main() {
         }
         // /buscar: sin consulta o sin key, el texto se queda en la caja.
         if (command.type == chatbot::cli::ParsedCommand::Type::SearchEmpty) {
-            flash = "Uso: /buscar <consulta>";
+            flash = std::string{chatbot::cli::kSearchUsage};
             return;
         }
         const bool search = command.type == chatbot::cli::ParsedCommand::Type::Search;

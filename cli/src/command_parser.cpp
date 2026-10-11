@@ -1,5 +1,7 @@
 #include "command_parser.h"
 
+#include "commands.h"
+
 #include <algorithm>
 #include <cctype>
 #include <utility>
@@ -52,7 +54,7 @@ std::optional<ParsedCommand> parse_block_command(std::string_view input) {
     const std::string_view name = input.substr(0, end);
     const std::vector<std::string_view> args = split_words(input.substr(end));
     ParsedCommand command;
-    if (name == "/copiar") {
+    if (name == kCopyCommand) {
         command.type = ParsedCommand::Type::Copy;
         if (args.size() == 1) {
             command.block = block_number(args[0]);
@@ -62,7 +64,7 @@ std::optional<ParsedCommand> parse_block_command(std::string_view input) {
         }
         return command;
     }
-    if (name == "/guardar") {
+    if (name == kSaveCommand) {
         command.type = ParsedCommand::Type::Save;
         if (!args.empty()) {
             command.block = block_number(args[0]);
@@ -75,7 +77,7 @@ std::optional<ParsedCommand> parse_block_command(std::string_view input) {
         }
         return command;
     }
-    if (name == "/exportar") {
+    if (name == kExportCommand) {
         command.type = args.empty() ? ParsedCommand::Type::Export
                                     : ParsedCommand::Type::ExportUsage;
         return command;
@@ -99,7 +101,6 @@ ParsedCommand parse_command(std::string_view input) {
     }
 
     // Verificar si empieza con "/buscar".
-    constexpr std::string_view kSearchCommand = "/buscar";
     if (input.size() < kSearchCommand.size() ||
         input.substr(0, kSearchCommand.size()) != kSearchCommand) {
         return {ParsedCommand::Type::Normal, std::string{input}, std::nullopt, ""};

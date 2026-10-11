@@ -54,6 +54,7 @@ add_library(chatbot_cli_lib STATIC
     ${CHATBOT_CLIPBOARD_SOURCE}
     src/code_blocks.cpp
     src/command_parser.cpp
+    src/commands.cpp
     src/conversation.cpp
     src/conversation_export.cpp
     src/conversation_list.cpp

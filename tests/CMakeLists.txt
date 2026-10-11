@@ -19,6 +19,7 @@ add_executable(chatbot_tests
     test_clipboard.cpp
     test_code_blocks.cpp
     test_command_parser.cpp
+    test_commands.cpp
     test_config.cpp
     test_conversation.cpp
     test_conversation_export.cpp
