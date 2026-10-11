@@ -289,9 +289,19 @@ int main() {
     const chatbot::ConsoleInputScope console_input;
 
     // Errores de arranque: por stderr, antes de abrir la pantalla completa.
+    // Con doble clic en Windows, la ventana se cerraría al salir sin que
+    // nadie leyera el error: ahí se espera un Enter.
     const auto fail = [](const chatbot::ChatError& error) {
         std::cerr << "[" << chatbot::error_kind_label(error.kind) << "] " << error.message
                   << '\n';
+        if (chatbot::console_closes_on_exit()) {
+            std::cerr << "\nPresiona Enter para cerrar esta ventana." << std::flush;
+            // Un carácter, no una línea: sin ENABLE_PROCESSED_INPUT
+            // (ConsoleInputScope) la consola no convierte Enter en "\r\n" y
+            // getline esperaría un "\n" que nunca llega. Con ENABLE_LINE_INPUT
+            // la lectura regresa al presionar Enter.
+            (void)std::cin.get();
+        }
         return 1;
     };
 

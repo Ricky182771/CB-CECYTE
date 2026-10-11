@@ -210,6 +210,16 @@ std::optional<std::string> executable_dir() {
     return std::nullopt;
 }
 
+bool console_closes_on_exit() {
+    if (!is_console(STD_INPUT_HANDLE)) {
+        return false; // stdin redirigido: no hay a quién pedirle Enter.
+    }
+    // Con un solo proceso en la lista, la consola es de este proceso: al
+    // terminar, Windows cierra la ventana.
+    DWORD processes[2] = {};
+    return ::GetConsoleProcessList(processes, 2) == 1;
+}
+
 std::optional<std::string> known_folder(KnownFolder folder) {
     const KNOWNFOLDERID* id = &FOLDERID_RoamingAppData;
     switch (folder) {

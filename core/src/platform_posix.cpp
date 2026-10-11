@@ -107,6 +107,9 @@ std::optional<std::string> executable_dir() {
     return std::nullopt;
 }
 
+// La terminal de POSIX no se cierra al terminar el proceso.
+bool console_closes_on_exit() { return false; }
+
 std::optional<std::string> known_folder(KnownFolder /*folder*/) { return std::nullopt; }
 
 std::optional<std::uint32_t> windows_build() { return std::nullopt; }
