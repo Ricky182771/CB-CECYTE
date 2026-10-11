@@ -674,6 +674,11 @@ ftxui::Element SettingsScreen::render_provider() const {
                      refresh_button_->Render()}),
         render_models() | ftxui::flex | ftxui::reflect(models_box_),
         ftxui::hbox({label("Modelo", model_input_->Focused(), palette_), std::move(model)}),
+        portable_dir_.has_value()
+            ? ftxui::vbox({ftxui::text(""),
+                           ftxui::text("Modo portable: datos en " + clean(*portable_dir_)) |
+                               notice})
+            : ftxui::emptyElement(),
     });
 }
 

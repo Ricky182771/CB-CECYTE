@@ -1,5 +1,7 @@
 #include "conversation_store.h"
 
+#include "chatbot/config.h"
+
 #include "temp_dir.hpp"
 
 #ifndef _WIN32
@@ -77,14 +79,35 @@ bool has_tmp_files(const fs::path& dir) {
 } // namespace
 
 TEST_CASE("resolve_data_dir: CHAT_DATA_DIR gana", "[almacen][ruta]") {
-    CHECK(chatbot::cli::resolve_data_dir(std::string{"/datos/chat"}, std::string{"/xdg"},
-                                         std::string{"/home/ana"}) == "/datos/chat");
+    using chatbot::cli::resolve_data_dir;
+    CHECK(resolve_data_dir(std::string{"/datos/chat"}, std::nullopt, std::string{"/xdg"},
+                           std::string{"/home/ana"}) == "/datos/chat");
+    // También sobre el modo portable.
+    CHECK(resolve_data_dir(std::string{"/datos/chat"}, std::string{"/usb/chatbot/datos"},
+                           std::string{"/xdg"}, std::string{"/home/ana"}) == "/datos/chat");
 }
 
 TEST_CASE("resolve_data_dir: CHAT_DATA_DIR vacío se ignora", "[almacen][ruta]") {
-    CHECK(chatbot::cli::resolve_data_dir(std::string{""}, std::string{"/xdg"},
+    CHECK(chatbot::cli::resolve_data_dir(std::string{""}, std::nullopt, std::string{"/xdg"},
                                          std::string{"/home/ana"}) ==
           "/xdg/chatbot/conversations");
+}
+
+TEST_CASE("resolve_data_dir: modo portable, después de CHAT_DATA_DIR",
+          "[almacen][ruta][portable]") {
+    using chatbot::cli::resolve_data_dir;
+    const std::optional<std::string> portable =
+        chatbot::portable_data_dir(std::string{"/usb/chatbot"}, true, chatbot::Os::Posix);
+    // Gana sobre XDG_DATA_HOME y HOME.
+    CHECK(resolve_data_dir(std::nullopt, portable, std::string{"/xdg"}, std::string{"/home/ana"}) ==
+          "/usb/chatbot/datos/conversations");
+    CHECK(resolve_data_dir(std::string{""}, portable, std::nullopt, std::nullopt) ==
+          "/usb/chatbot/datos/conversations");
+    // Sin chatbot.portable, lo de siempre.
+    const std::optional<std::string> not_portable =
+        chatbot::portable_data_dir(std::string{"/usb/chatbot"}, false, chatbot::Os::Posix);
+    CHECK(resolve_data_dir(std::nullopt, not_portable, std::string{"/xdg"},
+                           std::string{"/home/ana"}) == "/xdg/chatbot/conversations");
 }
 
 TEST_CASE("resolve_windows_data_dir: CHAT_DATA_DIR, AppData\\Local o LOCALAPPDATA",
@@ -92,36 +115,54 @@ TEST_CASE("resolve_windows_data_dir: CHAT_DATA_DIR, AppData\\Local o LOCALAPPDAT
     using chatbot::cli::resolve_windows_data_dir;
     const std::string local = "C:\\Users\\José\\AppData\\Local";
     const std::string expected = local + "\\chatbot\\conversations";
-    CHECK(resolve_windows_data_dir(std::string{"D:\\chats"}, local, local) == "D:\\chats");
-    CHECK(resolve_windows_data_dir(std::string{""}, local, std::nullopt) == expected);
-    CHECK(resolve_windows_data_dir(std::nullopt, local + "\\", std::string{"E:\\x"}) == expected);
-    CHECK(resolve_windows_data_dir(std::nullopt, std::nullopt, local) == expected);
-    CHECK(resolve_windows_data_dir(std::nullopt, std::string{}, local) == expected);
-    CHECK_FALSE(resolve_windows_data_dir(std::nullopt, std::nullopt, std::nullopt).has_value());
+    const std::optional<std::string> none;
+    CHECK(resolve_windows_data_dir(std::string{"D:\\chats"}, none, local, local) == "D:\\chats");
+    CHECK(resolve_windows_data_dir(std::string{""}, none, local, none) == expected);
+    CHECK(resolve_windows_data_dir(none, none, local + "\\", std::string{"E:\\x"}) == expected);
+    CHECK(resolve_windows_data_dir(none, none, none, local) == expected);
+    CHECK(resolve_windows_data_dir(none, none, std::string{}, local) == expected);
+    CHECK_FALSE(resolve_windows_data_dir(none, none, none, none).has_value());
+}
+
+TEST_CASE("resolve_windows_data_dir: modo portable, después de CHAT_DATA_DIR",
+          "[almacen][ruta][windows][portable]") {
+    using chatbot::cli::resolve_windows_data_dir;
+    const std::string local = "C:\\Users\\José\\AppData\\Local";
+    const std::optional<std::string> portable =
+        chatbot::portable_data_dir(std::string{"E:\\chatbot"}, true, chatbot::Os::Windows);
+    CHECK(resolve_windows_data_dir(std::nullopt, portable, local, local) ==
+          "E:\\chatbot\\datos\\conversations");
+    CHECK(resolve_windows_data_dir(std::string{"D:\\chats"}, portable, local, local) ==
+          "D:\\chats");
+    const std::optional<std::string> not_portable =
+        chatbot::portable_data_dir(std::string{"E:\\chatbot"}, false, chatbot::Os::Windows);
+    CHECK(resolve_windows_data_dir(std::nullopt, not_portable, local, std::nullopt) ==
+          local + "\\chatbot\\conversations");
 }
 
 TEST_CASE("resolve_data_dir: XDG_DATA_HOME absoluto", "[almacen][ruta]") {
-    CHECK(chatbot::cli::resolve_data_dir(std::nullopt, std::string{"/xdg/"},
+    CHECK(chatbot::cli::resolve_data_dir(std::nullopt, std::nullopt, std::string{"/xdg/"},
                                          std::string{"/home/ana"}) ==
           "/xdg/chatbot/conversations");
 }
 
 TEST_CASE("resolve_data_dir: XDG_DATA_HOME relativo, vacío o ausente usan HOME",
           "[almacen][ruta]") {
+    using chatbot::cli::resolve_data_dir;
     const std::string expected = "/home/ana/.local/share/chatbot/conversations";
-    CHECK(chatbot::cli::resolve_data_dir(std::nullopt, std::string{"relativa/datos"},
-                                         std::string{"/home/ana"}) == expected);
-    CHECK(chatbot::cli::resolve_data_dir(std::nullopt, std::string{""},
-                                         std::string{"/home/ana"}) == expected);
-    CHECK(chatbot::cli::resolve_data_dir(std::nullopt, std::nullopt,
-                                         std::string{"/home/ana"}) == expected);
+    CHECK(resolve_data_dir(std::nullopt, std::nullopt, std::string{"relativa/datos"},
+                           std::string{"/home/ana"}) == expected);
+    CHECK(resolve_data_dir(std::nullopt, std::nullopt, std::string{""},
+                           std::string{"/home/ana"}) == expected);
+    CHECK(resolve_data_dir(std::nullopt, std::nullopt, std::nullopt,
+                           std::string{"/home/ana"}) == expected);
 }
 
 TEST_CASE("resolve_data_dir: sin nada devuelve nullopt", "[almacen][ruta]") {
-    CHECK_FALSE(chatbot::cli::resolve_data_dir(std::nullopt, std::nullopt, std::nullopt)
+    using chatbot::cli::resolve_data_dir;
+    CHECK_FALSE(resolve_data_dir(std::nullopt, std::nullopt, std::nullopt, std::nullopt)
                     .has_value());
-    CHECK_FALSE(chatbot::cli::resolve_data_dir(std::nullopt, std::string{"rel"},
-                                               std::string{""})
+    CHECK_FALSE(resolve_data_dir(std::nullopt, std::nullopt, std::string{"rel"}, std::string{""})
                     .has_value());
 }
 

@@ -8,25 +8,32 @@
 
 namespace chatbot {
 
-/// Construye la ruta del archivo de configuración a partir de XDG_CONFIG_HOME
-/// y $HOME, para poder probar la regla XDG sin mutar el entorno del proceso.
+/// Construye la ruta del archivo de configuración a partir de la carpeta
+/// del modo portable, XDG_CONFIG_HOME y $HOME, para poder probar las reglas
+/// sin mutar el entorno del proceso.
+/// - En modo portable (portable_dir, de portable_data_dir):
+///   <portable_dir>/config.json, aunque estén XDG_CONFIG_HOME o HOME.
 /// - Con XDG_CONFIG_HOME presente y no vacío: $XDG_CONFIG_HOME/chatbot/config.json
 /// - Si no, con HOME: $HOME/.config/chatbot/config.json
 /// - Si no hay nada: nullopt.
 /// Header interno (src/); no forma parte de la API pública.
 [[nodiscard]] std::optional<std::string> build_config_path(
+    const std::optional<std::string>& portable_dir,
     const std::optional<std::string>& xdg_config_home,
     const std::optional<std::string>& home);
 
 /// Construye la ruta del archivo de configuración en Windows, donde HOME y
 /// XDG_* no cuentan (MSYS2 define HOME y la configuración quedaría partida
 /// según la shell):
-/// - <roaming_app_data>\chatbot\config.json, con la carpeta AppData\Roaming
+/// - en modo portable (portable_dir, de portable_data_dir):
+///   <portable_dir>\config.json;
+/// - si no, <roaming_app_data>\chatbot\config.json, con la carpeta AppData\Roaming
 ///   que da Windows (known_folder(KnownFolder::RoamingAppData));
 /// - si no la dio, con la variable APPDATA (appdata);
 /// - si no hay ninguna: nullopt.
 /// Función pura, para probarla también en Linux.
 [[nodiscard]] std::optional<std::string> build_windows_config_path(
+    const std::optional<std::string>& portable_dir,
     const std::optional<std::string>& roaming_app_data,
     const std::optional<std::string>& appdata);
 

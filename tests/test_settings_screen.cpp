@@ -770,3 +770,22 @@ TEST_CASE("configuración: ningún placeholder es más ancho que su campo", "[aj
     REQUIRE(find(screen, "● Búsqueda web").x >= 0);
     CHECK(find(screen, "escribe la key de Tavily").x >= 0);
 }
+
+TEST_CASE("configuración: el modo portable se ve al pie de Proveedor de IA",
+          "[ajustes][portable]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0");
+    CHECK(find(h.draw(), "Modo portable").x < 0); // Sin modo portable, nada nuevo.
+
+    h.settings.set_portable_dir(std::string{"E:\\chatbot\\datos"});
+    auto screen = h.draw();
+    const Position line = find(screen, "Modo portable: datos en E:\\chatbot\\datos");
+    REQUIRE(line.x >= 0);
+    // Atenuada: con la tinta de los avisos.
+    CHECK(screen.CellAt(line.x, line.y).foreground_color ==
+          chatbot::cli::to_ftxui(h.palette.theme().notice));
+    // Solo en "Proveedor de IA".
+    h.go_to_search();
+    CHECK(find(h.draw(), "Modo portable").x < 0);
+}

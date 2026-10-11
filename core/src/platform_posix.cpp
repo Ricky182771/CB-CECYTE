@@ -85,6 +85,28 @@ bool stdio_is_terminal() {
 
 bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
+std::optional<std::string> executable_dir() {
+    // readlink no termina la cadena y trunca sin avisar: se repite con un
+    // búfer más grande mientras lo llene completo.
+    std::string target(256, '\0');
+    while (target.size() <= 65536) {
+        const ssize_t length = ::readlink("/proc/self/exe", target.data(), target.size());
+        if (length <= 0) {
+            return std::nullopt;
+        }
+        if (static_cast<std::size_t>(length) < target.size()) {
+            target.resize(static_cast<std::size_t>(length));
+            const std::size_t slash = target.rfind('/');
+            if (slash == std::string::npos) {
+                return std::nullopt;
+            }
+            return slash == 0 ? std::string{"/"} : target.substr(0, slash);
+        }
+        target.resize(target.size() * 2);
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> known_folder(KnownFolder /*folder*/) { return std::nullopt; }
 
 std::optional<std::uint32_t> windows_build() { return std::nullopt; }

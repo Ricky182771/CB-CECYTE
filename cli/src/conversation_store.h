@@ -68,29 +68,35 @@ struct LoadResult {
 
 /// Directorio de las conversaciones (función pura, para poder probarla):
 /// - chat_data_dir (CHAT_DATA_DIR) si está y no está vacío;
+/// - si no, en modo portable (portable_dir, de chatbot::portable_data_dir),
+///   <portable_dir>/conversations;
 /// - si no, $XDG_DATA_HOME/chatbot/conversations, solo si es ruta absoluta
 ///   (la especificación XDG manda ignorar rutas relativas);
 /// - si no, $HOME/.local/share/chatbot/conversations;
 /// - nullopt si no hay nada.
 [[nodiscard]] std::optional<std::string> resolve_data_dir(
     const std::optional<std::string>& chat_data_dir,
+    const std::optional<std::string>& portable_dir,
     const std::optional<std::string>& xdg_data_home,
     const std::optional<std::string>& home);
 
 /// Directorio de las conversaciones en Windows (función pura), donde HOME y
 /// XDG_* no cuentan:
 /// - chat_data_dir (CHAT_DATA_DIR) si está y no está vacío;
+/// - si no, en modo portable, <portable_dir>\conversations;
 /// - si no, <local_app_data>\chatbot\conversations, con la carpeta
 ///   AppData\Local que da Windows (KnownFolder::LocalAppData);
 /// - si no la dio, con la variable LOCALAPPDATA (localappdata);
 /// - nullopt si no hay nada.
 [[nodiscard]] std::optional<std::string> resolve_windows_data_dir(
     const std::optional<std::string>& chat_data_dir,
+    const std::optional<std::string>& portable_dir,
     const std::optional<std::string>& local_app_data,
     const std::optional<std::string>& localappdata);
 
 /// Directorio de las conversaciones de este proceso: resolve_data_dir con el
-/// entorno real o, en Windows, resolve_windows_data_dir.
+/// entorno real y process_portable_data_dir() o, en Windows,
+/// resolve_windows_data_dir.
 [[nodiscard]] std::optional<std::string> default_data_dir();
 
 /// Título a partir del primer mensaje del usuario: espacios y saltos de línea

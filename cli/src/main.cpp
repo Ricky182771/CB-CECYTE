@@ -288,6 +288,24 @@ int main() {
     // ese join tampoco mata el proceso.
     const chatbot::ConsoleInputScope console_input;
 
+    // Errores de arranque: por stderr, antes de abrir la pantalla completa.
+    const auto fail = [](const chatbot::ChatError& error) {
+        std::cerr << "[" << chatbot::error_kind_label(error.kind) << "] " << error.message
+                  << '\n';
+        return 1;
+    };
+
+    // Modo portable (chatbot.portable junto al ejecutable): la configuración,
+    // la key y las conversaciones van a datos/. Si no se puede escribir ahí,
+    // se sale con el error; nunca se usa en silencio la carpeta del usuario.
+    const std::optional<std::string>& portable_dir = chatbot::process_portable_data_dir();
+    if (portable_dir.has_value()) {
+        if (const std::optional<chatbot::ChatError> error =
+                chatbot::prepare_portable_data_dir(*portable_dir)) {
+            return fail(*error);
+        }
+    }
+
     // La configuración se carga antes de tocar la terminal: si falla, el
     // error sale por stderr sin abrir la pantalla completa. Si lo único que
     // falta es la key o el modelo, la app arranca con la pantalla de
@@ -300,10 +318,7 @@ int main() {
         initial.is_ok() ? chatbot::validate_config(initial.value()) : std::nullopt;
     const bool has_terminal = chatbot::stdio_is_terminal();
     if (initial.is_error() || (incomplete.has_value() && !has_terminal)) {
-        const chatbot::ChatError& error = initial.is_error() ? initial.error() : *incomplete;
-        std::cerr << "[" << chatbot::error_kind_label(error.kind) << "] " << error.message
-                  << '\n';
-        return 1;
+        return fail(initial.is_error() ? initial.error() : *incomplete);
     }
     chatbot::Config config = initial.value(); ///< La vigente; cambia al guardar la configuración.
     std::string model;                       ///< Modelo del cliente; vacío sin configuración.
@@ -770,6 +785,8 @@ int main() {
             right_tab = 0;
             input->TakeFocus();
         });
+
+    settings.set_portable_dir(portable_dir);
 
     // El foco del lado derecho: la configuración si está abierta; si no, la caja.
     const auto focus_main = [&] {

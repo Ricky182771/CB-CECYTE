@@ -113,6 +113,11 @@ private:
 /// después de Windows 8.1. En POSIX, siempre nullopt.
 [[nodiscard]] std::optional<std::uint32_t> windows_build();
 
+/// Carpeta del ejecutable de este proceso en UTF-8, sin la barra final
+/// (para el modo portable). Windows: GetModuleFileNameW. POSIX: el destino
+/// de /proc/self/exe (Linux y Termux). Nullopt si no se puede saber.
+[[nodiscard]] std::optional<std::string> executable_dir();
+
 /// Carpetas conocidas de Windows (FOLDERID_*).
 enum class KnownFolder {
     RoamingAppData, ///< %APPDATA%: config.json y credentials.json.
