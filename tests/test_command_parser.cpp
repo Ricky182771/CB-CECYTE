@@ -2,6 +2,8 @@
 
 #include "command_parser.h"
 
+#include <string>
+
 using namespace chatbot::cli;
 
 TEST_CASE("parse_command reconoce /buscar con consulta", "[command_parser]") {
@@ -132,6 +134,26 @@ TEST_CASE("parse_command detecta errores de uso de /guardar", "[command_parser]"
         CHECK(result.type == ParsedCommand::Type::SaveUsage);
         CHECK_FALSE(result.block.has_value());
         CHECK(result.file_name.empty());
+    }
+}
+
+TEST_CASE("/copiar y /guardar con solo un espacio final son lo mismo que sin él",
+          "[command_parser]") {
+    // Tab en el menú de comandos los completa con un espacio ("/copiar "):
+    // Enter justo después debe hacer lo mismo que el comando solo.
+    for (const char* name : {"/copiar", "/guardar"}) {
+        INFO(name);
+        const auto plain = parse_command(name);
+        const auto spaced = parse_command(std::string{name} + " ");
+        CHECK(spaced.type == plain.type);
+        CHECK(spaced.type != ParsedCommand::Type::Normal);
+        CHECK(spaced.type != ParsedCommand::Type::CopyUsage);
+        CHECK(spaced.type != ParsedCommand::Type::SaveUsage);
+        CHECK(spaced.block == plain.block);
+        CHECK_FALSE(spaced.block.has_value());
+        CHECK(spaced.file_name == plain.file_name);
+        CHECK(spaced.file_name.empty());
+        CHECK(spaced.text == plain.text);
     }
 }
 

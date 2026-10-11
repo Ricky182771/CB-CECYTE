@@ -53,6 +53,7 @@ add_library(chatbot_cli_lib STATIC
     src/clipboard.cpp
     ${CHATBOT_CLIPBOARD_SOURCE}
     src/code_blocks.cpp
+    src/command_menu.cpp
     src/command_parser.cpp
     src/commands.cpp
     src/conversation.cpp
