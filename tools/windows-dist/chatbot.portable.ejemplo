@@ -1,0 +1,1 @@
+Cambia el nombre de este archivo a chatbot.portable (sin ".ejemplo") para activar el modo portable: la configuración, la key y las conversaciones se guardarán en la carpeta "datos", junto a chatbot.exe. Antes, lee la sección 7 de LEEME.txt: en modo portable la key queda sin cifrar en datos\credentials.json.

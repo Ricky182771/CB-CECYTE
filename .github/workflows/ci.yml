@@ -144,21 +144,54 @@ jobs:
           grep -q "error de configuración" errores.txt
           grep -q "CHAT_API_KEY" errores.txt
 
-      # chatbot.exe de release con las DLL de /ucrt64/bin que reporta ldd,
-      # para probarlo en una PC sin MSYS2.
+      # El ZIP de distribución (tools/package-windows.sh): chatbot.exe con
+      # las DLL de /ucrt64/bin que reporta ldd, LICENSE.txt,
+      # AVISOS-TERCEROS.txt, LEEME.txt y chatbot.portable.ejemplo. El script
+      # falla si falta el texto de alguna licencia o si el ZIP no trae
+      # exactamente esos archivos.
       - name: Empaquetar
         if: matrix.preset == 'release'
+        run: tools/package-windows.sh build/release build/chatbot-windows-x64.zip
+
+      # Desde la carpeta descomprimida y sin /ucrt64/bin en el PATH, como en
+      # una PC sin MSYS2: sin key y sin terminal sale con 1 y el error de
+      # configuración; con chatbot.portable, igual, pero crea datos/ ahí.
+      - name: Probar el ZIP
+        if: matrix.preset == 'release'
         run: |
-          mkdir -p chatbot-windows-x64
-          cp build/release/cli/chatbot.exe chatbot-windows-x64/
-          ldd build/release/cli/chatbot.exe | awk '$3 ~ "^/ucrt64/bin/" { print $3 }' |
-            sort -u | xargs -r -I{} cp {} chatbot-windows-x64/
-          ls -l chatbot-windows-x64
+          set -euo pipefail
+          rm -rf zip-prueba
+          mkdir zip-prueba
+          cd zip-prueba
+          cmake -E tar xf ../build/chatbot-windows-x64.zip
+          ls -l
+          arrancar() {
+            local status=0
+            env -u CHAT_API_KEY -u CHAT_DATA_DIR PATH=/usr/bin:/c/Windows/System32:/c/Windows \
+              timeout 60 ./chatbot.exe < /dev/null > ../salida-zip.txt 2> ../errores-zip.txt ||
+              status=$?
+            cat ../errores-zip.txt
+            if [ "$status" -ne 1 ]; then
+              echo "Se esperaba el código de salida 1 y fue $status"
+              exit 1
+            fi
+            grep -q "error de configuración" ../errores-zip.txt
+            grep -q "CHAT_API_KEY" ../errores-zip.txt
+          }
+          arrancar
+          test ! -e datos
+          cp chatbot.portable.ejemplo chatbot.portable
+          arrancar
+          test -d datos
+          if grep -q "Modo portable" ../errores-zip.txt; then
+            echo "datos/ se podía escribir y aun así salió el error del modo portable"
+            exit 1
+          fi
 
       - name: Subir el artefacto
         if: matrix.preset == 'release'
         uses: actions/upload-artifact@v7
         with:
           name: chatbot-windows-x64
-          path: chatbot-windows-x64
+          path: build/chatbot-windows-x64.zip
           if-no-files-found: error
