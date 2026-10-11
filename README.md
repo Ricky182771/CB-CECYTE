@@ -98,7 +98,8 @@ Para usarlo en una PC sin MSYS2, descarga el artefacto `chatbot-windows-x64` de 
 - Los certificados HTTPS salen del almacén de Windows: no hace falta instalar nada más.
 - Al arrancar, la consola se pone en UTF-8 para que los acentos se vean bien, y al salir vuelve a la página de códigos que tenía (`chcp` muestra lo mismo que antes).
 - Ctrl+C sale limpio, también a mitad de una respuesta. Ctrl+Break y cerrar la ventana terminan el programa de golpe: lo que ya estaba guardado sigue ahí, pero la respuesta en curso se pierde y, con Ctrl+Break, `chcp` puede quedar en 65001.
-- En CMD y PowerShell sin Windows Terminal (conhost), el ratón y algunos símbolos todavía pueden no funcionar; con Windows Terminal sí.
+- En CMD y PowerShell sin Windows Terminal (conhost) de Windows 10, la fuente de la consola no tiene algunos símbolos: por eso **Símbolos** en `Automático` usa `Sencillos` ahí (ver [Colores y accesibilidad](#colores-y-accesibilidad)). En Windows 11 conhost busca el símbolo en otra fuente y se usa `Unicode`; en Windows Terminal, siempre `Unicode`.
+- El ratón en conhost funciona como en las demás terminales: clics, rueda, arrastrar el borde de la barra y pasar el puntero sobre el menú y los botones. Conhost se queda con Shift + clic para su propia selección (*QuickEdit*): **Shift + arrastrar** selecciona texto de la pantalla y **Enter** lo copia (Esc cancela); Shift + clic derecho pega. Mientras hay una selección, conhost detiene la salida del chatbot (la respuesta deja de avanzar en pantalla) hasta que copias o cancelas: es así en todas las apps de consola, no es una falla del chatbot.
 
 ### Integración continua
 
@@ -161,16 +162,17 @@ Las variables de entorno (`CHAT_API_KEY`, `CHAT_BASE_URL`, `CHAT_MODEL`, `CHAT_T
 
 #### Colores y accesibilidad
 
-En la configuración, la categoría **Colores y Accesibilidad** elige el tema y el fondo; se aplican al guardar, sin reiniciar, y se guardan en `config.json` como `"appearance"`.
+En la configuración, la categoría **Colores y Accesibilidad** elige el tema, el fondo y los símbolos; se aplican al guardar, sin reiniciar, y se guardan en `config.json` como `"appearance"`.
 
 - **Tema:** `Catppuccin Mocha` (por defecto) usa sus propios colores RGB, iguales en cualquier terminal. `De la terminal` usa la paleta de 16 colores de tu terminal, como antes de los temas.
 - **Fondo:** `Del tema` pinta el fondo del tema en toda la pantalla; `Transparente` deja el fondo y el color de texto de tu terminal y solo colorea los acentos (encabezados, código, enlaces…). Con `De la terminal` no aplica.
+- **Símbolos:** `Unicode` usa los símbolos de siempre (`⚙`, `✓`, `⚠`, `☑`, esquinas redondeadas…). `Sencillos` cambia los que no tienen las fuentes de la consola de Windows 10 (Consolas y Lucida Console), que ahí saldrían como cuadritos, por otros del mismo ancho: `⚙` → `*`, `✓` → `√`, `⚠` → `!`, `☑`/`☐` → `[x]`/`[ ]`, `▴`/`▾` → `^`/`v`, `▍` → `▌`, esquinas redondeadas → rectas y la barra de desplazamiento con bloques (`█`, `▀`, `▄`). Los acentos, la ñ y el texto de las respuestas no cambian. `Automático` (por defecto) usa `Sencillos` solo en la consola de Windows 10 (CMD o PowerShell sin Windows Terminal; ni `WT_SESSION` ni `TERM_PROGRAM` definidas) y `Unicode` en todo lo demás, también en mintty o la terminal de VS Code. En `config.json`: `"symbols": "auto"`, `"unicode"` o `"simple"`.
 
-Si `config.json` nombra un tema que no existe, se usa el de por defecto y la línea de estado lo avisa.
+Si `config.json` nombra un tema, un fondo o unos símbolos que no existen, se usa el valor por defecto y la línea de estado lo avisa.
 
 En todas las listas, la fila del cursor se marca con el color de selección (o invertida con `De la terminal`) solo mientras la lista tiene el foco, y `●` marca lo elegido. El campo o botón con el foco lleva su etiqueta con el color de selección.
 
-Si tu terminal no muestra colores de 24 bits, se aproximan a 256 o 16. Con `NO_COLOR` definida y no vacía se usa automáticamente `De la terminal`, con fondo transparente y cursor invertido. Tema y fondo aparecen deshabilitados con la nota `Desactivado por NO_COLOR`; la configuración guardada se conserva.
+Si tu terminal no muestra colores de 24 bits, se aproximan a 256 o 16. Con `NO_COLOR` definida y no vacía se usa automáticamente `De la terminal`, con fondo transparente y cursor invertido. Tema y fondo aparecen deshabilitados con la nota `Desactivado por NO_COLOR`; la configuración guardada se conserva. Los símbolos se eligen igual con `NO_COLOR`.
 
 #### Instrucciones del sistema
 
@@ -263,7 +265,7 @@ Teclas:
 
 #### Barra de conversaciones
 
-A la izquierda está la lista de conversaciones guardadas, agrupadas por fecha: **Hoy**, **Ayer**, **Últimos 7 días** y después un grupo por día (`2 oct`, o `15 dic 2025` si es de otro año). La primera fila, `+ Nueva`, empieza una conversación nueva, y la segunda, `⚙ Configuración`, abre la configuración. `●` marca la conversación abierta, y las ilegibles aparecen tenues, con `(ilegible)`, en el grupo **Sin fecha** al final.
+A la izquierda está la lista de conversaciones guardadas, agrupadas por fecha: **Hoy**, **Ayer**, **Últimos 7 días** y después un grupo por día (`2 oct`, o `15 dic 2025` si es de otro año). La primera fila, `+ Nueva`, empieza una conversación nueva, y la segunda, `⚙ Configuración` (`* Configuración` con símbolos sencillos), abre la configuración. `●` marca la conversación abierta, y las ilegibles aparecen tenues, con `(ilegible)`, en el grupo **Sin fecha** al final.
 
 - Se ve al arrancar si la terminal mide 100 columnas o más. Si la terminal se angosta a menos de 100, se oculta sola, y reaparece al volver a ensancharla (salvo que la hayas ocultado tú con Ctrl+B).
 - Para cambiar su ancho, arrastra con el ratón su borde derecho (de 18 a 60 columnas, o hasta la mitad de la terminal). El ancho no se guarda al salir.
@@ -325,7 +327,7 @@ Para ver cómo se muestra un archivo markdown sin usar la API:
 ./build/release/tools/md_preview --theme terminal tests/data/markdown_muestra.md
 ```
 
-`--width` es el ancho en columnas (80 si no lo pones). `--theme` elige el tema (`catppuccin-mocha` si no lo pones, o `terminal`) y `--background theme|terminal` el fondo. Si la salida es una terminal, se ve con colores y estilos; si la rediriges a un archivo, sale como texto plano.
+`--width` es el ancho en columnas (80 si no lo pones). `--theme` elige el tema (`catppuccin-mocha` si no lo pones, o `terminal`), `--background theme|terminal` el fondo y `--symbols unicode|simple` los símbolos (`unicode` si no lo pones). Si la salida es una terminal, se ve con colores y estilos; si la rediriges a un archivo, sale como texto plano.
 
 ### Copiar, guardar y exportar
 
