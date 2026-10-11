@@ -15,6 +15,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -75,6 +76,9 @@ public:
     /// foco no está en un campo, hay una lista abierta o se está
     /// preguntando "¿Descartar los cambios?".
     [[nodiscard]] PasteTarget paste_target() const;
+    /// Solo para el registro de teclas (CHAT_DEBUG_KEYS): Focused() de cada
+    /// campo de texto y de la raíz de la pantalla.
+    [[nodiscard]] std::vector<std::pair<std::string_view, bool>> debug_focus() const;
     /// Aviso bajo el formulario (por ejemplo, un pegado recortado).
     void show_notice(std::string notice) { status_ = std::move(notice); }
 

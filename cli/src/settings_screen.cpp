@@ -279,6 +279,16 @@ PasteTarget SettingsScreen::paste_target() const {
     return PasteTarget::None;
 }
 
+std::vector<std::pair<std::string_view, bool>> SettingsScreen::debug_focus() const {
+    return {{"root", root_->Focused()},
+            {"url", url_input_->Focused()},
+            {"key", key_input_->Focused()},
+            {"filter", filter_input_->Focused()},
+            {"model", model_input_->Focused()},
+            {"prompt", prompt_input_->Focused()},
+            {"search_key", search_key_input_->Focused()}};
+}
+
 Appearance SettingsScreen::chosen_appearance() const {
     Appearance appearance;
     appearance.theme = &themes()[static_cast<std::size_t>(theme_selected_)];

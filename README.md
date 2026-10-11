@@ -228,6 +228,14 @@ Los archivos contienen **el texto completo de tus conversaciones**. Por eso la c
 CHAT_DEBUG_SSE=/tmp/chat-debug.txt ./build/release/cli/chatbot
 ```
 
+`CHAT_DEBUG_KEYS=/ruta/archivo` (solo por variable de entorno) agrega al archivo una línea por cada tecla, clic o evento que recibe la interfaz: la hora con milisegundos; el tipo (`special` con los bytes en hex, `character` con **solo la longitud en bytes**, `mouse` con botón, movimiento y posición, o `custom`); si la configuración está abierta, si la barra de conversaciones tiene el foco, a dónde iría un pegado (`target`) y si hay un pegado entre corchetes abierto. Con la configuración abierta, también qué campo tiene el foco. Tras Ctrl+V, Ctrl+Shift+V o Shift+Insert, una línea `paste-shortcut` con cuántos bytes tenía el portapapeles y si se pegó. Nunca escribe el texto que tecleas o pegas (por ahí pasa la API key). Sirve para ver qué secuencia manda tu terminal. Si no se puede escribir, el chatbot sigue sin avisar.
+
+```bat
+:: CMD
+set CHAT_DEBUG_KEYS=%TEMP%\chat-keys.txt
+build\release\cli\chatbot.exe
+```
+
 ### Ejecutar
 
 ```bash

@@ -16,6 +16,7 @@
 #include "history_view.h"
 #include "input_edit.h"
 #include "input_style.h"
+#include "key_log.h"
 #include "markdown.h"
 #include "models_loader.h"
 #include "paste.h"
@@ -54,10 +55,12 @@
 #include <ftxui/screen/terminal.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -162,6 +165,30 @@ chatbot::cli::PasteKey paste_key(const ftxui::Event& event) {
 bool is_paste_shortcut(const ftxui::Event& event) {
     return event == ftxui::Event::CtrlV ||
            event == ftxui::Event::Special(chatbot::cli::kShiftInsert);
+}
+
+/// Traduce un evento de FTXUI para el registro de teclas (key_log.h). La
+/// vista apunta a event: debe vivir mientras se use.
+chatbot::cli::KeyLogEvent key_log_event(ftxui::Event& event) { // mouse() no es const.
+    using Kind = chatbot::cli::KeyLogEvent::Kind;
+    chatbot::cli::KeyLogEvent out;
+    if (event == ftxui::Event::Custom) {
+        out.kind = Kind::Custom;
+    } else if (event.is_mouse()) {
+        static constexpr std::string_view kButtons[] = {
+            "left", "middle", "right", "none", "wheel-up", "wheel-down", "wheel-left", "wheel-right"};
+        static constexpr std::string_view kMotions[] = {"released", "pressed", "moved"};
+        const ftxui::Mouse& mouse = event.mouse();
+        out.kind = Kind::Mouse;
+        out.button = mouse.button < std::size(kButtons) ? kButtons[mouse.button] : "?";
+        out.motion = mouse.motion < std::size(kMotions) ? kMotions[mouse.motion] : "?";
+        out.x = mouse.x;
+        out.y = mouse.y;
+    } else {
+        out.kind = event.is_character() ? Kind::Character : Kind::Special;
+        out.input = event.input();
+    }
+    return out;
 }
 
 /// Igual que ftxui::reflect, pero guarda la caja completa que recibe el
@@ -1082,11 +1109,12 @@ int main() {
     // un solo Event::Character con todo el texto, que Input::HandleCharacter
     // inserta de una vez en el cursor. Así sirve en la caja y en todos los
     // campos de la configuración. Con la barra lateral, se ignora.
+    // Devuelve true si insertó algo.
     const auto deliver_paste = [&](std::string_view raw, bool truncated) {
         const std::optional<chatbot::cli::SanitizedPaste> paste =
             chatbot::cli::prepare_paste(raw, current_paste_target());
         if (!paste.has_value()) {
-            return;
+            return false;
         }
         const ftxui::Event event = ftxui::Event::Character(paste->text);
         if (settings.is_open()) {
@@ -1101,9 +1129,29 @@ int main() {
         if (truncated || paste->truncated) {
             notify(chatbot::cli::kPasteTruncated);
         }
+        return true;
+    };
+
+    // Registro de teclas para diagnosticar (CHAT_DEBUG_KEYS, key_log.h).
+    chatbot::cli::KeyLog key_log{chatbot::cli::environment_value("CHAT_DEBUG_KEYS")};
+    const auto log_event = [&](ftxui::Event& event) {
+        chatbot::cli::KeyLogState state;
+        state.settings_open = settings.is_open();
+        state.sidebar_focused = sidebar_visible && sidebar_panel->Focused();
+        state.paste_target = current_paste_target();
+        state.bracketed_paste_open = bracketed_paste.active();
+        if (settings.is_open()) {
+            state.focused_fields = settings.debug_focus();
+        }
+        key_log.write(chatbot::cli::format_key_event(
+            chatbot::cli::key_log_time(std::chrono::system_clock::now()), key_log_event(event),
+            state));
     };
 
     const ftxui::Component root = ftxui::CatchEvent(layout, [&](ftxui::Event event) {
+        if (key_log.enabled()) {
+            log_event(event);
+        }
         if (paste_mode_lost) {
             // De vuelta de Ctrl+Z (fg): el shell pudo haberlo desactivado.
             (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOn);
@@ -1144,13 +1192,19 @@ int main() {
             // conhost no pega con la entrada en modo VT (la activa FTXUI):
             // la app lee el portapapeles. En Linux la terminal pega sola.
             if (current_paste_target() == chatbot::cli::PasteTarget::None) {
+                key_log.write(chatbot::cli::key_log_time(std::chrono::system_clock::now()) +
+                              " paste-shortcut ignored target=none");
                 return true; // La barra lateral, una lista o un botón.
             }
-            if (const std::optional<std::string> text = chatbot::cli::read_native_clipboard()) {
-                deliver_paste(*text, false);
-            } else {
+            const std::optional<std::string> text = chatbot::cli::read_native_clipboard();
+            const bool delivered = text.has_value() && deliver_paste(*text, false);
+            if (!text.has_value()) {
                 notify(chatbot::cli::kClipboardNoText);
             }
+            key_log.write(chatbot::cli::format_paste_shortcut(
+                chatbot::cli::key_log_time(std::chrono::system_clock::now()),
+                text.has_value() ? std::optional<std::size_t>{text->size()} : std::nullopt,
+                delivered));
             return true;
         }
         if (event == ftxui::Event::F2) {

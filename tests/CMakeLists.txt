@@ -30,6 +30,7 @@ add_executable(chatbot_tests
     test_error_mapping.cpp
     test_history.cpp
     test_input_edit.cpp
+    test_key_log.cpp
     test_markdown.cpp
     test_models_loader.cpp
     test_paste.cpp

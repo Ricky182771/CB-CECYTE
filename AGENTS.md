@@ -103,6 +103,7 @@ chatbot/
 │       ├── clipboard_windows.cpp      # portapapeles de Windows (Win32, CF_UNICODETEXT): copiar y leer; solo Windows
 │       ├── paste.h/.cpp               # pegado: sanitize_paste, destino (PasteTarget), BracketedPaste (sin FTXUI)
 │       ├── input_edit.h/.cpp          # caja de varias líneas: \ + Enter, insertar, altura, placeholder (sin FTXUI)
+│       ├── key_log.h/.cpp             # registro de teclas de CHAT_DEBUG_KEYS: formato de cada línea, sin el texto de los caracteres (sin FTXUI)
 │       ├── downloads.h/.cpp           # carpeta de descargas, nombres, extensiones, escritura sin sobrescribir (sin FTXUI)
 │       ├── conversation_export.h/.cpp # /exportar: conversación → Markdown (sin FTXUI)
 │       ├── block_actions.h/.cpp       # copiar, guardar y exportar → ActionResult, para comandos y botones (sin FTXUI)
@@ -181,6 +182,7 @@ Precedencia: **variables de entorno > archivo de configuración > valores por de
 | Límite del historial que se envía, en bytes UTF-8 de los `content` (aproximadamente caracteres); `0` = sin límite | `CHAT_HISTORY_LIMIT` | `history_limit` | 32000 |
 | Instrucciones de sistema (`""` = sin mensaje de sistema) | — | `system_prompt` | `kDefaultSystemPrompt` (`cli/src/system_prompt.h`) |
 | Archivo de volcado de depuración | `CHAT_DEBUG_SSE` | **nunca** | ninguno (sin volcado) |
+| Registro de teclas de diagnóstico (la lee `cli/`, no `Config`; de un carácter solo la longitud, nunca el texto) | `CHAT_DEBUG_KEYS` | **nunca** | ninguno (sin registro) |
 | Carpeta de conversaciones guardadas (la lee `cli/`, no `Config`) | `CHAT_DATA_DIR` | **nunca** | `$XDG_DATA_HOME/chatbot/conversations` si `XDG_DATA_HOME` es ruta absoluta; si no, `~/.local/share/chatbot/conversations`. Windows: `%LOCALAPPDATA%\chatbot\conversations` (`FOLDERID_LocalAppData`; si falla, la variable `LOCALAPPDATA`) |
 | Carpeta de `/guardar` y `/exportar` (la lee `cli/`, no `Config`; se le agrega `chatbot/`) | `CHAT_DOWNLOAD_DIR` | **nunca** | `XDG_DOWNLOAD_DIR` de `$XDG_CONFIG_HOME/user-dirs.dirs` (o `~/.config/user-dirs.dirs`, con `$HOME` expandido) si existe; en Termux, `~/storage/downloads` si existe; `~/Descargas` o `~/Downloads`, la que exista; si no, `$HOME`. Windows: la carpeta Descargas (`FOLDERID_Downloads`); si falla, `%USERPROFILE%` |
 
