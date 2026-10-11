@@ -566,7 +566,7 @@ TEST_CASE("configuración: CHAT_SEARCH_API_KEY bloquea el campo de búsqueda",
     h.go_to_search();
     auto screen = h.draw();
     CHECK(find(screen, "(definido por CHAT_SEARCH_API_KEY) …9876").x >= 0);
-    CHECK(find(screen, "escribe la API key de Tavily").x < 0); // Sin campo.
+    CHECK(find(screen, "escribe la key de Tavily").x < 0); // Sin campo.
     // Tab pasa de las categorías directo a Guardar.
     REQUIRE(h.key(ftxui::Event::Tab));
     screen = h.draw();
@@ -749,4 +749,24 @@ TEST_CASE("configuración: símbolos sencillos con la lista de proveedores abier
             (void)glyphs;
         }
     }
+}
+
+TEST_CASE("configuración: ningún placeholder es más ancho que su campo", "[ajustes]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.base_url = ""; // Sin URL, para que el campo muestre su placeholder.
+    h.open("", {}, "", 32000, chatbot::cli::SearchSettings{"", std::nullopt});
+    // Cada placeholder completo: uno recortado (los campos de la key miden
+    // kKeyWidth columnas) no se encontraría.
+    auto screen = h.draw();
+    CHECK(find(screen, "https://mi-servidor/v1").x >= 0);
+    CHECK(find(screen, "escribe la API key").x >= 0);
+    CHECK(find(screen, "escribe el modelo").x >= 0);
+    h.go_to_prompt();
+    CHECK(find(h.draw(), "escribe las instrucciones").x >= 0);
+    REQUIRE(h.key(ftxui::Event::TabReverse)); // De vuelta a las categorías.
+    REQUIRE(h.key(ftxui::Event::ArrowDown));
+    screen = h.draw();
+    REQUIRE(find(screen, "● Búsqueda web").x >= 0);
+    CHECK(find(screen, "escribe la key de Tavily").x >= 0);
 }

@@ -207,7 +207,7 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         field_option(palette_, [this] { (void)search_.set_key(search_key_text_); });
     search_key_option.password = true; // Nunca se dibuja la key en claro.
     search_key_input_ =
-        ftxui::Input(&search_key_text_, "escribe la API key de Tavily", search_key_option);
+        ftxui::Input(&search_key_text_, "escribe la key de Tavily", search_key_option);
     save_button_ = ftxui::Button("Guardar", [this] { save(); }, button_option(palette_));
     cancel_button_ =
         ftxui::Button("Cancelar", [this] { (void)request_close(); }, button_option(palette_));
