@@ -108,6 +108,7 @@ chatbot/
 │       ├── clipboard_windows.cpp      # portapapeles de Windows (Win32, CF_UNICODETEXT): copiar y leer; solo Windows
 │       ├── paste.h/.cpp               # pegado: sanitize_paste, destino (PasteTarget), BracketedPaste (sin FTXUI)
 │       ├── input_edit.h/.cpp          # caja de varias líneas: \ + Enter, insertar, altura, placeholder (sin FTXUI)
+│       ├── terminal_reply.h/.cpp      # respuestas de la terminal (DCS, DA) que FTXUI no entiende: no son teclas (sin FTXUI)
 │       ├── key_log.h/.cpp             # registro de teclas de CHAT_DEBUG_KEYS: formato de cada línea, sin el texto de los caracteres (sin FTXUI)
 │       ├── downloads.h/.cpp           # carpeta de descargas, nombres, extensiones, escritura sin sobrescribir (sin FTXUI)
 │       ├── glyphs.h/.cpp              # símbolos: tabla de reemplazos, kept_glyphs, SymbolMode, detect_symbols (sin FTXUI)

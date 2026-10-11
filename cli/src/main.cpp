@@ -33,6 +33,7 @@
 #include "sidebar_view.h"
 #include "status_line.h"
 #include "system_prompt.h"
+#include "terminal_reply.h"
 #include "theme.h"
 #include "title_bar.h"
 
@@ -1244,6 +1245,12 @@ int main() {
             // De vuelta de Ctrl+Z (fg): el shell pudo haberlo desactivado.
             (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOn);
             paste_mode_lost = false;
+        }
+        // Una respuesta de la terminal que FTXUI no entendió (DCS, DA) no
+        // es una tecla: no borra el aviso ni llega a los componentes.
+        if (!event.is_character() && !event.is_mouse() &&
+            chatbot::cli::is_terminal_reply(event.input())) {
+            return true;
         }
         // Lo que llega entre las marcas del pegado es texto, aunque sea
         // Enter, Tab o Ctrl+C. Sin 201~ y tras una pausa de más de
