@@ -8,7 +8,10 @@
 #include "block_actions.h"
 #include "clipboard.h"
 #include "code_blocks.h"
+#include "command_menu.h"
+#include "command_menu_view.h"
 #include "command_parser.h"
+#include "commands.h"
 #include "conversation.h"
 #include "conversation_list.h"
 #include "conversation_store.h"
@@ -124,7 +127,7 @@ chatbot::cli::ListKey list_key(const ftxui::Event& event) {
         {&ftxui::Event::PageUp, ListKey::PageUp},  {&ftxui::Event::PageDown, ListKey::PageDown},
         {&ftxui::Event::Home, ListKey::Home},      {&ftxui::Event::End, ListKey::End},
         {&ftxui::Event::Return, ListKey::Enter},   {&ftxui::Event::Escape, ListKey::Escape},
-        {&ftxui::Event::Delete, ListKey::Delete},
+        {&ftxui::Event::Delete, ListKey::Delete},  {&ftxui::Event::Tab, ListKey::Tab},
     };
     for (const auto& [ftxui_event, key] : keys) {
         if (event == *ftxui_event) {
@@ -374,6 +377,11 @@ int main() {
     int split_max = chatbot::cli::kSidebarMaxWidth - 1;
     ftxui::Box sidebar_box; ///< Zona de la barra en el último cuadro (para el ratón).
     ftxui::Box export_box;  ///< [Exportar] de la barra de título en el último cuadro.
+    // Menú de comandos al escribir "/" en la caja, y sus filas en el último
+    // cuadro (para el ratón).
+    chatbot::cli::CommandMenu command_menu;
+    ftxui::Box command_menu_box;
+    std::vector<ftxui::Box> command_menu_rows;
     bool export_hover = false;
     bool dragging = false;  ///< Se arrastra el divisor: el ratón es de ResizableSplit.
     int right_tab = 0; ///< Lado derecho: 0 = conversación, 1 = configuración.
@@ -516,7 +524,7 @@ int main() {
         }
         // /buscar: sin consulta o sin key, el texto se queda en la caja.
         if (command.type == chatbot::cli::ParsedCommand::Type::SearchEmpty) {
-            flash = "Uso: /buscar <consulta>";
+            flash = std::string{chatbot::cli::kSearchUsage};
             return;
         }
         const bool search = command.type == chatbot::cli::ParsedCommand::Type::Search;
@@ -603,6 +611,38 @@ int main() {
     // Sin configuración, el placeholder lo dice.
     std::string placeholder;
     const ftxui::Component input = ftxui::Input(&input_text, &placeholder, input_option);
+
+    // Lo que el menú de comandos necesita saber para atenuar los que no se
+    // pueden usar ahora.
+    const auto command_context = [&] {
+        code_blocks.update(conversation.entries());
+        chatbot::cli::CommandContext context;
+        context.configured = runner != nullptr;
+        context.has_search_key = search_provider != nullptr;
+        context.has_code_blocks = !code_blocks.blocks().empty();
+        context.has_turns = conversation.has_turns();
+        context.busy = busy();
+        return context;
+    };
+    // Aplica lo que pidió el menú de comandos. true si el menú usó el evento.
+    const auto apply_command_menu = [&](const chatbot::cli::CommandMenuAction& action) {
+        using Type = chatbot::cli::CommandMenuAction::Type;
+        switch (action.type) {
+        case Type::Pass:
+            return false;
+        case Type::Handled:
+            return true;
+        case Type::Complete:
+        case Type::Submit:
+            input_text = action.text;
+            input_cursor = chatbot::cli::cursor_at_end(input_text);
+            if (action.type == Type::Submit) {
+                send();
+            }
+            return true;
+        }
+        return false;
+    };
 
     // Pantalla de configuración. Al cerrarse, vuelve la conversación.
     chatbot::cli::SettingsScreen settings(
@@ -902,6 +942,20 @@ int main() {
         placeholder = runner != nullptr
                           ? std::string{chatbot::cli::input_placeholder(width - 2)}
                           : std::string{kSetupNotice} + " (F2)";
+        // Menú de comandos: entre la línea de estado y la caja; empuja el
+        // historial hacia arriba.
+        command_menu.update(input_text, input->Focused());
+        ftxui::Element menu = ftxui::emptyElement();
+        if (command_menu.is_open()) {
+            menu = chatbot::cli::render_command_menu(
+                       command_menu, chatbot::cli::command_availability(command_context()),
+                       width, palette, &command_menu_rows) |
+                   ftxui::reflect(command_menu_box);
+        } else {
+            command_menu_rows.clear();
+            command_menu_box = ftxui::Box{};
+        }
+        const bool hide_status = command_menu.is_open() && status.empty();
         const std::string title =
             "Chatbot CECyTE — " + (model.empty() ? std::string{"sin configurar"} : model) + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
@@ -910,8 +964,12 @@ int main() {
             chatbot::cli::title_bar(title, width, palette,
                                     {conversation.has_turns(), export_hover}, export_box),
             std::move(body),
-            ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
-            chatbot::cli::status_line(status, width),
+            // Con el menú abierto y sin avisos, el renglón de estado y su
+            // línea se ocultan: la línea del menú lo separa del historial.
+            hide_status ? ftxui::emptyElement()
+                        : ftxui::separator() | palette.ink(&chatbot::cli::Theme::border),
+            hide_status ? ftxui::emptyElement() : chatbot::cli::status_line(status, width),
+            std::move(menu),
             // El prompt en negritas marca la caja sin un bloque de color. La
             // caja crece con sus líneas hasta su tope; más allá, su frame
             // sigue la línea del cursor (Input la marca con focus).
@@ -1044,11 +1102,26 @@ int main() {
         if (settings.is_open()) {
             return false;
         }
+        const bool click =
+            mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed;
+        // Menú de comandos: hover mueve el cursor y clic completa (como Tab).
+        // Nada del ratón sobre el menú llega al historial (tampoco la rueda).
+        if (command_menu.is_open() && command_menu_box.Contain(mouse.x, mouse.y)) {
+            for (std::size_t row = 0; row < command_menu_rows.size(); ++row) {
+                if (!command_menu_rows[row].Contain(mouse.x, mouse.y)) {
+                    continue;
+                }
+                if (mouse.motion == ftxui::Mouse::Moved) {
+                    command_menu.select(row);
+                } else if (click) {
+                    (void)apply_command_menu(command_menu.choose(row));
+                }
+            }
+            return true;
+        }
         // Botones de los bloques y [Exportar] (sin respuestas no hace nada):
         // también con una respuesta en curso. El resultado va a la línea de
         // estado; no tocan el historial, el scroll ni la caja.
-        const bool click =
-            mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed;
         if (const std::optional<chatbot::cli::ButtonHit> hit = history.hit_test(mouse.x, mouse.y);
             click && hit.has_value()) {
             code_blocks.update(conversation.entries());
@@ -1259,6 +1332,18 @@ int main() {
             // contenedor del split, podría mover el foco a la barra.
             (void)settings.component()->OnEvent(event);
             return true;
+        }
+        // Menú de comandos abierto: ↑/↓, Tab, Enter y Esc son primero suyos
+        // (el primer Esc lo cierra; el segundo ya cancela la respuesta).
+        command_menu.update(input_text, input->Focused());
+        if (command_menu.is_open()) {
+            using chatbot::cli::ListKey;
+            const ListKey key = list_key(event);
+            if ((key == ListKey::Up || key == ListKey::Down || key == ListKey::Tab ||
+                 key == ListKey::Enter || key == ListKey::Escape) &&
+                apply_command_menu(command_menu.handle(key))) {
+                return true;
+            }
         }
         // "\" + Enter: salto de línea en lugar de enviar.
         if (event == ftxui::Event::Return &&

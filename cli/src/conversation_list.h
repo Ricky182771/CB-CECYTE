@@ -12,7 +12,7 @@
 namespace chatbot::cli {
 
 /// Teclas que le importan a la lista (main.cpp traduce las de FTXUI).
-enum class ListKey { Up, Down, PageUp, PageDown, Home, End, Enter, Escape, Delete, Other };
+enum class ListKey { Up, Down, PageUp, PageDown, Home, End, Enter, Escape, Delete, Tab, Other };
 
 /// Lo que la interfaz debe hacer después de una tecla.
 struct ListAction {

@@ -53,7 +53,9 @@ add_library(chatbot_cli_lib STATIC
     src/clipboard.cpp
     ${CHATBOT_CLIPBOARD_SOURCE}
     src/code_blocks.cpp
+    src/command_menu.cpp
     src/command_parser.cpp
+    src/commands.cpp
     src/conversation.cpp
     src/conversation_export.cpp
     src/conversation_list.cpp
@@ -88,6 +90,7 @@ endif()
 # chatbot_cli_lib para que esta siga sin FTXUI. Las pruebas de la vista lo
 # usan con ftxui::Screen.
 add_library(chatbot_cli_ui STATIC
+    src/command_menu_view.cpp
     src/history_view.cpp
     src/input_style.cpp
     src/list_style.cpp

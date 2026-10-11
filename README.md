@@ -246,11 +246,12 @@ Teclas:
 
 | Tecla | Acción |
 |---|---|
-| Enter | Envía el mensaje (no hace nada mientras hay una respuesta en curso) o ejecuta un comando (`/buscar`, `/copiar`, `/guardar`, `/exportar`) |
+| Enter | Envía el mensaje (no hace nada mientras hay una respuesta en curso) o ejecuta un comando (`/buscar`, `/copiar`, `/guardar`, `/exportar`); con el menú de comandos abierto, elige el comando |
+| `/` | Al principio de la caja, abre el menú de comandos (ver [Comandos](#comandos)) |
 | `\` + Enter | Nueva línea en la caja (el `\` justo antes del cursor se cambia por el salto) |
 | Alt+Enter | Nueva línea en la caja, en las terminales que lo mandan (en Windows no: es pantalla completa) |
 | ↑ / ↓ | Mueven el cursor entre las líneas de la caja |
-| Esc | Cancela la respuesta en curso; el texto regresa a la caja |
+| Esc | Cierra el menú de comandos si está abierto; si no, cancela la respuesta en curso (el texto regresa a la caja) |
 | PgUp / PgDn | Sube o baja una pantalla del historial |
 | Rueda del ratón | Sube o baja unas 3 líneas (del historial, o de la barra si el puntero está sobre ella) |
 | Home / End | Con la caja vacía, va al inicio o al final del historial; con texto, lleva el cursor al inicio o al final de todo el texto de la caja |
@@ -279,6 +280,24 @@ Pega con el atajo de tu terminal (en Linux casi siempre Ctrl+Shift+V). El chatbo
 Si subes en el historial, la vista se queda donde está aunque llegue texto nuevo, y la línea de estado muestra `↓ Hay más abajo (End)`, o `(PgDn)` si hay texto en la caja (porque ahí End mueve el cursor). Al enviar un mensaje, la vista regresa abajo.
 
 El chatbot captura el ratón para la rueda. Para seleccionar texto con el ratón, mantén Shift mientras arrastras, como en la mayoría de terminales con apps que usan el ratón. Para abrir un enlace, Shift+clic sobre él (en Kitty también Ctrl+Shift+clic): un clic simple lo recibe el chatbot y no abre nada.
+
+#### Comandos
+
+Escribe `/` al principio de la caja y arriba de ella aparece el menú de comandos, con sus argumentos y qué hacen (si la línea de estado no tiene avisos, el menú ocupa su lugar). Se filtra mientras escribes el nombre (`/g` deja solo `/guardar`; no distingue mayúsculas) y se cierra en cuanto escribes un espacio.
+
+| Comando | Qué hace |
+|---|---|
+| `/buscar <consulta>` | Busca en la web y responde con fuentes citadas (ver [Búsqueda web](#búsqueda-web)) |
+| `/copiar [número de bloque]` | Copia un bloque de código; sin número, el último |
+| `/guardar [número de bloque [nombre]]` | Guarda un bloque de código en un archivo |
+| `/exportar` | Exporta la conversación a Markdown |
+
+- ↑/↓ mueven el cursor del menú (dan la vuelta en los extremos). Tab completa el comando: `/buscar ` con un espacio para que escribas la consulta, o `/exportar` solo. Enter hace lo mismo con `/buscar` (no se envía sin consulta) y con los demás los completa y los ejecuta de una vez: `/ex` + Enter exporta.
+- Esc cierra el menú sin borrar lo que escribiste; no se vuelve a abrir hasta que cambies el texto. Con una respuesta en curso, el primer Esc cierra el menú y el segundo la cancela.
+- Con el ratón, pasar el puntero mueve el cursor y un clic hace lo mismo que Tab.
+- Un comando que ahora no sirve se ve atenuado con el motivo (`falta la key de búsqueda (F2)`, `no hay bloques de código`, `la conversación está vacía`, `espera a que termine la respuesta`), pero se puede elegir igual: al enviarlo aparece el aviso de siempre.
+- Si nada coincide, el menú dice `Sin comandos que coincidan · se enviará como mensaje`: un texto como `/hola` va al modelo como cualquier mensaje.
+- En una terminal angosta la descripción se recorta con `…` y, si no cabe, se oculta antes que el nombre. Con la barra de conversaciones o la configuración con el foco no hay menú.
 
 ### Markdown en las respuestas
 

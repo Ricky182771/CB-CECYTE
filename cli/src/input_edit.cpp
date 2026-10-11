@@ -12,8 +12,9 @@ namespace {
 
 /// Del más largo al más corto: el primero que cabe.
 constexpr std::string_view kPlaceholders[] = {
-    "Escribe tu mensaje · Enter envía · \\ + Enter: nueva línea",
-    "Escribe tu mensaje · \\ + Enter: nueva línea",
+    "Escribe tu mensaje · Enter envía · \\ + Enter: nueva línea · / comandos",
+    "Escribe tu mensaje · \\ + Enter: nueva línea · / comandos",
+    "Mensaje · \\ + Enter: nueva línea · / comandos",
     "Mensaje · \\ + Enter: nueva línea",
     "Escribe tu mensaje",
 };

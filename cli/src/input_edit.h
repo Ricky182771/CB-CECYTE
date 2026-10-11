@@ -35,7 +35,8 @@ void insert_at_cursor(std::string& text, int& cursor, std::string_view piece);
 [[nodiscard]] int input_height(std::string_view text, int terminal_rows);
 
 /// Placeholder de la caja (con configuración): el más largo que cabe en
-/// columns columnas, siempre con cómo hacer un salto de línea si cabe.
+/// columns columnas, siempre con cómo hacer un salto de línea si cabe y,
+/// después, que "/" abre el menú de comandos.
 [[nodiscard]] std::string_view input_placeholder(int columns);
 
 } // namespace chatbot::cli
