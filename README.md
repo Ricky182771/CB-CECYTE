@@ -121,7 +121,7 @@ Para armarlo tú, en la terminal **MSYS2 UCRT64**, después de compilar `release
 tools/package-windows.sh   # deja build/chatbot-windows-x64.zip
 ```
 
-El script toma las DLL que reporta `ldd`, busca con `pacman -Qo` el paquete de cada una y copia su licencia de `/ucrt64/share/licenses/`. Si falta el texto de alguna licencia, lo dice y no arma el ZIP (`--allow-missing-licenses` lo arma igual y `AVISOS-TERCEROS.txt` dice cuál falta). Al final revisa que el ZIP traiga exactamente esos archivos.
+El script toma las DLL que reporta `ldd`, busca con `pacman -Qo` el paquete de cada una y copia su licencia de `/ucrt64/share/licenses/`. Algunos paquetes de MSYS2 no instalan su licencia (libidn2, que trae libcurl): para esos, los textos van en el repositorio, en `tools/windows-dist/licenses/<paquete>/`, copiados del tarball oficial, con un `README.md` que dice de qué versión son; si MSYS2 instala otra versión, el script avisa (sin fallar) para revisarlos. Si falta el texto de alguna licencia, lo dice y no arma el ZIP (`--allow-missing-licenses` lo arma igual y `AVISOS-TERCEROS.txt` dice cuál falta). Al final revisa que el ZIP traiga exactamente esos archivos.
 
 ### Integración continua
 

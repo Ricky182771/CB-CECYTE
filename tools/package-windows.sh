@@ -14,6 +14,9 @@
 #     paquetes de MSYS2 (pacman -Qo dice de qué paquete es cada DLL) y de las
 #     fuentes que bajó FetchContent (FTXUI y md4c, enlazadas estáticas);
 #   LEEME.txt y chatbot.portable.ejemplo (tools/windows-dist/).
+# Si un paquete de MSYS2 no instala su licencia, los textos salen de
+# tools/windows-dist/licenses/<paquete sin prefijo>/ (del tarball oficial);
+# si la versión instalada no es la de su README.md, avisa sin fallar.
 # Los .txt van con saltos de línea CRLF, para el Bloc de notas.
 #
 # Si no encuentra el texto de alguna licencia, lo dice y falla sin armar el
@@ -78,16 +81,41 @@ missing=()
 notices=$stage/AVISOS-TERCEROS.txt
 rule='================================================================================'
 
-# Archivos de licencia de un paquete instalado: los que tiene bajo
+# Textos guardados en el repositorio para los paquetes de MSYS2 que no
+# instalan su licencia: tools/windows-dist/licenses/<paquete sin prefijo>/,
+# con un README.md que dice de qué versión son ("- Versión: X").
+repo_licenses=$root/tools/windows-dist/licenses
+warnings=()
+
+# Deja en $license_files los archivos de licencia de un paquete instalado
+# (uno por línea; no se usa $(...) para que $warnings llegue): los que tiene bajo
 # share/licenses/; si no tiene, los COPYING* / LICENSE* / LICENCE* que haya
-# instalado en otro lado (por ejemplo, share/doc/).
+# instalado en otro lado (por ejemplo, share/doc/); si tampoco, los de
+# $repo_licenses (todos menos el README.md). Si la versión instalada no es la
+# del README.md, avisa en $warnings (sin fallar), para revisar los textos.
 package_license_files() {
-    local files
-    files=$(pacman -Qlq "$1" | grep -E "^$prefix/share/licenses/.+[^/]$" || true)
+    local package=$1 files name dir saved installed
+    license_files=
+    files=$(pacman -Qlq "$package" | grep -E "^$prefix/share/licenses/.+[^/]$" || true)
     if [[ -z $files ]]; then
-        files=$(pacman -Qlq "$1" | grep -Ei '/(copying|licen[cs]e)[^/]*$' | grep -v '/$' || true)
+        files=$(pacman -Qlq "$package" | grep -Ei '/(copying|licen[cs]e)[^/]*$' |
+            grep -v '/$' || true)
     fi
-    printf '%s' "$files"
+    name=${package#"${MINGW_PACKAGE_PREFIX:-mingw-w64-ucrt-x86_64}"-}
+    dir=$repo_licenses/$name
+    if [[ -z $files && -d $dir ]]; then
+        files=$(find "$dir" -maxdepth 1 -type f ! -name README.md | sort)
+        saved=$(sed -n 's/^- Versión: *//p' "$dir/README.md" 2> /dev/null | head -n 1)
+        installed=$(package_version "$package")
+        installed=${installed#*:} # Sin la época (1:2.3.8-4).
+        installed=${installed%-*} # Sin el número de compilación de MSYS2.
+        if [[ $saved != "$installed" ]]; then
+            local text="$package $installed: los textos de tools/windows-dist/licenses/$name"
+            text+=" son de la versión ${saved:-(sin \"- Versión\" en su README.md)};"
+            warnings+=("$text revísalos con el tarball de la $installed")
+        fi
+    fi
+    license_files=$files
 }
 
 # Escribe una sección: título, datos y el texto de cada archivo de licencia.
@@ -108,7 +136,11 @@ section() {
     while IFS= read -r file; do
         {
             local shown=${file#"$prefix"/}
-            printf '\n--- %s ---\n\n' "${shown#"$build"/}"
+            shown=${shown#"$build"/}
+            if [[ $file == "$repo_licenses"/* ]]; then
+                shown="${file#"$root"/} (de las fuentes oficiales; el paquete no lo instala)"
+            fi
+            printf '\n--- %s ---\n\n' "$shown"
             cat "$file"
         } >> "$notices"
     done <<< "$files"
@@ -121,9 +153,10 @@ package_licenses() { pacman -Qi "$1" | sed -n 's/^Licenses *: //p'; }
 #   package_section <paquete> <cómo va incluido>
 package_section() {
     local package=$1 how=$2
+    package_license_files "$package"
     section "$package $(package_version "$package")" \
         "Incluido como: $how"$'\n'"Licencia según pacman: $(package_licenses "$package")" \
-        "$(package_license_files "$package")"
+        "$license_files"
 }
 
 cat > "$notices" << EOF
@@ -175,7 +208,8 @@ stdcxx_package=$(pacman -Qqo "$prefix/bin/libstdc++-6.dll" 2> /dev/null || true)
 gcc_files=
 gcc_from=$gcc_package
 for candidate in "$gcc_package" $stdcxx_package; do
-    files=$(package_license_files "$candidate")
+    package_license_files "$candidate"
+    files=$license_files
     if grep -q 'COPYING\.RUNTIME' <<< "$files"; then
         gcc_files=$files
         gcc_from=$candidate
@@ -208,6 +242,13 @@ done
 mapfile -t packages < <(printf '%s\n' "${!package_dlls[@]}" | sort)
 for package in "${packages[@]}"; do
     package_section "$package" "${package_dlls[$package]% }"
+done
+
+for warning in "${warnings[@]}"; do
+    echo "AVISO: $warning" >&2
+    if [[ -n ${GITHUB_ACTIONS:-} ]]; then
+        echo "::warning title=Licencia por revisar::$warning"
+    fi
 done
 
 if [[ ${#missing[@]} -gt 0 ]]; then
