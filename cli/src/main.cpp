@@ -160,8 +160,9 @@ chatbot::cli::PasteKey paste_key(const ftxui::Event& event) {
 }
 
 /// Atajos de pegado de Windows: Ctrl+V (Ctrl+Shift+V llega igual, como el
-/// byte 0x16) y Shift+Insert (ESC [ 2 ; 2 ~, que FTXUI v7.0.3 entrega tal
-/// cual como Event::Special).
+/// byte 0x16) y Shift+Insert (ESC [ 2 ; 2 ~ = 1b 5b 32 3b 32 7e, que FTXUI
+/// v7.0.3 entrega tal cual como Event::Special). Bytes confirmados en conhost
+/// (Windows 11 LTSC 2024) con CHAT_DEBUG_KEYS.
 bool is_paste_shortcut(const ftxui::Event& event) {
     return event == ftxui::Event::CtrlV ||
            event == ftxui::Event::Special(chatbot::cli::kShiftInsert);
