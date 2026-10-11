@@ -74,6 +74,7 @@ add_test(NAME chatbot_tests COMMAND chatbot_tests)
 add_executable(chatbot_ui_tests
     ${PROJECT_SOURCE_DIR}/cli/src/settings_screen.cpp
     test_settings_screen.cpp
+    test_command_menu_view.cpp
     test_history_view.cpp
     test_input_box.cpp
     test_input_style.cpp

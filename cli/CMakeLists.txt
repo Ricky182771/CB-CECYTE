@@ -90,6 +90,7 @@ endif()
 # chatbot_cli_lib para que esta siga sin FTXUI. Las pruebas de la vista lo
 # usan con ftxui::Screen.
 add_library(chatbot_cli_ui STATIC
+    src/command_menu_view.cpp
     src/history_view.cpp
     src/input_style.cpp
     src/list_style.cpp

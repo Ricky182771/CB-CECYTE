@@ -102,14 +102,19 @@ TEST_CASE("input_height crece con las líneas hasta el tope", "[input_edit]") {
 }
 
 TEST_CASE("input_placeholder cabe en el ancho", "[input_edit]") {
-    CHECK(input_placeholder(120) ==
-          "Escribe tu mensaje · Enter envía · \\ + Enter: nueva línea");
-    CHECK(input_placeholder(57) ==
-          "Escribe tu mensaje · Enter envía · \\ + Enter: nueva línea");
-    CHECK(input_placeholder(56) == "Escribe tu mensaje · \\ + Enter: nueva línea");
-    CHECK(input_placeholder(43) == "Escribe tu mensaje · \\ + Enter: nueva línea");
-    CHECK(input_placeholder(42) == "Mensaje · \\ + Enter: nueva línea");
-    CHECK(input_placeholder(32) == "Mensaje · \\ + Enter: nueva línea");
+    const std::string full =
+        "Escribe tu mensaje · Enter envía · \\ + Enter: nueva línea · / comandos";
+    const std::string medium = "Escribe tu mensaje · \\ + Enter: nueva línea · / comandos";
+    const std::string short_commands = "Mensaje · \\ + Enter: nueva línea · / comandos";
+    const std::string short_newline = "Mensaje · \\ + Enter: nueva línea";
+    CHECK(input_placeholder(120) == full);
+    CHECK(input_placeholder(70) == full);
+    CHECK(input_placeholder(69) == medium);
+    CHECK(input_placeholder(56) == medium);
+    CHECK(input_placeholder(55) == short_commands);
+    CHECK(input_placeholder(45) == short_commands);
+    CHECK(input_placeholder(44) == short_newline);
+    CHECK(input_placeholder(32) == short_newline);
     CHECK(input_placeholder(31) == "Escribe tu mensaje");
     CHECK(input_placeholder(5) == "Escribe tu mensaje");
 }
