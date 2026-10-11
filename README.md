@@ -87,11 +87,12 @@ $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
 .\build\release\cli\chatbot.exe
 ```
 
-Para usarlo en una PC sin MSYS2, descarga el artefacto `chatbot-windows-x64` de la CI (GitHub → Actions → la ejecución → Artifacts): trae `chatbot.exe` con sus DLL; descomprímelo y corre `chatbot.exe` desde esa carpeta.
+Para usarlo en una PC sin MSYS2, usa el ZIP (ver [Descargar para Windows](#descargar-para-windows)).
 
 **Qué cambia en Windows:**
 
-- La configuración y la key van en `%APPDATA%\chatbot\` (`config.json` y `credentials.json`), las conversaciones en `%LOCALAPPDATA%\chatbot\conversations` y `/guardar` y `/exportar` en tu carpeta Descargas, dentro de `chatbot\`. Las variables `CHAT_*` siguen teniendo prioridad; `HOME` y `XDG_*` no se usan (MSYS2 define `HOME`).
+- La configuración y la key van en `%APPDATA%\chatbot\` (`config.json` y `credentials.json`), las conversaciones en `%LOCALAPPDATA%\chatbot\conversations` y `/guardar` y `/exportar` en tu carpeta Descargas, dentro de `chatbot\`. Las variables `CHAT_*` siguen teniendo prioridad; `HOME` y `XDG_*` no se usan (MSYS2 define `HOME`). Con el [modo portable](#modo-portable), todo menos las descargas va a `datos\`, junto a `chatbot.exe`.
+- Con doble clic en `chatbot.exe` se abre en conhost, y esa ventana se cierra en cuanto el programa termina. Por eso, si el chatbot no puede arrancar (por ejemplo, en modo portable con `datos\` sin permiso de escritura), muestra el error y `Presiona Enter para cerrar esta ventana.`. Desde CMD, PowerShell o Windows Terminal (con una shell abierta) no espera nada.
 - `credentials.json` no necesita `chmod`: lo protege la carpeta de tu perfil de Windows, que solo tu usuario puede leer. Todavía no va cifrado.
 - `/copiar` y `[Copiar]` usan el portapapeles de Windows (con acentos y saltos de línea que el Bloc de notas respeta); por SSH, OSC 52 primero.
 - Para pegar, usa Ctrl+V, Ctrl+Shift+V o Shift+Insert: el chatbot lee el portapapeles de Windows y pega en la caja o en el campo de la configuración que tenga el foco (con el foco en la barra de conversaciones no pega nada; en una lista o un botón avisa `Aquí no se puede pegar.`, y si el portapapeles no tiene texto, `El portapapeles no tiene texto.`). En Windows Terminal esos atajos los atiende la propia terminal, con el mismo resultado. En conhost (CMD o PowerShell sin Windows Terminal) está comprobado con `CHAT_DEBUG_KEYS`: Ctrl+V y Ctrl+Shift+V llegan como el byte `16` y Shift+Insert como `1b 5b 32 3b 32 7e` (`ESC [ 2 ; 2 ~`), y los tres pegan. Shift + clic derecho es el pegado propio de conhost: no pasa por el portapapeles del chatbot. Si los atajos no hacen nada, revisa que el `chatbot.exe` que abres sea del preset que acabas de compilar (`build\release` no se actualiza al compilar `dev`).
@@ -101,9 +102,30 @@ Para usarlo en una PC sin MSYS2, descarga el artefacto `chatbot-windows-x64` de 
 - En CMD y PowerShell sin Windows Terminal (conhost) de Windows 10, la fuente de la consola no tiene algunos símbolos: por eso **Símbolos** en `Automático` usa `Sencillos` ahí (ver [Colores y accesibilidad](#colores-y-accesibilidad)). En Windows 11 conhost busca el símbolo en otra fuente y se usa `Unicode`; en Windows Terminal, siempre `Unicode`.
 - El ratón en conhost funciona como en las demás terminales: clics, rueda, arrastrar el borde de la barra y pasar el puntero sobre el menú y los botones. Conhost se queda con Shift + clic para su propia selección (*QuickEdit*): **Shift + arrastrar** selecciona texto de la pantalla y **Enter** lo copia (Esc cancela); Shift + clic derecho pega. La selección toma líneas completas de la pantalla, así que con la barra lateral abierta también copia su borde y sus filas: ciérrala con Ctrl+B antes de seleccionar, o usa `[Copiar]` en los bloques de código. Mientras hay una selección, conhost detiene la salida del chatbot (la respuesta deja de avanzar en pantalla) hasta que copias o cancelas; después aparece de golpe lo que llegó mientras tanto. Es así en todas las apps de consola, no es una falla del chatbot.
 
+### Descargar para Windows
+
+El ZIP `chatbot-windows-x64.zip` lo arma la CI en cada push y en cada pull request, en el trabajo `windows / release`: en GitHub, **Actions** → la ejecución → **Artifacts** → `chatbot-windows-x64`. GitHub lo entrega dentro de otro ZIP: descomprime ese y adentro está `chatbot-windows-x64.zip`. Por ahora no hay releases publicados.
+
+Trae, sin carpeta de por medio:
+
+- `chatbot.exe` y las DLL de MSYS2 que necesita (no hace falta instalar MSYS2);
+- `LEEME.txt`: instrucciones en español para quien nunca usó una terminal (abrirlo, poner la key, pegar, comandos, seleccionar texto, modo portable, símbolos);
+- `chatbot.portable.ejemplo`: se renombra a `chatbot.portable` para activar el [modo portable](#modo-portable);
+- `LICENSE.txt` (la licencia del proyecto, GPL v3) y `AVISOS-TERCEROS.txt` (las licencias de FTXUI, md4c, nlohmann/json, el runtime de GCC y mingw-w64, y de cada DLL).
+
+Descomprímelo en una carpeta y abre `chatbot.exe` con doble clic o desde CMD. Windows SmartScreen puede avisar porque el programa no tiene firma digital ("Más información" → "Ejecutar de todas formas").
+
+Para armarlo tú, en la terminal **MSYS2 UCRT64**, después de compilar `release`:
+
+```bash
+tools/package-windows.sh   # deja build/chatbot-windows-x64.zip
+```
+
+El script toma las DLL que reporta `ldd`, busca con `pacman -Qo` el paquete de cada una y copia su licencia de `/ucrt64/share/licenses/`. Si falta el texto de alguna licencia, lo dice y no arma el ZIP (`--allow-missing-licenses` lo arma igual y `AVISOS-TERCEROS.txt` dice cuál falta). Al final revisa que el ZIP traiga exactamente esos archivos.
+
 ### Integración continua
 
-En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las dos suites de pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`. En Windows (MSYS2 UCRT64 con GCC) compila y prueba `dev` y `release`, sin `CHATBOT_STRICT_PERF` (los tiempos de esas máquinas varían mucho), y sube `chatbot-windows-x64`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
+En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las dos suites de pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`. En Windows (MSYS2 UCRT64 con GCC) compila y prueba `dev` y `release`, sin `CHATBOT_STRICT_PERF` (los tiempos de esas máquinas varían mucho), y en `release` arma el ZIP con `tools/package-windows.sh`, lo descomprime y arranca `chatbot.exe` desde ahí sin MSYS2 en el `PATH` (también con `chatbot.portable`), y lo sube como `chatbot-windows-x64`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
 
 ### Configurar
 
@@ -129,7 +151,7 @@ La forma más fácil es la pantalla de configuración: ábrela con **F2** o con 
 
 **URL base de un servidor personalizado:** normalmente termina en `/v1` (`https://mi-servidor/v1`, no `https://mi-servidor`). El chatbot no sigue redirecciones: si el servidor responde con una (301, 302…), el error dice a dónde redirige y, si puede, qué URL base usar.
 
-**Dónde se guarda la key:** en `~/.config/chatbot/credentials.json` (o `$XDG_CONFIG_HOME/chatbot/credentials.json`; en Windows, `%APPDATA%\chatbot\credentials.json`), una por proveedor (y una por URL en los personalizados). El archivo se escribe con permisos 0600 y su carpeta con 0700. Si alguien le abre los permisos (grupo u otros), el chatbot no lo lee y te pide correr `chmod 600` sobre él (en Windows no: ahí lo protege la carpeta de tu perfil). Al guardar, una key que empieza con `$`, trae espacios o saltos de línea, o mide menos de 20 caracteres no se guarda: suele ser el nombre de una variable (`$NIMKEY`) o una key cortada al copiarla. La key nunca va en `config.json`, en los volcados de depuración ni en las conversaciones guardadas. No copies `credentials.json` al repositorio (está en `.gitignore`).
+**Dónde se guarda la key:** en `~/.config/chatbot/credentials.json` (o `$XDG_CONFIG_HOME/chatbot/credentials.json`; en Windows, `%APPDATA%\chatbot\credentials.json`; en [modo portable](#modo-portable), `datos/credentials.json` junto al ejecutable), una por proveedor (y una por URL en los personalizados). El archivo se escribe con permisos 0600 y su carpeta con 0700. Si alguien le abre los permisos (grupo u otros), el chatbot no lo lee y te pide correr `chmod 600` sobre él (en Windows no: ahí lo protege la carpeta de tu perfil). Al guardar, una key que empieza con `$`, trae espacios o saltos de línea, o mide menos de 20 caracteres no se guarda: suele ser el nombre de una variable (`$NIMKEY`) o una key cortada al copiarla. La key nunca va en `config.json`, en los volcados de depuración ni en las conversaciones guardadas. No copies `credentials.json` al repositorio (está en `.gitignore`).
 
 **Servidor local (Ollama, llama.cpp…):** elige `Ollama (local)` o `Personalizado…` con una URL como `http://localhost:8080/v1`. Solo se acepta `http://` para `localhost`, `127.0.0.1` o `[::1]` (cualquier puerto), y ahí la key es opcional; cualquier otro servidor necesita `https://`, para que la key y la conversación no viajen sin cifrar.
 
@@ -142,7 +164,7 @@ export CHAT_MODEL="nvidia/nemotron-3-super-120b-a12b"   # solo es un ejemplo
 
 No hay modelo por defecto: los modelos se retiran con el tiempo. El del ejemplo fue el más rápido y constante en las pruebas del equipo contra NIM, pero no es un valor por defecto.
 
-Lo que guarda la pantalla va a `~/.config/chatbot/config.json` (o `$XDG_CONFIG_HOME/chatbot/config.json`; en Windows, `%APPDATA%\chatbot\config.json`), que también puedes editar a mano. Al guardar se conservan las demás llaves del archivo. Nunca lleva la key:
+Lo que guarda la pantalla va a `~/.config/chatbot/config.json` (o `$XDG_CONFIG_HOME/chatbot/config.json`; en Windows, `%APPDATA%\chatbot\config.json`; en modo portable, `datos/config.json`), que también puedes editar a mano. Al guardar se conservan las demás llaves del archivo. Nunca lleva la key:
 
 ```json
 {
@@ -216,11 +238,24 @@ Escribe `/buscar` seguido de tu pregunta (por ejemplo, `/buscar quién ganó el 
 Cada conversación se guarda sola después de cada respuesta completa, en un archivo `.json` por conversación dentro de:
 
 - `CHAT_DATA_DIR`, si la defines;
+- si no, en [modo portable](#modo-portable), `datos/conversations` junto al ejecutable;
 - si no, `$XDG_DATA_HOME/chatbot/conversations` (solo si `XDG_DATA_HOME` es una ruta absoluta);
 - si no, `~/.local/share/chatbot/conversations`;
 - en Windows, si no defines `CHAT_DATA_DIR`, `%LOCALAPPDATA%\chatbot\conversations`.
 
 Los archivos contienen **el texto completo de tus conversaciones**. Por eso la carpeta se crea con permisos 0700 y los archivos con 0600 (solo tu usuario puede leerlos). Para borrar una conversación, usa Supr en la barra de conversaciones (Ctrl+O); para borrarlas todas, borra la carpeta. Si un archivo está dañado o es de una versión más nueva del programa, aparece en la barra como ilegible y el programa nunca lo modifica.
+
+#### Modo portable
+
+Si junto al ejecutable hay un archivo llamado `chatbot.portable` (puede estar vacío; el ZIP de Windows trae `chatbot.portable.ejemplo` para renombrarlo), la configuración (`config.json`), la key (`credentials.json`) y las conversaciones (`conversations/`) van a la carpeta `datos/`, también junto al ejecutable, en lugar de la carpeta de tu usuario. Sirve para las PC que se restauran al reiniciar (Deep Freeze y similares), donde se perdería lo de `%APPDATA%`, y para llevar el chatbot en una memoria USB. Funciona en Windows y en Linux.
+
+- Las descargas de `/guardar` y `/exportar` no cambian: siguen en Descargas (o en `CHAT_DOWNLOAD_DIR`).
+- Las variables `CHAT_*` siguen ganando: `CHAT_API_KEY` sobre la key de `datos/credentials.json`, `CHAT_DATA_DIR` sobre `datos/conversations`, etc. `XDG_*`, `HOME`, `APPDATA` y `LOCALAPPDATA` ya no cuentan.
+- En la configuración (F2), al pie de **Proveedor de IA**, una línea atenuada dice `Modo portable: datos en <ruta>`. Sin modo portable no aparece.
+- Al arrancar, el chatbot crea `datos/` si falta y prueba que se pueda escribir ahí. Si no se puede (la carpeta del programa es de solo lectura, como `Archivos de programa`, o un disco protegido), sale con un error que dice la ruta y la causa, antes de abrir la pantalla; nunca usa en silencio la carpeta de tu usuario, que confundiría a quien cree estar en modo portable.
+- El archivo se revisa una vez, al arrancar: crearlo o borrarlo con el chatbot abierto no cambia nada hasta la siguiente vez.
+
+**La key queda en texto plano junto al ejecutable.** En modo portable, `datos/credentials.json` no está protegido por la carpeta de tu perfil: cualquiera que pueda abrir la carpeta del programa (otra cuenta de la PC, quien tome la memoria USB) puede leer la key y usarla. En Linux el archivo sigue en 0600 y `datos/` en 0700 (y la regla del `chmod 600` sigue valiendo); por eso en una memoria USB con FAT32 o exFAT, donde esos permisos no existen, en Linux el chatbot no lee `credentials.json`: ahí usa `CHAT_API_KEY` o una partición ext4. La defensa real no es esconder el archivo sino limitar el daño: **una key por PC con tope de gasto diario**. En OpenRouter, por ejemplo, cada key puede tener un límite de crédito (`limit`) que se reinicia cada día (`limit_reset: daily`); así una key copiada gasta, como mucho, el tope de un día y se revoca sin tocar las de las demás PC.
 
 #### Depuración
 
