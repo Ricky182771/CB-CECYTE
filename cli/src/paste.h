@@ -65,6 +65,15 @@ enum class PasteTarget {
 [[nodiscard]] PasteTarget paste_target(bool sidebar_focused, bool settings_open,
                                        PasteTarget settings_field);
 
+/// Aviso de un atajo de pegado sin destino (una lista, un botón o una pregunta).
+inline constexpr std::string_view kPasteNoTarget = "Aquí no se puede pegar.";
+
+/// Aviso de un atajo de pegado según el destino: kPasteNoTarget si es None,
+/// salvo con la barra lateral, donde se ignora sin aviso; nullopt si hay
+/// destino.
+[[nodiscard]] std::optional<std::string_view> paste_shortcut_notice(bool sidebar_focused,
+                                                                    PasteTarget target);
+
 /// sanitize_paste según el destino. nullopt si se ignora (None) o si no
 /// queda texto que insertar.
 [[nodiscard]] std::optional<SanitizedPaste> prepare_paste(std::string_view raw,

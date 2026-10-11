@@ -109,6 +109,17 @@ TEST_CASE("sanitize_paste recorta a kMaxPasteBytes sin partir un carácter", "[p
     }
 }
 
+TEST_CASE("paste_shortcut_notice: avisa sin destino, salvo con la barra", "[paste]") {
+    using chatbot::cli::paste_shortcut_notice;
+    // Una lista, un botón o la pregunta de descartar: aviso.
+    CHECK(paste_shortcut_notice(false, PasteTarget::None) == chatbot::cli::kPasteNoTarget);
+    // La barra lateral: se ignora sin aviso, como antes.
+    CHECK_FALSE(paste_shortcut_notice(true, PasteTarget::None).has_value());
+    // Con destino no hay aviso.
+    CHECK_FALSE(paste_shortcut_notice(false, PasteTarget::SingleLine).has_value());
+    CHECK_FALSE(paste_shortcut_notice(false, PasteTarget::MultiLine).has_value());
+}
+
 TEST_CASE("prepare_paste según el destino", "[paste]") {
     SECTION("Con la barra lateral, el pegado se ignora") {
         const PasteTarget target = chatbot::cli::paste_target(true, false, PasteTarget::None);

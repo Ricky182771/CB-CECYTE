@@ -80,6 +80,13 @@ PasteTarget paste_target(bool sidebar_focused, bool settings_open, PasteTarget s
     return settings_open ? settings_field : PasteTarget::MultiLine;
 }
 
+std::optional<std::string_view> paste_shortcut_notice(bool sidebar_focused, PasteTarget target) {
+    if (target != PasteTarget::None || sidebar_focused) {
+        return std::nullopt;
+    }
+    return kPasteNoTarget;
+}
+
 std::optional<SanitizedPaste> prepare_paste(std::string_view raw, PasteTarget target) {
     if (target == PasteTarget::None) {
         return std::nullopt;

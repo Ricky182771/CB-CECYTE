@@ -1191,10 +1191,16 @@ int main() {
         if (chatbot::current_os() == chatbot::Os::Windows && is_paste_shortcut(event)) {
             // conhost no pega con la entrada en modo VT (la activa FTXUI):
             // la app lee el portapapeles. En Linux la terminal pega sola.
-            if (current_paste_target() == chatbot::cli::PasteTarget::None) {
+            const chatbot::cli::PasteTarget target = current_paste_target();
+            if (target == chatbot::cli::PasteTarget::None) {
+                // Una lista, un botón o una pregunta: aviso. La barra lateral: nada.
+                if (const auto notice = chatbot::cli::paste_shortcut_notice(
+                        sidebar_visible && sidebar_panel->Focused(), target)) {
+                    notify(*notice);
+                }
                 key_log.write(chatbot::cli::key_log_time(std::chrono::system_clock::now()) +
                               " paste-shortcut ignored target=none");
-                return true; // La barra lateral, una lista o un botón.
+                return true;
             }
             const std::optional<std::string> text = chatbot::cli::read_native_clipboard();
             const bool delivered = text.has_value() && deliver_paste(*text, false);
