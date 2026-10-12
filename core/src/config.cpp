@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -162,9 +163,97 @@ void apply_config_file(const std::string& path, Config& config) {
 
 } // namespace
 
+std::optional<std::string> portable_data_dir(const std::optional<std::string>& executable_dir,
+                                             bool marker_exists, Os os) {
+    if (!marker_exists || !executable_dir.has_value() || executable_dir->empty()) {
+        return std::nullopt;
+    }
+    if (os == Os::Windows) {
+        return join_windows_path(*executable_dir, "datos");
+    }
+    std::string base = *executable_dir;
+    while (base.size() > 1 && base.back() == '/') {
+        base.pop_back();
+    }
+    return base == "/" ? "/datos" : base + "/datos";
+}
+
+const std::optional<std::string>& process_portable_data_dir() {
+    // Constante después de la primera llamada (la inicialización de un
+    // static local es segura entre hilos).
+    static const std::optional<std::string> dir = [] {
+        const std::optional<std::string> executable = executable_dir();
+        bool marker = false;
+        if (executable.has_value()) {
+            try {
+                std::error_code error;
+                marker = std::filesystem::is_regular_file(
+                    std::filesystem::path{*executable} / std::string{kPortableMarker}, error);
+            } catch (const std::exception&) {
+                marker = false; // En Windows, fs::path lanza si la ruta no es UTF-8 válido.
+            }
+        }
+        return portable_data_dir(executable, marker, current_os());
+    }();
+    return dir;
+}
+
+std::optional<ChatError> prepare_portable_data_dir(const std::string& dir) {
+    // problem: qué pasó con la carpeta; cause: el error de la capa de
+    // plataforma. Si cause empieza con uno de prefixes ("no se pudo crear
+    // <ruta>: "), se quita: la ruta ya va en el mensaje y se vería dos veces.
+    const auto failure = [&dir](const std::string& problem, const std::string& cause,
+                                std::initializer_list<std::string> prefixes) {
+        std::string reason = cause;
+        for (const std::string& prefix : prefixes) {
+            if (cause.rfind(prefix, 0) == 0) {
+                reason = cause.substr(prefix.size());
+                break;
+            }
+        }
+        return ChatError{
+            ErrorKind::Config, 0,
+            "Modo portable (" + std::string{kPortableMarker} + " junto al ejecutable): " +
+                problem + " " + dir + ": " + reason +
+                ". Mueve la carpeta del programa a un lugar donde puedas escribir (por "
+                "ejemplo, Documentos o una memoria USB) o borra " +
+                std::string{kPortableMarker} +
+                " para guardar la configuración en la carpeta de tu usuario.",
+            std::nullopt};
+    };
+    if (std::optional<std::string> error =
+            create_private_directory(dir, FolderPrivacy::PrivateIfNew)) {
+        return failure("no se pudo crear la carpeta de datos", *error,
+                       {"no se pudo crear " + dir + ": "});
+    }
+    // Que la carpeta exista no basta: puede ser de solo lectura (o una
+    // carpeta de red, o un disco protegido). Se prueba escribiendo.
+    const std::string probe = current_os() == Os::Windows
+                                  ? join_windows_path(dir, ".prueba-escritura")
+                                  : dir + "/.prueba-escritura";
+    if (std::optional<std::string> error =
+            write_file_atomic(probe, "", FilePrivacy::Private, FolderPrivacy::PrivateIfNew)) {
+        return failure("no se puede escribir en la carpeta de datos", *error,
+                       {"no se pudo escribir " + probe + ".tmp: ",
+                        "no se pudo escribir " + probe + ": ",
+                        "no se pudo reemplazar " + probe + ": "});
+    }
+    try {
+        std::error_code ignored;
+        std::filesystem::remove(std::filesystem::path{probe}, ignored);
+    } catch (const std::exception&) {
+        // Si no se puede borrar, se queda: está vacío y no estorba.
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> build_config_path(
+    const std::optional<std::string>& portable_dir,
     const std::optional<std::string>& xdg_config_home,
     const std::optional<std::string>& home) {
+    if (portable_dir.has_value() && !portable_dir->empty()) {
+        return *portable_dir + "/config.json";
+    }
     if (xdg_config_home.has_value() && !xdg_config_home->empty()) {
         std::string base = *xdg_config_home;
         if (base.back() == '/') {
@@ -179,8 +268,12 @@ std::optional<std::string> build_config_path(
 }
 
 std::optional<std::string> build_windows_config_path(
+    const std::optional<std::string>& portable_dir,
     const std::optional<std::string>& roaming_app_data,
     const std::optional<std::string>& appdata) {
+    if (portable_dir.has_value() && !portable_dir->empty()) {
+        return join_windows_path(*portable_dir, "config.json");
+    }
     for (const std::optional<std::string>* base : {&roaming_app_data, &appdata}) {
         if (base->has_value() && !(*base)->empty()) {
             return join_windows_path(**base, "chatbot\\config.json");
@@ -201,7 +294,7 @@ std::optional<std::string> default_config_path() {
     if (current_os() == Os::Windows) {
         const char* appdata = ::getenv("APPDATA");
         return build_windows_config_path(
-            known_folder(KnownFolder::RoamingAppData),
+            process_portable_data_dir(), known_folder(KnownFolder::RoamingAppData),
             appdata != nullptr ? std::optional<std::string>{std::string{appdata}}
                                : std::nullopt);
     }
@@ -211,7 +304,7 @@ std::optional<std::string> default_config_path() {
         xdg != nullptr ? std::optional<std::string>{std::string{xdg}} : std::nullopt;
     const std::optional<std::string> home_value =
         home != nullptr ? std::optional<std::string>{std::string{home}} : std::nullopt;
-    return build_config_path(xdg_value, home_value);
+    return build_config_path(process_portable_data_dir(), xdg_value, home_value);
 }
 
 std::optional<std::string> default_credentials_path() {

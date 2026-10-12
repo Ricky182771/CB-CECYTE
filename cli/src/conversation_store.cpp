@@ -1,5 +1,6 @@
 #include "conversation_store.h"
 
+#include "chatbot/config.h"
 #include "chatbot/platform.h"
 #include "chatbot/web_search.h"
 
@@ -280,10 +281,14 @@ std::optional<long long> iso8601_to_utc(const std::string& text) {
 } // namespace
 
 std::optional<std::string> resolve_data_dir(const std::optional<std::string>& chat_data_dir,
+                                            const std::optional<std::string>& portable_dir,
                                             const std::optional<std::string>& xdg_data_home,
                                             const std::optional<std::string>& home) {
     if (chat_data_dir.has_value() && !chat_data_dir->empty()) {
         return *chat_data_dir;
+    }
+    if (portable_dir.has_value() && !portable_dir->empty()) {
+        return *portable_dir + "/conversations";
     }
     if (xdg_data_home.has_value() && !xdg_data_home->empty() && xdg_data_home->front() == '/') {
         std::string base = *xdg_data_home;
@@ -300,10 +305,14 @@ std::optional<std::string> resolve_data_dir(const std::optional<std::string>& ch
 
 std::optional<std::string> resolve_windows_data_dir(
     const std::optional<std::string>& chat_data_dir,
+    const std::optional<std::string>& portable_dir,
     const std::optional<std::string>& local_app_data,
     const std::optional<std::string>& localappdata) {
     if (chat_data_dir.has_value() && !chat_data_dir->empty()) {
         return *chat_data_dir;
+    }
+    if (portable_dir.has_value() && !portable_dir->empty()) {
+        return join_windows_path(*portable_dir, "conversations");
     }
     for (const std::optional<std::string>* base : {&local_app_data, &localappdata}) {
         if (base->has_value() && !(*base)->empty()) {
@@ -319,11 +328,12 @@ std::optional<std::string> default_data_dir() {
         return value != nullptr ? std::optional<std::string>{value} : std::nullopt;
     };
     if (current_os() == Os::Windows) {
-        return resolve_windows_data_dir(env("CHAT_DATA_DIR"),
+        return resolve_windows_data_dir(env("CHAT_DATA_DIR"), process_portable_data_dir(),
                                         known_folder(KnownFolder::LocalAppData),
                                         env("LOCALAPPDATA"));
     }
-    return resolve_data_dir(env("CHAT_DATA_DIR"), env("XDG_DATA_HOME"), env("HOME"));
+    return resolve_data_dir(env("CHAT_DATA_DIR"), process_portable_data_dir(),
+                            env("XDG_DATA_HOME"), env("HOME"));
 }
 
 std::string make_title(std::string_view first_user_message) {

@@ -53,7 +53,34 @@ struct ConfigOptions {
     bool allow_missing_key_and_model = false;
 };
 
-/// Devuelve la ruta del archivo de configuración del entorno real:
+/// Archivo que activa el modo portable si está junto al ejecutable (puede
+/// estar vacío; su contenido no se lee), como el .portable de Windows
+/// Terminal.
+inline constexpr std::string_view kPortableMarker = "chatbot.portable";
+
+/// Carpeta de datos del modo portable (función pura, también para las
+/// reglas de Windows en Linux): <executable_dir>/datos (con \ en Windows)
+/// si marker_exists (chatbot.portable está en executable_dir). Nullopt si no
+/// hay marcador o no se conoce la carpeta del ejecutable. Ahí van
+/// config.json, credentials.json y conversations/; las descargas no cambian.
+[[nodiscard]] std::optional<std::string> portable_data_dir(
+    const std::optional<std::string>& executable_dir, bool marker_exists, Os os);
+
+/// portable_data_dir de este proceso: executable_dir() y si existe
+/// chatbot.portable a su lado. Se revisa una sola vez, en la primera llamada,
+/// para que todo el proceso use las mismas rutas aunque el archivo cambie.
+[[nodiscard]] const std::optional<std::string>& process_portable_data_dir();
+
+/// Prepara la carpeta del modo portable al arrancar: la crea si falta (en
+/// POSIX, 0700; si ya existía, no se tocan sus permisos) y prueba que se
+/// pueda escribir en ella con un archivo que borra enseguida. Si no, error
+/// Config con la ruta y la causa: nunca se cae en silencio a la carpeta del
+/// usuario (%APPDATA%, ~/.config), que confundiría a quien cree estar en
+/// modo portable.
+[[nodiscard]] std::optional<ChatError> prepare_portable_data_dir(const std::string& dir);
+
+/// Devuelve la ruta del archivo de configuración del entorno real: en modo
+/// portable, <process_portable_data_dir()>/config.json; si no,
 /// $XDG_CONFIG_HOME/chatbot/config.json, o ~/.config/chatbot/config.json
 /// si XDG_CONFIG_HOME no está. En Windows, %APPDATA%\chatbot\config.json
 /// (la carpeta AppData\Roaming que da Windows o, si no, la variable

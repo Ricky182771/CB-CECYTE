@@ -1,6 +1,9 @@
 #include "chatbot/config.h"
 #include "config_internal.h"
+#include "env_guard.hpp"
 #include "fake_transport.hpp"
+#include "posix_permissions.hpp"
+#include "temp_dir.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -11,6 +14,10 @@
 #include <optional>
 #include <string>
 #include <utility>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -166,21 +173,21 @@ TEST_CASE("build_config_path: XDG_CONFIG_HOME presente y ausente", "[config][xdg
     using chatbot::build_config_path;
 
     // Presente y no vacío: manda XDG, incluso si HOME también existe.
-    CHECK(build_config_path(std::string{"/xdg/custom"}, std::string{"/home/usuario"})
+    CHECK(build_config_path(std::nullopt, std::string{"/xdg/custom"}, std::string{"/home/usuario"})
               .value() == "/xdg/custom/chatbot/config.json");
     // Con barra final se normaliza.
-    CHECK(build_config_path(std::string{"/xdg/custom/"}, std::string{"/home/usuario"})
+    CHECK(build_config_path(std::nullopt, std::string{"/xdg/custom/"}, std::string{"/home/usuario"})
               .value() == "/xdg/custom/chatbot/config.json");
 
     // Ausente: se usa $HOME/.config/chatbot/config.json.
-    CHECK(build_config_path(std::nullopt, std::string{"/home/usuario"})
+    CHECK(build_config_path(std::nullopt, std::nullopt, std::string{"/home/usuario"})
               .value() == "/home/usuario/.config/chatbot/config.json");
     // Presente pero vacío: cuenta como ausente.
-    CHECK(build_config_path(std::string{}, std::string{"/home/usuario"})
+    CHECK(build_config_path(std::nullopt, std::string{}, std::string{"/home/usuario"})
               .value() == "/home/usuario/.config/chatbot/config.json");
 
     // Sin XDG ni HOME: no hay ruta determinable.
-    CHECK_FALSE(build_config_path(std::nullopt, std::nullopt).has_value());
+    CHECK_FALSE(build_config_path(std::nullopt, std::nullopt, std::nullopt).has_value());
 }
 
 TEST_CASE("build_windows_config_path: AppData\\Roaming, si no APPDATA", "[config][windows]") {
@@ -188,24 +195,172 @@ TEST_CASE("build_windows_config_path: AppData\\Roaming, si no APPDATA", "[config
     const std::string roaming = "C:\\Users\\Ñandú\\AppData\\Roaming";
 
     // La carpeta que da Windows manda, aunque APPDATA diga otra cosa.
-    CHECK(build_windows_config_path(roaming, std::string{"D:\\otra"}).value() ==
+    CHECK(build_windows_config_path(std::nullopt, roaming, std::string{"D:\\otra"}).value() ==
           roaming + "\\chatbot\\config.json");
     // Con barra final (\ o /) no se repite el separador.
-    CHECK(build_windows_config_path(roaming + "\\", std::nullopt).value() ==
+    CHECK(build_windows_config_path(std::nullopt, roaming + "\\", std::nullopt).value() ==
           roaming + "\\chatbot\\config.json");
-    CHECK(build_windows_config_path(std::string{"C:/Users/Ana/AppData/Roaming/"}, std::nullopt)
+    CHECK(build_windows_config_path(std::nullopt, std::string{"C:/Users/Ana/AppData/Roaming/"},
+                                    std::nullopt)
               .value() == "C:/Users/Ana/AppData/Roaming\\chatbot\\config.json");
 
     // Si Windows no la dio (o vacía), la variable APPDATA.
-    CHECK(build_windows_config_path(std::nullopt, roaming).value() ==
+    CHECK(build_windows_config_path(std::nullopt, std::nullopt, roaming).value() ==
           roaming + "\\chatbot\\config.json");
-    CHECK(build_windows_config_path(std::string{}, roaming).value() ==
+    CHECK(build_windows_config_path(std::nullopt, std::string{}, roaming).value() ==
           roaming + "\\chatbot\\config.json");
 
     // Sin ninguna: no hay ruta. HOME y XDG_* ni siquiera son parámetros.
-    CHECK_FALSE(build_windows_config_path(std::nullopt, std::nullopt).has_value());
-    CHECK_FALSE(build_windows_config_path(std::string{}, std::string{}).has_value());
+    CHECK_FALSE(build_windows_config_path(std::nullopt, std::nullopt, std::nullopt).has_value());
+    CHECK_FALSE(build_windows_config_path(std::nullopt, std::string{}, std::string{}).has_value());
 }
+
+TEST_CASE("portable_data_dir: datos/ junto al ejecutable solo con chatbot.portable",
+          "[config][portable]") {
+    using chatbot::Os;
+    using chatbot::portable_data_dir;
+    CHECK(chatbot::kPortableMarker == "chatbot.portable");
+
+    // Linux: con el marcador, <carpeta>/datos; sin barras repetidas.
+    CHECK(portable_data_dir(std::string{"/opt/chatbot"}, true, Os::Posix) == "/opt/chatbot/datos");
+    CHECK(portable_data_dir(std::string{"/opt/chatbot/"}, true, Os::Posix) ==
+          "/opt/chatbot/datos");
+    CHECK(portable_data_dir(std::string{"/"}, true, Os::Posix) == "/datos");
+    // Windows: con barra invertida, también si la carpeta trae / o \ al final.
+    CHECK(portable_data_dir(std::string{"E:\\chatbot"}, true, Os::Windows) == "E:\\chatbot\\datos");
+    CHECK(portable_data_dir(std::string{"E:\\chatbot\\"}, true, Os::Windows) ==
+          "E:\\chatbot\\datos");
+    CHECK(portable_data_dir(std::string{"C:\\Users\\Ñandú\\Escritorio\\chatbot"}, true,
+                            Os::Windows) == "C:\\Users\\Ñandú\\Escritorio\\chatbot\\datos");
+
+    // Sin el marcador, o sin saber dónde está el ejecutable: no es portable.
+    CHECK_FALSE(portable_data_dir(std::string{"/opt/chatbot"}, false, Os::Posix).has_value());
+    CHECK_FALSE(portable_data_dir(std::string{"E:\\chatbot"}, false, Os::Windows).has_value());
+    CHECK_FALSE(portable_data_dir(std::nullopt, true, Os::Posix).has_value());
+    CHECK_FALSE(portable_data_dir(std::string{}, true, Os::Windows).has_value());
+}
+
+TEST_CASE("build_config_path: el modo portable gana sobre XDG_CONFIG_HOME y HOME",
+          "[config][portable]") {
+    using chatbot::build_config_path;
+    const std::optional<std::string> portable =
+        chatbot::portable_data_dir(std::string{"/media/usb/chatbot"}, true, chatbot::Os::Posix);
+    CHECK(build_config_path(portable, std::string{"/xdg"}, std::string{"/home/usuario"}) ==
+          "/media/usb/chatbot/datos/config.json");
+    CHECK(build_config_path(portable, std::nullopt, std::nullopt) ==
+          "/media/usb/chatbot/datos/config.json");
+    // Sin chatbot.portable, las reglas de siempre.
+    const std::optional<std::string> not_portable =
+        chatbot::portable_data_dir(std::string{"/media/usb/chatbot"}, false, chatbot::Os::Posix);
+    CHECK(build_config_path(not_portable, std::string{"/xdg"}, std::string{"/home/usuario"}) ==
+          "/xdg/chatbot/config.json");
+}
+
+TEST_CASE("build_windows_config_path: el modo portable gana sobre AppData y APPDATA",
+          "[config][portable][windows]") {
+    using chatbot::build_windows_config_path;
+    const std::string roaming = "C:\\Users\\Ana\\AppData\\Roaming";
+    const std::optional<std::string> portable =
+        chatbot::portable_data_dir(std::string{"E:\\chatbot"}, true, chatbot::Os::Windows);
+    CHECK(build_windows_config_path(portable, roaming, roaming) ==
+          "E:\\chatbot\\datos\\config.json");
+    CHECK(build_windows_config_path(portable, std::nullopt, std::nullopt) ==
+          "E:\\chatbot\\datos\\config.json");
+    const std::optional<std::string> not_portable =
+        chatbot::portable_data_dir(std::string{"E:\\chatbot"}, false, chatbot::Os::Windows);
+    CHECK(build_windows_config_path(not_portable, roaming, std::nullopt) ==
+          roaming + "\\chatbot\\config.json");
+}
+
+TEST_CASE("process_portable_data_dir: sin chatbot.portable junto a las pruebas no es portable",
+          "[config][portable]") {
+    // Nadie pone chatbot.portable junto a chatbot_tests: las rutas del
+    // proceso de pruebas son las de siempre.
+    CHECK_FALSE(chatbot::process_portable_data_dir().has_value());
+    const std::optional<std::string> executable = chatbot::executable_dir();
+    REQUIRE(executable.has_value());
+    CHECK(std::filesystem::exists(std::filesystem::path{*executable}));
+}
+
+TEST_CASE("prepare_portable_data_dir: crea datos/ y no deja el archivo de prueba",
+          "[config][portable]") {
+    const chatbot_test::ScopedTempDir temp;
+    const std::filesystem::path dir = temp.path() / "datos";
+    CHECK_FALSE(chatbot::prepare_portable_data_dir(dir.string()).has_value());
+    REQUIRE(std::filesystem::is_directory(dir));
+    CHECK(std::filesystem::is_empty(dir));
+    // Si ya existe, tampoco hay error ni basura.
+    CHECK_FALSE(chatbot::prepare_portable_data_dir(dir.string()).has_value());
+    CHECK(std::filesystem::is_empty(dir));
+#ifndef _WIN32
+    CHECK((std::filesystem::status(dir).permissions() & std::filesystem::perms::all) ==
+          std::filesystem::perms::owner_all);
+#endif
+}
+
+#ifndef _WIN32
+namespace {
+
+/// Cuántas veces aparece needle en text (sin traslapes).
+std::size_t occurrences(const std::string& text, const std::string& needle) {
+    std::size_t count = 0;
+    for (std::size_t at = text.find(needle); at != std::string::npos;
+         at = text.find(needle, at + needle.size())) {
+        ++count;
+    }
+    return count;
+}
+
+} // namespace
+
+TEST_CASE("prepare_portable_data_dir: carpeta de solo lectura da un error claro",
+          "[config][portable]") {
+    if (::geteuid() == 0) {
+        SKIP("root ignora los permisos de archivo");
+    }
+    const chatbot_test::ScopedTempDir temp;
+    // La carpeta del usuario, para comprobar que no se toca.
+    const std::filesystem::path home = temp.path() / "home";
+    std::filesystem::create_directory(home);
+    const chatbot_test::EnvGuard home_guard("HOME", home.c_str());
+    const chatbot_test::EnvGuard xdg_guard("XDG_CONFIG_HOME", nullptr);
+    const chatbot_test::EnvGuard data_guard("XDG_DATA_HOME", nullptr);
+
+    SECTION("la carpeta del programa es de solo lectura: datos/ no se puede crear") {
+        const std::filesystem::path app = temp.path() / "app";
+        std::filesystem::create_directory(app);
+        chatbot_test::set_mode(app, 0555);
+        const std::string dir = (app / "datos").string();
+        const std::optional<chatbot::ChatError> error = chatbot::prepare_portable_data_dir(dir);
+        REQUIRE(error.has_value());
+        CHECK(error->kind == chatbot::ErrorKind::Config);
+        CHECK_THAT(error->message, Catch::Matchers::StartsWith("Modo portable (chatbot.portable"));
+        CHECK_THAT(error->message, Catch::Matchers::ContainsSubstring(
+                                       "no se pudo crear la carpeta de datos " + dir + ": "));
+        CHECK(occurrences(error->message, dir) == 1); // La ruta, una sola vez.
+        CHECK_THAT(error->message, Catch::Matchers::ContainsSubstring("borra chatbot.portable"));
+        CHECK_FALSE(std::filesystem::exists(app / "datos"));
+        chatbot_test::set_mode(app, 0755);
+    }
+    SECTION("datos/ existe pero es de solo lectura") {
+        const std::filesystem::path dir = temp.path() / "datos";
+        std::filesystem::create_directory(dir);
+        chatbot_test::set_mode(dir, 0555);
+        const std::optional<chatbot::ChatError> error =
+            chatbot::prepare_portable_data_dir(dir.string());
+        REQUIRE(error.has_value());
+        CHECK_THAT(error->message,
+                   Catch::Matchers::ContainsSubstring(
+                       "no se puede escribir en la carpeta de datos " + dir.string() + ": "));
+        CHECK(occurrences(error->message, dir.string()) == 1); // La ruta, una sola vez.
+        CHECK_THAT(error->message, !Catch::Matchers::ContainsSubstring(".prueba-escritura"));
+        chatbot_test::set_mode(dir, 0755);
+        CHECK(std::filesystem::is_empty(dir));
+    }
+    // Ni ~/.config ni ~/.local: nunca se cae en silencio a la carpeta del usuario.
+    CHECK(std::filesystem::is_empty(home));
+}
+#endif
 
 TEST_CASE("missing_config_dir_message dice qué faltó en cada sistema", "[config][windows]") {
     CHECK(chatbot::missing_config_dir_message(chatbot::Os::Posix) ==

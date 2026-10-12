@@ -186,6 +186,40 @@ std::optional<std::uint32_t> windows_build() {
     return static_cast<std::uint32_t>(info.dwBuildNumber);
 }
 
+std::optional<std::string> executable_dir() {
+    // GetModuleFileNameW trunca sin error si no cabe (devuelve el tamaño del
+    // búfer): se repite con uno más grande, hasta el máximo de una ruta larga.
+    std::wstring path(MAX_PATH, L'\0');
+    while (path.size() <= 32768) {
+        const DWORD length =
+            ::GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+        if (length == 0) {
+            return std::nullopt;
+        }
+        if (length < path.size()) {
+            path.resize(length);
+            const std::size_t slash = path.find_last_of(L"\\/");
+            if (slash == std::wstring::npos || slash == 0) {
+                return std::nullopt;
+            }
+            path.resize(slash);
+            return utf16_to_utf8(path);
+        }
+        path.resize(path.size() * 2);
+    }
+    return std::nullopt;
+}
+
+bool console_closes_on_exit() {
+    if (!is_console(STD_INPUT_HANDLE)) {
+        return false; // stdin redirigido: no hay a quién pedirle Enter.
+    }
+    // Con un solo proceso en la lista, la consola es de este proceso: al
+    // terminar, Windows cierra la ventana.
+    DWORD processes[2] = {};
+    return ::GetConsoleProcessList(processes, 2) == 1;
+}
+
 std::optional<std::string> known_folder(KnownFolder folder) {
     const KNOWNFOLDERID* id = &FOLDERID_RoamingAppData;
     switch (folder) {

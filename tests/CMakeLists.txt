@@ -98,3 +98,18 @@ target_compile_definitions(chatbot_ui_tests PRIVATE
 chatbot_set_warnings(chatbot_ui_tests)
 chatbot_windows_manifest(chatbot_ui_tests)
 add_test(NAME chatbot_ui_tests COMMAND chatbot_ui_tests)
+
+# Modo portable con el ejecutable real: copia chatbot junto a un
+# chatbot.portable y lo arranca sin key ni terminal (portable_startup.cmake).
+add_test(NAME chatbot_portable_writable
+    COMMAND ${CMAKE_COMMAND} -DCHATBOT=$<TARGET_FILE:chatbot>
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/portable_writable -DMODE=writable
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/portable_startup.cmake)
+# Carpeta del programa de solo lectura: solo POSIX (en Windows manda la ACL).
+if(NOT WIN32)
+    add_test(NAME chatbot_portable_readonly
+        COMMAND ${CMAKE_COMMAND} -DCHATBOT=$<TARGET_FILE:chatbot>
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/portable_readonly -DMODE=readonly
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/portable_startup.cmake)
+    set_tests_properties(chatbot_portable_readonly PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
+endif()

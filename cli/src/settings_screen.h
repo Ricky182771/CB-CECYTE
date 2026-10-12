@@ -60,6 +60,10 @@ public:
     /// hay URL y key.
     void open(ProviderSettings settings, Config base, Appearance appearance,
               std::string system_prompt, SearchSettings search, std::string notice = {});
+    /// Modo portable: la carpeta datos/ (chatbot::process_portable_data_dir),
+    /// que se muestra atenuada al pie de "Proveedor de IA". nullopt (por
+    /// defecto): sin modo portable, no se muestra nada.
+    void set_portable_dir(std::optional<std::string> dir) { portable_dir_ = std::move(dir); }
     /// Esc, Cancelar o F2: cierra si no hay cambios; si los hay, pregunta
     /// "¿Descartar los cambios? (s/n)". Devuelve true si se cerró.
     bool request_close();
@@ -123,6 +127,7 @@ private:
     std::string status_;          ///< Aviso o error bajo el formulario.
     bool confirm_discard_ = false; ///< Se preguntó "¿Descartar los cambios?".
     bool no_color_ = false;
+    std::optional<std::string> portable_dir_; ///< set_portable_dir.
 
     // Lo que editan los componentes.
     std::vector<std::string> category_names_;

@@ -113,6 +113,18 @@ private:
 /// después de Windows 8.1. En POSIX, siempre nullopt.
 [[nodiscard]] std::optional<std::uint32_t> windows_build();
 
+/// Carpeta del ejecutable de este proceso en UTF-8, sin la barra final
+/// (para el modo portable). Windows: GetModuleFileNameW. POSIX: el destino
+/// de /proc/self/exe (Linux y Termux). Nullopt si no se puede saber.
+[[nodiscard]] std::optional<std::string> executable_dir();
+
+/// true si este proceso es el único en su consola y stdin es esa consola:
+/// en Windows, la ventana de conhost que abrió el doble clic y que se cierra
+/// en cuanto el proceso termina (GetConsoleProcessList da 1). Desde CMD,
+/// PowerShell o MSYS2 hay otro proceso (la shell) y da false. En POSIX,
+/// siempre false.
+[[nodiscard]] bool console_closes_on_exit();
+
 /// Carpetas conocidas de Windows (FOLDERID_*).
 enum class KnownFolder {
     RoamingAppData, ///< %APPDATA%: config.json y credentials.json.
