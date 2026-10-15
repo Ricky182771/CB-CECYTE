@@ -79,6 +79,7 @@ add_test(NAME chatbot_tests COMMAND chatbot_tests)
 # Van aparte para que chatbot_tests no enlace FTXUI.
 add_executable(chatbot_ui_tests
     ${PROJECT_SOURCE_DIR}/cli/src/settings_screen.cpp
+    ${PROJECT_SOURCE_DIR}/cli/src/text_area.cpp
     test_settings_screen.cpp
     test_command_menu_view.cpp
     test_history_view.cpp
@@ -87,6 +88,7 @@ add_executable(chatbot_ui_tests
     test_sidebar_view.cpp
     test_status_line.cpp
     test_symbols_view.cpp
+    test_text_area.cpp
     test_text_edit.cpp
     test_markdown_view.cpp
     test_theme.cpp
