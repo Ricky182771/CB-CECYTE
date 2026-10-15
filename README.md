@@ -198,7 +198,7 @@ Si tu terminal no muestra colores de 24 bits, se aproximan a 256 o 16. Con `NO_C
 
 #### Instrucciones del sistema
 
-En la configuración, la categoría **Instrucciones del sistema** edita el mensaje de sistema que se manda al principio de cada conversación (también de las que abres desde la barra). Enter agrega un salto de línea; Tab y Shift+Tab cambian de campo. **Restaurar predeterminado** vuelve a poner las instrucciones de fábrica. Al guardar se aplican sin reiniciar y sin perder la conversación abierta: valen desde el siguiente mensaje.
+En la configuración, la categoría **Instrucciones del sistema** edita el mensaje de sistema que se manda al principio de cada conversación (también de las que abres desde la barra). El campo ajusta el texto al ancho como la caja de la conversación y usa el alto que deja la sección (con barra y rueda si no cabe); PgUp y PgDn mueven el cursor y la vista una altura del campo. Enter agrega un salto de línea; Tab y Shift+Tab cambian de campo. **Restaurar predeterminado** vuelve a poner las instrucciones de fábrica. Al guardar se aplican sin reiniciar y sin perder la conversación abierta: valen desde el siguiente mensaje.
 
 Se guardan en `config.json` como `"system_prompt"`:
 
@@ -213,7 +213,7 @@ Se guardan en `config.json` como `"system_prompt"`:
 - **Cadena vacía (`""`)**: no se manda ningún mensaje de sistema. Sirve con modelos locales que rechazan el rol `system`.
 - Si la llave no es una cadena, se usan las predeterminadas y la línea de estado lo avisa.
 
-Al guardar, las instrucciones pueden medir como máximo 8000 bytes (el contador `N / 8000 bytes` está bajo el campo), deben ser UTF-8 válido y no pueden tener caracteres de control salvo saltos de línea y tabuladores; si no cumplen, no se guardan y la pantalla dice por qué. El recorte del historial nunca quita las instrucciones: si miden lo mismo que `history_limit` o más, se guardan igual, pero la pantalla avisa que dejarían poco o nada de espacio para la conversación. No hay variable de entorno para las instrucciones. Las conversaciones guardadas no las incluyen.
+Al guardar, las instrucciones pueden medir como máximo 8000 bytes (el contador `N / 8000 bytes` está bajo el campo), deben ser UTF-8 válido y no pueden tener caracteres de control salvo saltos de línea y tabuladores (un tabulador escrito a mano en `config.json` se ve en el campo como 4 espacios y se guarda tal cual); si no cumplen, no se guardan y la pantalla dice por qué. El recorte del historial nunca quita las instrucciones: si miden lo mismo que `history_limit` o más, se guardan igual, pero la pantalla avisa que dejarían poco o nada de espacio para la conversación. No hay variable de entorno para las instrucciones. Las conversaciones guardadas no las incluyen.
 
 Nuestro recorte cuenta bytes, no tokens, así que una petición todavía puede pasar de la ventana del modelo, y lo que haga entonces el servidor no depende de nosotros (revisado en octubre de 2026). **NVIDIA NIM**: su [referencia de la API](https://docs.nvidia.com/nim/large-language-models/latest/reference/api-reference.html) no documenta ningún recorte y remite a vLLM, donde recortar es opcional (`truncate_prompt_tokens`, que no mandamos) y [se queda con los últimos tokens](https://docs.vllm.ai/en/stable/api/vllm/renderers/params/), así que puede perder las instrucciones; si el servidor rechaza la petición con un 400, la app reintenta una vez con la mitad del historial. **OpenRouter**: la compresión que antes se llamaba «middle-out» (hoy el plugin `context-compression`) [quita o recorta mensajes de en medio](https://openrouter.ai/docs/guides/features/message-transforms) y viene activada en los modelos de 8192 tokens o menos; la documentación no dice si conserva el mensaje de sistema. **Ollama**: su [página de contexto](https://docs.ollama.com/context-length) no dice qué pasa; en el [código](https://github.com/ollama/ollama/blob/main/server/prompt.go) quita mensajes desde el principio hasta caber en `num_ctx`, conserva los de sistema y el último, y lo hace por defecto, sin avisar. **llama.cpp server**: el [README](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) no lo dice; sus [pruebas](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/tests/unit/test_ctx_shift.py) muestran que rechaza el prompt con el error «exceeds the available context size» (el desplazamiento de contexto, apagado por defecto, solo actúa al generar).
 
@@ -287,11 +287,15 @@ Teclas:
 | `/` | Al principio de la caja, abre el menú de comandos (ver [Comandos](#comandos)) |
 | `\` + Enter | Nueva línea en la caja (el `\` justo antes del cursor se cambia por el salto) |
 | Alt+Enter | Nueva línea en la caja, en las terminales que lo mandan (en Windows no: es pantalla completa) |
-| ↑ / ↓ | Mueven el cursor entre las líneas de la caja |
+| ↑ / ↓ | Mueven el cursor una fila en pantalla de la caja (también dentro de un párrafo que se partió en varias filas), conservando la columna; en la primera fila ↑ va al principio del texto y en la última ↓ al final |
+| ← / → | Mueven el cursor un carácter (un emoji o una letra con acento combinado cuentan como uno); Ctrl+← / Ctrl+→, una palabra |
+| Retroceso / Supr | Borran el carácter antes o después del cursor |
+| Insert | Cambia entre insertar y sobrescribir (el cursor se vuelve un bloque) |
 | Esc | Cierra el menú de comandos si está abierto; si no, cancela la respuesta en curso (el texto regresa a la caja) |
 | PgUp / PgDn | Sube o baja una pantalla del historial |
-| Rueda del ratón | Sube o baja unas 3 líneas (del historial, o de la barra si el puntero está sobre ella) |
-| Home / End | Con la caja vacía, va al inicio o al final del historial; con texto, lleva el cursor al inicio o al final de todo el texto de la caja |
+| Rueda del ratón | Sube o baja unas 3 líneas (del historial, de la barra si el puntero está sobre ella, o de la caja si el puntero está sobre ella y su texto no cabe) |
+| Clic en la caja | Pone el cursor en ese carácter (después del final de una fila, al final de esa fila) |
+| Home / End | Con la caja vacía, va al inicio o al final del historial; con texto, lleva el cursor al inicio o al final de la fila en pantalla en que está |
 | F2 | Abre o cierra la configuración |
 | Ctrl+N | Empieza una conversación nueva |
 | Ctrl+B | Muestra u oculta la barra de conversaciones |
@@ -310,7 +314,7 @@ A la izquierda está la lista de conversaciones guardadas, agrupadas por fecha: 
 
 #### Caja de entrada y pegar
 
-La caja acepta varias líneas: crece hasta 8 líneas (o un tercio de la terminal, lo que sea menor) y después se desplaza siguiendo al cursor. Enter siempre envía; para un salto de línea usa `\` + Enter o Alt+Enter (Shift+Enter y Ctrl+Enter no se distinguen de Enter en la terminal).
+La caja acepta varias líneas y ajusta el texto al ancho: una línea más larga que la caja se parte en varias filas por palabras (después de un espacio; una palabra más ancha que la caja se parte donde ya no cabe). Ninguna fila empieza con el espacio del corte: si la palabra llena justo la fila, ese espacio se queda al final de la fila, en la columna del cursor. El ajuste es solo de pantalla: lo que se envía es exactamente lo que escribiste, sin saltos ni espacios de más. La última columna queda libre para el cursor. La caja crece con sus filas en pantalla hasta 8 (o un tercio de la terminal, lo que sea menor); después aparece una barra a la derecha y se desplaza siguiendo al cursor (o con la rueda). Enter siempre envía; para un salto de línea usa `\` + Enter o Alt+Enter (Shift+Enter y Ctrl+Enter no se distinguen de Enter en la terminal).
 
 Pega con el atajo de tu terminal (en Linux casi siempre Ctrl+Shift+V). El chatbot activa el *pegado entre corchetes* (bracketed paste): un texto pegado con varias líneas queda completo en la caja, sin enviarse, y los tabuladores pasan a 4 espacios. Si tu terminal no lo soporta, cada salto de línea pegado llega como Enter y envía el mensaje a la mitad: pega una sola línea o usa otra terminal. En los campos de una línea de la configuración (URL, keys, filtro y modelo), los saltos de línea pegados se quitan. Un pegado de más de 256 KiB se recorta y avisa.
 

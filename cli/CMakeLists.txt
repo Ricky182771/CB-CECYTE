@@ -99,6 +99,7 @@ add_library(chatbot_cli_ui STATIC
     src/sidebar_view.cpp
     src/status_line.cpp
     src/markdown_view.cpp
+    src/text_edit.cpp
     src/theme.cpp
     src/title_bar.cpp)
 target_compile_features(chatbot_cli_ui PUBLIC cxx_std_20)
@@ -106,7 +107,7 @@ target_link_libraries(chatbot_cli_ui PUBLIC chatbot_cli_lib ftxui::dom ftxui::sc
 chatbot_set_warnings(chatbot_cli_ui)
 
 # Ejecutable de la interfaz: el único que usa ftxui::component.
-add_executable(chatbot src/main.cpp src/settings_screen.cpp)
+add_executable(chatbot src/main.cpp src/settings_screen.cpp src/text_area.cpp)
 target_link_libraries(chatbot PRIVATE chatbot_cli_lib chatbot_cli_ui ftxui::component)
 chatbot_set_warnings(chatbot)
 chatbot_windows_manifest(chatbot)

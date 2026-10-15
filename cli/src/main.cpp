@@ -19,7 +19,6 @@
 #include "glyphs.h"
 #include "history_view.h"
 #include "input_edit.h"
-#include "input_style.h"
 #include "key_log.h"
 #include "markdown.h"
 #include "models_loader.h"
@@ -34,6 +33,7 @@
 #include "status_line.h"
 #include "system_prompt.h"
 #include "terminal_reply.h"
+#include "text_area.h"
 #include "theme.h"
 #include "title_bar.h"
 
@@ -384,11 +384,10 @@ int main() {
     // runner se destruye antes que screen y client (cancela y hace join del
     // hilo, que usa ambos); igual el cargador de modelos, que une sus hilos.
     // Las tareas que queden en la cola de screen apuntan a conversation,
-    // input_text, scroll, last_dropped y store: van antes que screen.
+    // scroll, last_dropped y store: van antes que screen (la caja de entrada
+    // la llevan por copia del shared_ptr).
     const chatbot::cli::ConversationStore store{chatbot::cli::default_data_dir().value_or("")};
     chatbot::cli::Conversation conversation{system_prompt};
-    std::string input_text;
-    int input_cursor = 0; ///< Cursor de la caja (InputOption::cursor_position), en bytes.
     Scroll scroll;
     chatbot::cli::HistoryView history;
     chatbot::cli::CodeBlockIndex code_blocks; ///< Números de los bloques (/copiar, /guardar).
@@ -445,6 +444,18 @@ int main() {
     }
     const auto busy = [&] { return runner != nullptr && runner->busy(); };
 
+    // La caja de entrada (text_area.h): el texto, el cursor y la vista son
+    // suyos. Enter envía (on_enter, abajo); "\" + Enter y Alt+Enter hacen el
+    // salto (root). Sin configuración, el placeholder lo dice.
+    const auto input_area = chatbot::cli::make_text_area(
+        {.palette = &palette, .min_rows = 1, .max_rows = chatbot::cli::kMaxInputLines,
+         .enter = chatbot::cli::EnterKey::Submit, .on_enter = {}, .on_change = {},
+         .placeholder = [&runner](int columns) {
+             return runner != nullptr ? std::string{chatbot::cli::input_placeholder(columns)}
+                                      : std::string{kSetupNotice} + " (F2)";
+         }});
+    const ftxui::Component input = input_area;
+
     /// Abrevia rutas con "~" (en Windows, vacía: las rutas van completas).
     const std::string home =
         chatbot::cli::display_home(chatbot::cli::environment_value, chatbot::current_os());
@@ -476,8 +487,7 @@ int main() {
                 conversation.add_notice(result.message);
             }
             if (!result.error || always_clear) {
-                input_text.clear();
-                input_cursor = chatbot::cli::cursor_at_end(input_text);
+                input_area->set_text("");
             }
             scroll.to_bottom();
         };
@@ -533,7 +543,7 @@ int main() {
 
     // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.
     const auto send = [&] {
-        const chatbot::cli::ParsedCommand command = chatbot::cli::parse_command(input_text);
+        const auto command = chatbot::cli::parse_command(input_area->text());
         switch (command.type) {
         case chatbot::cli::ParsedCommand::Type::Copy:
         case chatbot::cli::ParsedCommand::Type::CopyUsage:
@@ -564,18 +574,17 @@ int main() {
             flash = std::string{chatbot::cli::kMissingSearchKey};
             return;
         }
-        std::optional<std::vector<chatbot::Message>> messages = conversation.submit(input_text);
+        auto messages = conversation.submit(input_area->text());
         if (!messages.has_value()) {
             return; // Caja vacía.
         }
-        input_text.clear();
-        input_cursor = chatbot::cli::cursor_at_end(input_text);
+        input_area->set_text("");
         scroll.to_bottom();
         const auto on_delta = [&conversation](std::string delta) {
             conversation.append_delta(delta);
         };
         const auto on_done =
-            [&conversation, &input_text, &input_cursor, &last_dropped, &store, &sidebar, &model,
+            [&conversation, input_area, &last_dropped, &store, &sidebar, &model,
              &searching](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
                 searching = false;
                 last_dropped = dropped;
@@ -590,9 +599,8 @@ int main() {
                     sidebar.refresh(store.list(), conversation.id());
                 }
                 // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
-                if (restored.has_value() && input_text.empty()) {
-                    input_text = *restored;
-                    input_cursor = chatbot::cli::cursor_at_end(input_text);
+                if (restored.has_value() && input_area->text().empty()) {
+                    input_area->set_text(*restored);
                 }
             };
         if (!search) {
@@ -624,25 +632,10 @@ int main() {
         refresh_sidebar();
     };
 
-    ftxui::InputOption input_option;
-    // Varias líneas sin multiline: en FTXUI v7.0.3 multiline solo cambia lo
-    // que hace Enter (con true, inserta "\n" y además llama a on_enter). El
-    // dibujo ya parte el contenido por "\n" y ↑/↓ ya mueven el cursor entre
-    // líneas. Enter envía; "\" + Enter y Alt+Enter hacen el salto (root).
-    input_option.multiline = false;
-    input_option.cursor_position = &input_cursor;
-    // Sin el fondo invertido del transform por defecto (ver input_style.h).
-    input_option.transform = [&palette](ftxui::InputState state) {
-        return chatbot::cli::input_transform(std::move(state.element), state.hovered,
-                                             state.focused, state.is_placeholder, palette);
-    };
-    input_option.on_enter = [&] {
+    input_area->set_on_enter([&] {
         send();
         screen.PostEvent(ftxui::Event::Custom);
-    };
-    // Sin configuración, el placeholder lo dice.
-    std::string placeholder;
-    const ftxui::Component input = ftxui::Input(&input_text, &placeholder, input_option);
+    });
 
     // Lo que el menú de comandos necesita saber para atenuar los que no se
     // pueden usar ahora.
@@ -666,8 +659,7 @@ int main() {
             return true;
         case Type::Complete:
         case Type::Submit:
-            input_text = action.text;
-            input_cursor = chatbot::cli::cursor_at_end(input_text);
+            input_area->set_text(action.text); // El cursor al final.
             if (action.type == Type::Submit) {
                 send();
             }
@@ -970,7 +962,7 @@ int main() {
         }
         if (scroll.has_more_below()) {
             // Con texto en la caja, End mueve el cursor: el aviso sugiere PgDn.
-            status.push_back({input_text.empty() ? "↓ Hay más abajo (End)"
+            status.push_back({input_area->text().empty() ? "↓ Hay más abajo (End)"
                                                  : "↓ Hay más abajo (PgDn)",
                               ftxui::bold, true});
         }
@@ -980,12 +972,9 @@ int main() {
                               notice});
         }
 
-        placeholder = runner != nullptr
-                          ? std::string{chatbot::cli::input_placeholder(width - 2)}
-                          : std::string{kSetupNotice} + " (F2)";
         // Menú de comandos: entre la línea de estado y la caja; empuja el
         // historial hacia arriba.
-        command_menu.update(input_text, input->Focused());
+        command_menu.update(input_area->text(), input->Focused());
         ftxui::Element menu = ftxui::emptyElement();
         if (command_menu.is_open()) {
             menu = chatbot::cli::render_command_menu(
@@ -997,6 +986,7 @@ int main() {
             command_menu_box = ftxui::Box{};
         }
         const bool hide_status = command_menu.is_open() && status.empty();
+        input_area->set_max_rows(chatbot::cli::input_max_rows(ftxui::Terminal::Size().dimy));
         const std::string title =
             "Chatbot CECyTE — " + (model.empty() ? std::string{"sin configurar"} : model) + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
@@ -1012,15 +1002,11 @@ int main() {
             hide_status ? ftxui::emptyElement() : chatbot::cli::status_line(status, width),
             std::move(menu),
             // El prompt en negritas marca la caja sin un bloque de color. La
-            // caja crece con sus líneas hasta su tope; más allá, su frame
-            // sigue la línea del cursor (Input la marca con focus).
+            // caja mide su alto ella misma: crece con sus filas en pantalla
+            // hasta su tope y después se desplaza con su barra.
             ftxui::hbox({ftxui::text("> ") | ftxui::bold |
                              palette.ink(&chatbot::cli::Theme::user_label),
-                         input->Render() |
-                             ftxui::size(ftxui::HEIGHT, ftxui::EQUAL,
-                                         chatbot::cli::input_height(
-                                             input_text, ftxui::Terminal::Size().dimy)) |
-                             ftxui::flex}),
+                         input->Render()}),
         });
         if (sidebar_visible) {
             // Un espacio entre el borde de la barra y la conversación.
@@ -1184,6 +1170,13 @@ int main() {
             }
             return true;
         }
+        // La rueda sobre la caja la desplaza si su texto no cabe; si no,
+        // mueve el historial.
+        if ((mouse.button == ftxui::Mouse::WheelUp || mouse.button == ftxui::Mouse::WheelDown) &&
+            input_area->scrollable() && input_area->contains(mouse.x, mouse.y)) {
+            (void)input->OnEvent(event);
+            return true;
+        }
         if (mouse.button == ftxui::Mouse::WheelUp) {
             scroll.by(-kWheelStep);
             return true;
@@ -1238,7 +1231,7 @@ int main() {
         } else if (event == ftxui::Event::Return) {
             // Event compara solo el texto: un "\n" pegado solo sería Enter
             // para la caja y enviaría el mensaje.
-            chatbot::cli::insert_at_cursor(input_text, input_cursor, paste->text);
+            input_area->insert(paste->text);
         } else {
             (void)input->OnEvent(event);
         }
@@ -1383,7 +1376,7 @@ int main() {
         }
         // Menú de comandos abierto: ↑/↓, Tab, Enter y Esc son primero suyos
         // (el primer Esc lo cierra; el segundo ya cancela la respuesta).
-        command_menu.update(input_text, input->Focused());
+        command_menu.update(input_area->text(), input->Focused());
         if (command_menu.is_open()) {
             using chatbot::cli::ListKey;
             const ListKey key = list_key(event);
@@ -1394,14 +1387,13 @@ int main() {
             }
         }
         // "\" + Enter: salto de línea en lugar de enviar.
-        if (event == ftxui::Event::Return &&
-            chatbot::cli::backslash_newline(input_text, input_cursor)) {
+        if (event == ftxui::Event::Return && input_area->backslash_newline()) {
             return true;
         }
         // Alt+Enter (donde llega: en Windows es pantalla completa).
         if (event == ftxui::Event::Special(chatbot::cli::kAltEnter) ||
             event == ftxui::Event::Special(chatbot::cli::kAltEnterLf)) {
-            chatbot::cli::insert_at_cursor(input_text, input_cursor, "\n");
+            input_area->insert("\n");
             return true;
         }
         // ←/→, ↑/↓ y Tab son de la caja: si llegaran al contenedor del
@@ -1428,11 +1420,11 @@ int main() {
         }
         // Home/End: con texto en la caja mueven el cursor (los maneja la caja);
         // con la caja vacía mueven el historial.
-        if (event == ftxui::Event::Home && input_text.empty()) {
+        if (event == ftxui::Event::Home && input_area->text().empty()) {
             scroll.to_top();
             return true;
         }
-        if (event == ftxui::Event::End && input_text.empty()) {
+        if (event == ftxui::Event::End && input_area->text().empty()) {
             scroll.to_bottom();
             return true;
         }
