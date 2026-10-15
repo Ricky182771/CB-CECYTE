@@ -87,6 +87,7 @@ add_executable(chatbot_ui_tests
     test_sidebar_view.cpp
     test_status_line.cpp
     test_symbols_view.cpp
+    test_text_edit.cpp
     test_markdown_view.cpp
     test_theme.cpp
     test_title_bar.cpp)

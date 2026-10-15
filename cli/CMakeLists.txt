@@ -99,6 +99,7 @@ add_library(chatbot_cli_ui STATIC
     src/sidebar_view.cpp
     src/status_line.cpp
     src/markdown_view.cpp
+    src/text_edit.cpp
     src/theme.cpp
     src/title_bar.cpp)
 target_compile_features(chatbot_cli_ui PUBLIC cxx_std_20)
