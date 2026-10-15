@@ -14,8 +14,10 @@
 #include <ftxui/screen/screen.hpp>
 
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -110,9 +112,9 @@ struct Harness {
         REQUIRE(queue.run_until([this] { return !loader.busy(); }));
     }
 
-    ftxui::Screen draw(int width = 120) {
+    ftxui::Screen draw(int width = 120, int height = 24) {
         auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
-                                            ftxui::Dimension::Fixed(24));
+                                            ftxui::Dimension::Fixed(height));
         ftxui::Render(screen, settings.component()->Render());
         return screen;
     }
@@ -788,4 +790,145 @@ TEST_CASE("configuración: el modo portable se ve al pie de Proveedor de IA",
     // Solo en "Proveedor de IA".
     h.go_to_search();
     CHECK(find(h.draw(), "Modo portable").x < 0);
+}
+
+namespace {
+
+/// Ancho de la configuración con la barra lateral abierta en una terminal de
+/// 120 columnas: la barra (28, su borde derecho es el divisor) y un espacio.
+constexpr int kSettingsWidthWithSidebar = 120 - 28 - 1;
+
+/// "fila 01\nfila 02\n…": instrucciones largas, una línea por fila.
+std::string long_prompt(int lines) {
+    std::string text;
+    for (int i = 1; i <= lines; ++i) {
+        text += (i > 1 ? "\n" : "") + std::string{i < 10 ? "fila 0" : "fila "} + std::to_string(i);
+    }
+    return text;
+}
+
+} // namespace
+
+TEST_CASE("configuración: las instrucciones predeterminadas se leen completas con la barra "
+          "lateral a 120 columnas",
+          "[ajustes][sistema][ajuste]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0");
+    h.go_to_prompt();
+    const auto screen = h.draw(kSettingsWidthWithSidebar);
+    // El campo mide unas 47 columnas: el texto (71) se ajusta en dos filas,
+    // que juntas tienen todas sus palabras, en orden.
+    const Position first = find(screen, "Eres un asistente");
+    REQUIRE(first.x >= 0);
+    const auto words = [](const std::string& text) {
+        std::vector<std::string> out;
+        std::istringstream stream(text);
+        for (std::string word; stream >> word;) {
+            out.push_back(word);
+        }
+        return out;
+    };
+    std::string shown;
+    for (int y = first.y; y < first.y + 2; ++y) {
+        for (int x = first.x; x < screen.dimx() - 1; ++x) { // Sin el borde.
+            shown += screen.CellAt(x, y).character;
+        }
+        shown += ' ';
+    }
+    CHECK(words(shown) == words(std::string{chatbot::cli::kDefaultSystemPrompt}));
+}
+
+TEST_CASE("configuración: el campo de las instrucciones mide al menos 5 filas",
+          "[ajustes][sistema][ajuste]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "");
+    h.go_to_prompt();
+    const auto screen = h.draw(kSettingsWidthWithSidebar);
+    const Position field = find(screen, "Texto");
+    const Position counter = find(screen, "0 / 8000 bytes");
+    REQUIRE(field.x >= 0);
+    REQUIRE(counter.x >= 0);
+    CHECK(counter.y - field.y >= 5);
+}
+
+TEST_CASE("configuración: con instrucciones largas los botones siempre se ven",
+          "[ajustes][sistema][ajuste]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, long_prompt(60));
+    h.go_to_prompt();
+    for (int height = 14; height <= 40; height += 2) {
+        INFO("alto " << height);
+        const auto screen = h.draw(kSettingsWidthWithSidebar, height);
+        CHECK(find(screen, "[ Guardar ]").x >= 0);
+        CHECK(find(screen, "[ Cancelar ]").x >= 0);
+        CHECK(find(screen, "[ Restaurar predeterminado ]").x >= 0);
+        CHECK(find(screen, "fila 01").x >= 0); // El cursor está al principio.
+    }
+}
+
+TEST_CASE("configuración: PgUp/PgDn y la rueda desplazan las instrucciones",
+          "[ajustes][sistema][ajuste]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, long_prompt(60));
+    h.go_to_prompt();
+    auto screen = h.draw(kSettingsWidthWithSidebar);
+    const Position top = find(screen, "fila 01");
+    REQUIRE(top.x >= 0);
+
+    SECTION("PgDn baja una altura del campo y el foco se queda en él") {
+        REQUIRE(h.key(ftxui::Event::PageDown));
+        screen = h.draw(kSettingsWidthWithSidebar);
+        CHECK(find(screen, "fila 01").x < 0);
+        CHECK(h.settings.paste_target() == chatbot::cli::PasteTarget::MultiLine);
+        // Escribir no salta de regreso: el cursor bajó con la vista.
+        REQUIRE(h.key(ftxui::Event::Character("x")));
+        screen = h.draw(kSettingsWidthWithSidebar);
+        CHECK(find(screen, "fila 01").x < 0);
+        REQUIRE(h.key(ftxui::Event::PageUp));
+        screen = h.draw(kSettingsWidthWithSidebar);
+        CHECK(find(screen, "fila 01").x == top.x);
+        CHECK(find(screen, "fila 01").y == top.y);
+    }
+    SECTION("La rueda sobre el campo mueve la vista") {
+        REQUIRE(h.mouse(top, ftxui::Mouse::WheelDown));
+        screen = h.draw(kSettingsWidthWithSidebar);
+        CHECK(find(screen, "fila 01").x < 0);
+        CHECK(find(screen, "fila 04").y == top.y);
+    }
+    SECTION("Clic en el campo coloca el cursor") {
+        const Position third = find(screen, "fila 03");
+        REQUIRE(third.x >= 0);
+        REQUIRE(h.mouse({third.x + 4, third.y}, ftxui::Mouse::Left));
+        REQUIRE(h.key(ftxui::Event::Character("·")));
+        CHECK(find(h.draw(kSettingsWidthWithSidebar), "fila· 03").x >= 0); // Antes del espacio.
+    }
+}
+
+TEST_CASE("configuración: un \\t de config.json se ve como 4 espacios y se guarda intacto",
+          "[ajustes][sistema][ajuste]") {
+    // resolve_system_prompt no lo cambia y validate_system_prompt acepta "\t":
+    // así llega al campo un system_prompt escrito a mano en config.json.
+    const chatbot_test::NoColorGuard environment(nullptr);
+    Harness h;
+    h.open("modelo-0", {}, "uno\tdos");
+    h.go_to_prompt();
+    auto screen = h.draw(kSettingsWidthWithSidebar);
+    CHECK(find(screen, "uno    dos").x >= 0);       // Un glifo de 4 celdas.
+    CHECK(find(screen, "\xEF\xBF\xBD").x < 0);       // Nunca U+FFFD.
+    CHECK(find(screen, "carácter de control").x < 0); // Sin aviso.
+    CHECK(find(screen, "7 / 8000 bytes").x >= 0);
+    // ← y → lo saltan entero.
+    REQUIRE(h.key(ftxui::Event::End));
+    REQUIRE(h.key(ftxui::Event::ArrowLeft));
+    REQUIRE(h.key(ftxui::Event::ArrowLeft));
+    REQUIRE(h.key(ftxui::Event::ArrowLeft));
+    REQUIRE(h.key(ftxui::Event::ArrowLeft)); // Antes del "\t".
+    REQUIRE(h.key(ftxui::Event::Character("!")));
+    h.save();
+    CHECK(h.prompt_saves == 1);
+    CHECK(h.saved_prompt == std::string{"uno!\tdos"});
 }

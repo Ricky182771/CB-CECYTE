@@ -7,9 +7,11 @@
 
 namespace chatbot::cli {
 
-/// Estilo de la caja de entrada, para InputOption::transform (main.cpp lo
-/// adapta desde ftxui::InputState: aquí van sus campos sueltos para no
-/// depender de ftxui::component). A diferencia del transform por defecto de
+/// Estilo de los campos de una línea (ftxui::Input) de la configuración, para
+/// InputOption::transform (settings_screen.cpp lo adapta desde
+/// ftxui::InputState: aquí van sus campos sueltos para no depender de
+/// ftxui::component). La caja de la conversación y las instrucciones son un
+/// TextArea (text_area.h), que dibuja su placeholder con el mismo color. A diferencia del transform por defecto de
 /// FTXUI v7.0.3 (InputOption::Default), no invierte la línea con el foco ni
 /// la subraya con el ratón encima: el fondo invertido toma el color del texto
 /// del tema y choca con temas translúcidos. El cursor no depende de esto: lo

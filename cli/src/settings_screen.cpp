@@ -26,6 +26,8 @@ constexpr int kHintRows = 2;
 constexpr int kSectionsWidth = 28;
 /// Ancho del campo de la key.
 constexpr int kKeyWidth = 24;
+/// Alto mínimo del campo de las instrucciones (si la terminal lo permite).
+constexpr int kPromptRows = 5;
 /// "Símbolos: Automático / Unicode / Sencillos", en ese orden.
 constexpr SymbolMode kSymbolModes[] = {SymbolMode::Auto, SymbolMode::Unicode,
                                        SymbolMode::Simple};
@@ -192,14 +194,21 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
                                         (void)settings_->set_model(model_text_);
                                     }
                                 }));
-    // Varias líneas: Enter agrega un salto de línea (InputOption::multiline).
-    ftxui::InputOption prompt_option = field_option(palette_, [] {});
-    prompt_option.multiline = true;
-    prompt_input_ = ftxui::Input(&prompt_text_, "escribe las instrucciones", prompt_option);
+    // Varias líneas con ajuste de línea: Enter agrega un salto de línea, como
+    // antes con InputOption::multiline. Ocupa el alto que deja la sección
+    // (al menos kPromptRows filas, menos si la terminal no da) y se desplaza
+    // con su barra.
+    TextAreaOption prompt_option;
+    prompt_option.palette = &palette_;
+    prompt_option.min_rows = kPromptRows;
+    prompt_option.max_rows = 0;
+    prompt_option.enter = EnterKey::Newline;
+    prompt_option.placeholder = [](int) { return std::string{"escribe las instrucciones"}; };
+    prompt_input_ = make_text_area(std::move(prompt_option));
     restore_button_ = ftxui::Button(
         "Restaurar predeterminado",
         [this] {
-            prompt_text_ = std::string{kDefaultSystemPrompt};
+            prompt_input_->set_text(std::string{kDefaultSystemPrompt}, 0);
             status_.clear();
         },
         button_option(palette_));
@@ -269,7 +278,8 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
         }
     }
     saved_prompt_ = system_prompt;
-    prompt_text_ = std::move(system_prompt);
+    // Con el cursor al principio: se ve el inicio de las instrucciones.
+    prompt_input_->set_text(std::move(system_prompt), 0);
     search_ = std::move(search);
     search_key_text_.clear();
     provider_selected_ = static_cast<int>(settings_->provider());
@@ -402,7 +412,8 @@ void SettingsScreen::save() {
     // Las instrucciones y la key de búsqueda se revisan antes de guardar
     // nada: un error no deja guardada solo una parte.
     if (prompt_changed) {
-        if (const std::optional<std::string> error = validate_system_prompt(prompt_text_)) {
+        if (const std::optional<std::string> error =
+                validate_system_prompt(prompt_input_->text())) {
             status_ = *error;
             return;
         }
@@ -435,11 +446,11 @@ void SettingsScreen::save() {
     }
     if (prompt_changed) {
         if (const std::optional<std::string> error =
-                on_save_system_prompt_(system_prompt_to_store(prompt_text_))) {
+                on_save_system_prompt_(system_prompt_to_store(prompt_input_->text()))) {
             status_ = *error;
             return;
         }
-        saved_prompt_ = prompt_text_;
+        saved_prompt_ = prompt_input_->text();
     }
     if (const auto update = search_.credential_update()) {
         if (const std::optional<std::string> error = on_save_search_key_(update->second)) {
@@ -740,30 +751,32 @@ ftxui::Element SettingsScreen::render_appearance() const {
 
 ftxui::Element SettingsScreen::render_system_prompt() const {
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
-    const std::size_t bytes = prompt_text_.size();
+    const std::string& prompt = prompt_input_->text();
+    const std::size_t bytes = prompt.size();
     ftxui::Element counter = ftxui::text(std::to_string(bytes) + " / " +
                                          std::to_string(kMaxSystemPromptBytes) + " bytes");
     counter = bytes > kMaxSystemPromptBytes ? counter | ftxui::bold : counter | notice;
 
-    // Lo que impediría guardar o merece un aviso, sin esperar a Guardar. El
-    // campo lo dibuja FTXUI, que omite los controles sin dejar rastro: aquí
-    // se avisa de ellos. Un error que ya está en la línea de estado no se
-    // repite.
+    // Lo que impediría guardar o merece un aviso, sin esperar a Guardar (el
+    // campo dibuja un control como U+FFFD, pero no dice por qué no se
+    // guardaría). Un error que ya está en la línea de estado no se repite.
     ftxui::Elements checks;
-    if (const std::optional<std::string> error = validate_system_prompt(prompt_text_);
+    if (const std::optional<std::string> error = validate_system_prompt(prompt);
         error.has_value() && *error != status_) {
         checks.push_back(ftxui::paragraph(clean(*error)) | ftxui::bold);
     }
     if (const std::optional<std::string> warning =
-            system_prompt_limit_warning(prompt_text_, base_.history_limit_bytes)) {
+            system_prompt_limit_warning(prompt, base_.history_limit_bytes)) {
         checks.push_back(ftxui::paragraph(clean(*warning)) | notice);
     }
 
     return ftxui::vbox({
         ftxui::text("Instrucciones del sistema") | ftxui::bold,
         ftxui::text(""),
+        // El campo ocupa el alto que sobra (flex) y se puede encoger: los
+        // botones de abajo nunca quedan fuera de la pantalla.
         ftxui::hbox({label("Texto", prompt_input_->Focused(), palette_),
-                     prompt_input_->Render() | ftxui::flex}) |
+                     prompt_input_->Render()}) |
             ftxui::flex,
         ftxui::hbox({label("", false, palette_), std::move(counter)}),
         ftxui::hbox({label("", false, palette_),

@@ -5,6 +5,7 @@
 #include "paste.h"
 #include "provider_settings.h"
 #include "search_settings.h"
+#include "text_area.h"
 #include "theme.h"
 
 #include "chatbot/config.h"
@@ -13,6 +14,7 @@
 #include <ftxui/component/event.hpp>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -108,7 +110,9 @@ private:
     /// Tema y fondo elegidos en el formulario.
     [[nodiscard]] Appearance chosen_appearance() const;
     [[nodiscard]] bool appearance_dirty() const;
-    [[nodiscard]] bool system_prompt_dirty() const { return prompt_text_ != saved_prompt_; }
+    [[nodiscard]] bool system_prompt_dirty() const {
+        return prompt_input_->text() != saved_prompt_;
+    }
     /// El fondo se puede elegir (el tema elegido tiene fondo propio).
     [[nodiscard]] bool background_enabled() const;
 
@@ -145,7 +149,6 @@ private:
     std::string key_text_;
     std::string filter_text_;
     std::string model_text_;
-    std::string prompt_text_;
     std::string search_key_text_;
     mutable std::vector<ftxui::Box> model_row_boxes_;
     mutable ftxui::Box models_box_{0, -1, 0, -1};
@@ -160,7 +163,8 @@ private:
     ftxui::Component filter_input_;
     ftxui::Component refresh_button_;
     ftxui::Component model_input_;
-    ftxui::Component prompt_input_;
+    /// Varias líneas con ajuste de línea (text_area.h): el texto es suyo.
+    std::shared_ptr<TextArea> prompt_input_;
     ftxui::Component restore_button_;
     ftxui::Component search_key_input_;
     ftxui::Component save_button_;
