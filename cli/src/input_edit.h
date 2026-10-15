@@ -6,10 +6,11 @@
 
 namespace chatbot::cli {
 
-// Edición de la caja de la conversación (sin FTXUI). El cursor es el de
-// ftxui::Input (InputOption::cursor_position): un índice en bytes de text.
+// Edición de la caja de la conversación (sin FTXUI). El cursor es el del
+// TextArea de la caja (text_area.h): un índice en bytes de text.
 
-/// Líneas que la caja crece como máximo (además del tercio de la terminal).
+/// Filas en pantalla que la caja crece como máximo (además del tercio de la
+/// terminal).
 inline constexpr int kMaxInputLines = 8;
 
 /// Alt+Enter: la terminal manda ESC y el Enter, y FTXUI v7.0.3 lo entrega
@@ -24,15 +25,10 @@ inline constexpr std::string_view kAltEnterLf = "\x1B\n";
 /// Un cursor fuera de rango se acota a [0, text.size()].
 bool backslash_newline(std::string& text, int& cursor);
 
-/// Inserta piece en el cursor y deja el cursor después de lo insertado.
-void insert_at_cursor(std::string& text, int& cursor, std::string_view piece);
-
-/// Cursor al final del texto (después de vaciar o restaurar la caja).
-[[nodiscard]] int cursor_at_end(std::string_view text);
-
-/// Alto de la caja: una fila por línea de text, hasta kMaxInputLines o un
-/// tercio de terminal_rows (lo menor), y al menos 1.
-[[nodiscard]] int input_height(std::string_view text, int terminal_rows);
+/// Tope del alto de la caja: kMaxInputLines o un tercio de terminal_rows (lo
+/// menor), y al menos 1. La caja crece con sus filas en pantalla (con el
+/// ajuste de línea) hasta aquí y después se desplaza.
+[[nodiscard]] int input_max_rows(int terminal_rows);
 
 /// Placeholder de la caja (con configuración): el más largo que cabe en
 /// columns columnas, siempre con cómo hacer un salto de línea si cabe y,

@@ -5,9 +5,8 @@
 #include <string>
 
 using chatbot::cli::backslash_newline;
-using chatbot::cli::input_height;
+using chatbot::cli::input_max_rows;
 using chatbot::cli::input_placeholder;
-using chatbot::cli::insert_at_cursor;
 
 TEST_CASE("\\ + Enter cambia la diagonal antes del cursor por un salto", "[input_edit]") {
     SECTION("Al final del texto") {
@@ -61,43 +60,18 @@ TEST_CASE("\\ + Enter cambia la diagonal antes del cursor por un salto", "[input
     }
 }
 
-TEST_CASE("insert_at_cursor inserta y deja el cursor después", "[input_edit]") {
-    std::string text = "ab";
-    int cursor = 1;
-    insert_at_cursor(text, cursor, "\n");
-    CHECK(text == "a\nb");
-    CHECK(cursor == 2);
-    insert_at_cursor(text, cursor, "ñ");
-    CHECK(text == "a\nñb");
-    CHECK(cursor == 4);
-    cursor = 50;
-    insert_at_cursor(text, cursor, "!");
-    CHECK(text == "a\nñb!");
-    CHECK(cursor == 6);
-    CHECK(chatbot::cli::cursor_at_end(text) == 6);
-}
-
-TEST_CASE("input_height crece con las líneas hasta el tope", "[input_edit]") {
-    SECTION("Una línea, o vacía") {
-        CHECK(input_height("", 40) == 1);
-        CHECK(input_height("hola", 40) == 1);
-    }
-    SECTION("Una fila por línea") {
-        CHECK(input_height("a\nb", 40) == 2);
-        CHECK(input_height("a\nb\nc\n", 40) == 4);
-    }
-    SECTION("Hasta 8 líneas") {
-        CHECK(input_height(std::string(7, '\n'), 40) == 8);
-        CHECK(input_height(std::string(30, '\n'), 40) == 8);
+TEST_CASE("input_max_rows: hasta 8 filas o un tercio de la terminal", "[input_edit]") {
+    SECTION("Hasta 8 filas") {
+        CHECK(input_max_rows(40) == 8);
+        CHECK(input_max_rows(24) == 8);
     }
     SECTION("O un tercio de la terminal, lo que sea menor") {
-        CHECK(input_height(std::string(30, '\n'), 24) == 8);
-        CHECK(input_height(std::string(30, '\n'), 18) == 6);
-        CHECK(input_height(std::string(30, '\n'), 10) == 3);
+        CHECK(input_max_rows(18) == 6);
+        CHECK(input_max_rows(10) == 3);
     }
     SECTION("Siempre al menos una fila") {
-        CHECK(input_height(std::string(30, '\n'), 2) == 1);
-        CHECK(input_height("a\nb", 0) == 1);
+        CHECK(input_max_rows(2) == 1);
+        CHECK(input_max_rows(0) == 1);
     }
 }
 

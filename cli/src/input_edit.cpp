@@ -49,18 +49,8 @@ bool backslash_newline(std::string& text, int& cursor) {
     return true;
 }
 
-void insert_at_cursor(std::string& text, int& cursor, std::string_view piece) {
-    const std::size_t at = clamped(text, cursor);
-    text.insert(at, piece);
-    cursor = static_cast<int>(at + piece.size());
-}
-
-int cursor_at_end(std::string_view text) { return static_cast<int>(text.size()); }
-
-int input_height(std::string_view text, int terminal_rows) {
-    const int lines = static_cast<int>(std::count(text.begin(), text.end(), '\n')) + 1;
-    const int limit = std::max(1, std::min(kMaxInputLines, terminal_rows / 3));
-    return std::min(lines, limit);
+int input_max_rows(int terminal_rows) {
+    return std::max(1, std::min(kMaxInputLines, terminal_rows / 3));
 }
 
 std::string_view input_placeholder(int columns) {
