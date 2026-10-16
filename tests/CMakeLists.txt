@@ -102,6 +102,21 @@ chatbot_set_warnings(chatbot_ui_tests)
 chatbot_windows_manifest(chatbot_ui_tests)
 add_test(NAME chatbot_ui_tests COMMAND chatbot_ui_tests)
 
+# Pegado entre corchetes por una pseudoterminal a chatbot_paste_probe, un App
+# mínimo con BracketedPaste como main.cpp: la regresión del parche de FTXUI
+# (cmake/patches/, 200 KB) y la salida de emergencia sin 201~. Solo POSIX: el
+# parche solo cambia la lectura de POSIX y la prueba usa posix_openpt y fork.
+if(NOT WIN32)
+    add_executable(chatbot_paste_probe paste_probe.cpp)
+    target_compile_features(chatbot_paste_probe PRIVATE cxx_std_20)
+    target_link_libraries(chatbot_paste_probe PRIVATE chatbot_cli_lib ftxui::component)
+    chatbot_set_warnings(chatbot_paste_probe)
+    target_sources(chatbot_ui_tests PRIVATE test_paste_pty.cpp)
+    target_compile_definitions(chatbot_ui_tests PRIVATE
+        CHATBOT_PASTE_PROBE="$<TARGET_FILE:chatbot_paste_probe>")
+    add_dependencies(chatbot_ui_tests chatbot_paste_probe)
+endif()
+
 # Modo portable con el ejecutable real: copia chatbot junto a un
 # chatbot.portable y lo arranca sin key ni terminal (portable_startup.cmake).
 add_test(NAME chatbot_portable_writable
