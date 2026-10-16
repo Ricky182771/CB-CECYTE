@@ -1045,7 +1045,18 @@ int main() {
         dragging = false;
     };
 
+    // Pegado entre corchetes: acumula lo que llega entre 200~ y 201~ (ver root).
+    chatbot::cli::BracketedPaste bracketed_paste;
+
     const ftxui::Component layout = ftxui::Renderer(split, [&] {
+        // Con un pegado abierto, cada cuadro le dice a BracketedPaste que el
+        // loop ya procesó lo que leyó: su salida de emergencia solo cuenta ese
+        // tiempo, no lo que FTXUI tarda en parsear un lote grande. Y pide el
+        // siguiente cuadro, para que los haya aunque la terminal no mande nada.
+        if (bracketed_paste.active()) {
+            bracketed_paste.frame();
+            screen.RequestAnimationFrame();
+        }
         const int width = ftxui::Terminal::Size().dimx;
         // Al cruzar los 100 columnas: por debajo se oculta sola; por encima
         // reaparece solo si la había ocultado el ancho (no Ctrl+B).
@@ -1191,8 +1202,8 @@ int main() {
     // Pegado entre corchetes (DECSET 2004): se activa con la primera tarea
     // del loop, cuando FTXUI ya instaló la terminal (en conhost, el modo VT
     // de salida lo activa FTXUI) y se desactiva antes de salir del loop.
-    // Todo va por std::cout, el canal de FTXUI, entre cuadros.
-    chatbot::cli::BracketedPaste bracketed_paste;
+    // Todo va por std::cout, el canal de FTXUI, entre cuadros. El acumulador
+    // (bracketed_paste) se declara antes de layout, que le avisa de cada cuadro.
     bool paste_mode_lost = false; ///< POSIX: se suspendió con Ctrl+Z (se desactivó).
     const auto quit = [&] {
         (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOff);
@@ -1273,9 +1284,9 @@ int main() {
             return true;
         }
         // Lo que llega entre las marcas del pegado es texto, aunque sea
-        // Enter, Tab o Ctrl+C. Sin 201~ y tras una pausa de más de
-        // kPasteIdleLimit, el pegado se entrega y este evento sigue normal
-        // (así Ctrl+C siempre puede salir).
+        // Enter, Tab o Ctrl+C. Sin 201~ y tras más de kPasteIdleLimit con
+        // cuadros y sin entrada, el pegado se entrega y este evento sigue
+        // normal (así Ctrl+C siempre puede salir).
         const chatbot::cli::BracketedPaste::Step pasted = bracketed_paste.feed(
             paste_key(event), event.is_character() ? event.character() : std::string{});
         if (pasted.text.has_value()) {

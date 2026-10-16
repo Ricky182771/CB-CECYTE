@@ -90,8 +90,9 @@ enum class PasteKey {
     Other,       ///< Cualquier otro evento especial.
 };
 
-/// Pausa que cierra un pegado sin marca de fin: si entre un evento del
-/// pegado y el siguiente evento pasa más que esto, el pegado se da por
+/// Pausa que cierra un pegado sin marca de fin: si después del último evento
+/// del pegado la interfaz siguió dibujando cuadros sin recibir nada durante
+/// más que esto (BracketedPaste::frame), el siguiente evento da el pegado por
 /// terminado (una terminal que nunca mandó 201~ no deja la app atorada).
 inline constexpr std::chrono::milliseconds kPasteIdleLimit{500};
 
@@ -115,10 +116,15 @@ public:
     };
 
     /// Procesa un evento. character: el texto de un PasteKey::Character.
-    /// - Salida de emergencia, sin temporizador: si hay un pegado y pasó más
-    ///   de kPasteIdleLimit desde su último evento, se entrega lo acumulado
-    ///   (como si hubiera llegado End) y este evento se procesa como si no
-    ///   hubiera pegado: una tecla no se consume y sigue a la interfaz.
+    /// - Salida de emergencia, sin temporizador: si hay un pegado y hubo un
+    ///   cuadro (frame) más de kPasteIdleLimit después de su último evento,
+    ///   se entrega lo acumulado (como si hubiera llegado End) y este evento
+    ///   se procesa como si no hubiera pegado: una tecla no se consume y
+    ///   sigue a la interfaz. Solo cuenta el tiempo hasta el último cuadro,
+    ///   no el que pasa entre dos eventos: antes de entregar el primer evento
+    ///   de un lote, FTXUI parsea el lote entero (con el parche de
+    ///   cmake/patches/, hasta 64 KiB por vuelta; 770 ms en asan) sin dibujar,
+    ///   y esa espera no es una pausa de la terminal.
     /// - Start empieza a acumular; si ya había un pegado sin End, ese se
     ///   entrega completo y empieza otro.
     /// - End entrega lo acumulado; un End sin Start se descarta.
@@ -127,6 +133,12 @@ public:
     /// - Passthrough nunca se consume; solo puede cerrar un pegado por la
     ///   pausa.
     Step feed(PasteKey key, std::string_view character = {});
+
+    /// La interfaz dibujó un cuadro: el loop ya procesó todo lo que había
+    /// leído de la terminal. main.cpp la llama en cada cuadro mientras haya un
+    /// pegado abierto y pide el siguiente con RequestAnimationFrame, para que
+    /// siga habiendo cuadros aunque la terminal no mande nada.
+    void frame();
 
     /// true entre Start y End.
     [[nodiscard]] bool active() const { return active_; }
@@ -138,7 +150,8 @@ private:
     Step finish();
 
     Clock clock_;
-    std::chrono::steady_clock::time_point last_{}; ///< Último evento del pegado.
+    std::chrono::steady_clock::time_point last_{};       ///< Último evento del pegado.
+    std::chrono::steady_clock::time_point last_frame_{}; ///< Último cuadro (frame).
     bool active_ = false;
     bool truncated_ = false;
     std::string buffer_;
