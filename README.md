@@ -20,7 +20,7 @@ Ubuntu/Debian:
 sudo apt install g++ cmake ninja-build libcurl4-openssl-dev nlohmann-json3-dev catch2
 ```
 
-La interfaz usa [FTXUI](https://github.com/ArthurSonzogni/FTXUI) 7.x. Si no está instalada, CMake descarga la v7.0.3 al configurar. Para el markdown usa [md4c](https://github.com/mity/md4c) v0.6.0, que CMake siempre descarga (los paquetes de las distribuciones son versiones anteriores, sin notas al pie). Por eso la primera vez necesitas conexión a internet.
+La interfaz usa [FTXUI](https://github.com/ArthurSonzogni/FTXUI) v7.0.3, que CMake siempre descarga al configurar y le aplica un arreglo de upstream que todavía no sale en ninguna versión publicada ([#1351](https://github.com/ArthurSonzogni/FTXUI/pull/1351), en `cmake/patches/`): sin él, un pegado de 200 KB tarda 26 s en entrar. Por eso no usa la FTXUI que tenga instalada el sistema. Para el markdown usa [md4c](https://github.com/mity/md4c) v0.6.0, que CMake siempre descarga (los paquetes de las distribuciones son versiones anteriores, sin notas al pie). Por eso la primera vez necesitas conexión a internet y `git`, con el que CMake descarga las dos y aplica el parche.
 
 Las pruebas necesitan Catch2 v3:
 
