@@ -1,21 +1,35 @@
 # FTXUI solo la usa la interfaz (cli/); core/ no depende de ella (sección 5).
-# Mínimo 7.0.2: antes, App::PostEvent no era seguro entre hilos y aquí se
-# llama desde el hilo de trabajo. FTXUI declara SameMajorVersion, así que esto
-# acepta cualquier 7.x >= 7.0.2. Si no está instalada, FetchContent con
-# versión fija (nunca master/main).
-find_package(ftxui 7.0.2 QUIET)
-if(NOT ftxui_FOUND)
-    include(FetchContent)
-    set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        ftxui
-        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-        GIT_TAG v7.0.3
-        GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(ftxui)
-endif()
+# Siempre por FetchContent: la v7.0.3 publicada más el parche del #1351 de
+# upstream (cmake/patches/ftxui-7.0.3-drain-input.patch), que lee toda la
+# entrada disponible en cada vuelta; sin él, un pegado de 200 KB tarda 26 s en
+# entrar. Ninguna versión publicada lo trae, así que no se busca la FTXUI del
+# sistema (ni la de MSYS2): saldría sin el arreglo.
+# Cuando salga un release que incluya el #1351: se borran el parche, el
+# PATCH_COMMAND y apply_patch.cmake (si no lo usa nadie más), GIT_TAG pasa al
+# commit de esa versión y regresa, antes de FetchContent,
+#   find_package(ftxui <esa versión> QUIET)
+#   if(NOT ftxui_FOUND) ... endif()
+# con ese mínimo (cubre el 7.0.2 de antes: hasta ahí App::PostEvent no era
+# seguro entre hilos y aquí se llama desde el hilo de trabajo).
+# Fijada al commit de la etiqueta v7.0.3 (el del release publicado), no a la
+# etiqueta, para que el parche siempre caiga sobre el mismo código. Sin
+# GIT_SHALLOW: CMake solo lo documenta con nombre de rama o etiqueta, y el
+# clon completo pesa casi lo mismo (103 MB contra 101 MB: --no-single-branch
+# trae la punta de todas las ramas).
+find_package(Git REQUIRED)
+include(FetchContent)
+set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+    GIT_TAG f921fad208912747c17d129a8ef75ec7624b6eec # v7.0.3
+    PATCH_COMMAND "${CMAKE_COMMAND}"
+        "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+        "-DPATCH_FILE=${PROJECT_SOURCE_DIR}/cmake/patches/ftxui-7.0.3-drain-input.patch"
+        -P "${PROJECT_SOURCE_DIR}/cmake/apply_patch.cmake")
+FetchContent_MakeAvailable(ftxui)
 
 # md4c (parser de markdown en C, MIT). Siempre por FetchContent con versión
 # fija: su configuración de CMake no instala un archivo de versión, así que

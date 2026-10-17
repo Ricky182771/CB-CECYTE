@@ -171,20 +171,15 @@ uno, tal como la instala su paquete o como viene en sus fuentes.
 Generado por tools/package-windows.sh.
 EOF
 
-# Enlazadas estáticas desde las fuentes de FetchContent (o desde el paquete
-# de MSYS2, si CMake encontró FTXUI instalada).
+# Enlazadas estáticas desde las fuentes de FetchContent. FTXUI siempre sale de
+# ahí (cli/CMakeLists.txt ya no usa la de MSYS2): la v7.0.3 con el parche del
+# #1351 de upstream, que solo toca la lectura de la terminal en POSIX.
 ftxui_src=$build/_deps/ftxui-src
-if [[ -f $ftxui_src/LICENSE ]]; then
-    ftxui_version=$(sed -n 's/^ *VERSION \([0-9.]*\).*/\1/p' "$ftxui_src/CMakeLists.txt" | head -n 1)
-    section "FTXUI ${ftxui_version:-(versión desconocida)}" \
-        "Incluido como: enlazado estático en chatbot.exe (fuentes de FetchContent)" \
-        "$ftxui_src/LICENSE"
-elif pacman -Qq "${MINGW_PACKAGE_PREFIX:-mingw-w64-ucrt-x86_64}-ftxui" > /dev/null 2>&1; then
-    package_section "${MINGW_PACKAGE_PREFIX:-mingw-w64-ucrt-x86_64}-ftxui" \
-        "enlazado estático en chatbot.exe"
-else
-    section "FTXUI" "Incluido como: enlazado estático en chatbot.exe" ""
-fi
+ftxui_version=$(sed -n 's/^ *VERSION \([0-9.]*\).*/\1/p' "$ftxui_src/CMakeLists.txt" 2> /dev/null |
+    head -n 1 || true)
+section "FTXUI ${ftxui_version:-(versión desconocida)}" \
+    "Incluido como: enlazado estático en chatbot.exe (fuentes de FetchContent)"$'\n'"Con el parche del PR #1351 de FTXUI (https://github.com/ArthurSonzogni/FTXUI/pull/1351),"$'\n'"que solo cambia la lectura de la terminal en Linux y macOS: el código que se"$'\n'"compila para Windows es el de la versión publicada." \
+    "$(ls "$ftxui_src"/LICENSE 2> /dev/null || true)"
 
 md4c_src=$build/_deps/md4c-src
 section "md4c 0.6.0" \

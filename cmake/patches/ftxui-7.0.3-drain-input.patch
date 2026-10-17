@@ -1,0 +1,77 @@
+# Parche de FTXUI v7.0.3: en POSIX, lee toda la entrada disponible de la
+# terminal en cada vuelta del loop, en lugar de 128 bytes.
+#
+# Origen: commit 25a26ca69d4f2b13c1f39848b542b6d97d80793c de upstream,
+# "fix(app): drain available terminal input each frame (#1351)", de Arthur
+# Sonzogni, fusionado el 2026-09-19 (corrige el issue #1348):
+#   https://github.com/ArthurSonzogni/FTXUI/pull/1351
+# Es el cambio de src/ftxui/component/app.cpp tal cual, con los números de
+# línea de la v7.0.3. No trae la entrada de CHANGELOG.md, que no aplica sobre
+# la v7.0.3 ni se compila.
+#
+# Por qué: la v7.0.3 lee como mucho 128 bytes por vuelta y da 60 vueltas por
+# segundo (7.7 KB/s), así que un pegado de 200 KB tarda 26 s en entrar y una
+# ráfaga de la rueda del ratón retrasa las teclas que siguen. Con el parche,
+# 200 KB entran en 0.3 s. La rama de Windows (ReadConsoleInput) no cambia: ya
+# leía todos los registros pendientes.
+#
+# Temporal: se quita en cuanto salga un release de FTXUI que incluya el #1351
+# (ver AGENTS.md, sección 4, y cli/CMakeLists.txt).
+#
+# Lo aplica cmake/apply_patch.cmake con git apply, desde el PATCH_COMMAND de
+# FetchContent. git apply ignora estas líneas: el parche empieza en "diff --git".
+
+diff --git a/src/ftxui/component/app.cpp b/src/ftxui/component/app.cpp
+index 99b4a6da..b95f369c 100644
+--- a/src/ftxui/component/app.cpp
++++ b/src/ftxui/component/app.cpp
+@@ -1366,7 +1366,7 @@ size_t App::Internal::FetchTerminalEvents() {
+ #elif defined(__EMSCRIPTEN__)
+   // Read chars from the terminal.
+   // We configured it to be non blocking.
+-  std::array<char, 128> out{};
++  std::array<char, 4096> out{};
+   const ssize_t l = read(STDIN_FILENO, out.data(), out.size());
+   if (l <= 0) {
+     const auto timeout = std::chrono::steady_clock::now() - last_char_time;
+@@ -1394,18 +1394,30 @@ size_t App::Internal::FetchTerminalEvents() {
+   }
+   last_char_time = std::chrono::steady_clock::now();
+ 
+-  // Read chars from the terminal.
+-  std::array<char, 128> out{};
+-  const ssize_t l = read(tty_fd_, out.data(), out.size());
+-  if (l <= 0) {
+-    return 0;
+-  }
++  // Drain the available input, so that bursts (e.g. fast mouse wheel
++  // scrolling) do not accumulate across frames. The total is bounded to keep
++  // the frame responsive under a continuous input flood. See #1348.
++  constexpr size_t kMaxBytesPerFetch = 64 * 1024;
++  std::array<char, 4096> out{};
++  size_t total = 0;
++  while (total < kMaxBytesPerFetch) {
++    const ssize_t l = read(tty_fd_, out.data(), out.size());
++    if (l <= 0) {
++      break;
++    }
+ 
+-  // Convert the chars to events.
+-  for (ssize_t i = 0; i < l; ++i) {
+-    terminal_input_parser.Add(out.at(static_cast<size_t>(i)));
++    // Convert the chars to events.
++    for (ssize_t i = 0; i < l; ++i) {
++      terminal_input_parser.Add(out.at(static_cast<size_t>(i)));
++    }
++    total += static_cast<size_t>(l);
++
++    pfd.revents = 0;
++    if (poll(&pfd, 1, 0) <= 0) {
++      break;
++    }
+   }
+-  return (size_t)l;
++  return total;
+ #endif
+ }
+ 

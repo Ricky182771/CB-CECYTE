@@ -117,12 +117,16 @@ BracketedPaste::Step BracketedPaste::finish() {
     return step;
 }
 
+void BracketedPaste::frame() {
+    last_frame_ = clock_();
+}
+
 BracketedPaste::Step BracketedPaste::feed(PasteKey key, std::string_view character) {
     const std::chrono::steady_clock::time_point now = clock_();
-    // Un pegado sin fin después de una pausa: se entrega y el evento sigue
-    // como si no hubiera pegado.
+    // Un pegado sin fin después de una pausa con cuadros: se entrega y el
+    // evento sigue como si no hubiera pegado.
     Step closed;
-    if (active_ && now - last_ > kPasteIdleLimit) {
+    if (active_ && last_frame_ - last_ > kPasteIdleLimit) {
         closed = finish();
         closed.consumed = false;
     }

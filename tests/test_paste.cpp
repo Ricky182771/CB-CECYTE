@@ -183,6 +183,13 @@ void feed_text(BracketedPaste& paste, std::string_view text) {
     }
 }
 
+/// Pausa de la terminal: pasa el tiempo y la interfaz dibuja un cuadro al
+/// final (main.cpp los pide sin parar mientras hay un pegado abierto).
+void idle_with_frames(FakeClock& time, BracketedPaste& paste, std::chrono::milliseconds duration) {
+    time.now += duration;
+    paste.frame();
+}
+
 } // namespace
 
 TEST_CASE("BracketedPaste acumula entre las marcas", "[paste]") {
@@ -287,12 +294,12 @@ TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[past
     SECTION("Un pegado normal, sin pausas, no se cierra antes de tiempo") {
         (void)paste.feed(PasteKey::Start);
         for (const char* piece : {"a", "b", "c"}) {
-            time.now += 400ms; // Lento, pero sin pasar del límite.
+            idle_with_frames(time, paste, 400ms); // Lento, pero sin pasar del límite.
             const auto step = paste.feed(PasteKey::Character, piece);
             CHECK(step.consumed);
             CHECK_FALSE(step.text.has_value());
         }
-        time.now += 500ms; // Justo el límite todavía no cierra.
+        idle_with_frames(time, paste, 500ms); // Justo el límite todavía no cierra.
         CHECK(paste.feed(PasteKey::Return).consumed);
         const auto end = paste.feed(PasteKey::End);
         REQUIRE(end.text.has_value());
@@ -301,7 +308,7 @@ TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[past
     SECTION("Pausa de 600 ms y Ctrl+C: entrega lo pegado y Ctrl+C sigue (la app sale)") {
         (void)paste.feed(PasteKey::Start);
         feed_text(paste, "hola\nmundo");
-        time.now += 600ms;
+        idle_with_frames(time, paste, 600ms);
         // main.cpp traduce Ctrl+C (Event::CtrlC) como Other.
         const auto step = paste.feed(PasteKey::Other);
         CHECK_FALSE(step.consumed);
@@ -312,7 +319,7 @@ TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[past
     SECTION("Pausa y un carácter: va a la caja, no al pegado") {
         (void)paste.feed(PasteKey::Start);
         feed_text(paste, "pegado");
-        time.now += 600ms;
+        idle_with_frames(time, paste, 600ms);
         const auto step = paste.feed(PasteKey::Character, "x");
         CHECK_FALSE(step.consumed);
         REQUIRE(step.text.has_value());
@@ -328,7 +335,7 @@ TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[past
     SECTION("Pausa y otro inicio: entrega el anterior y empieza otro") {
         (void)paste.feed(PasteKey::Start);
         feed_text(paste, "uno");
-        time.now += 2s;
+        idle_with_frames(time, paste, 2s);
         const auto step = paste.feed(PasteKey::Start);
         CHECK(step.consumed);
         CHECK(*step.text == "uno");
@@ -339,7 +346,7 @@ TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[past
     SECTION("La pausa se mide desde el último evento del pegado, no desde el inicio") {
         (void)paste.feed(PasteKey::Start);
         for (int i = 0; i < 5; ++i) {
-            time.now += 300ms;
+            idle_with_frames(time, paste, 300ms);
             CHECK(paste.feed(PasteKey::Character, "a").consumed);
         }
         CHECK(*paste.feed(PasteKey::End).text == "aaaaa");
@@ -347,7 +354,7 @@ TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[past
     SECTION("El ratón tras la pausa también cierra, y no se consume") {
         (void)paste.feed(PasteKey::Start);
         feed_text(paste, "z");
-        time.now += 600ms;
+        idle_with_frames(time, paste, 600ms);
         const auto step = paste.feed(PasteKey::Passthrough);
         CHECK_FALSE(step.consumed);
         CHECK(*step.text == "z");
@@ -357,9 +364,55 @@ TEST_CASE("BracketedPaste: salida de emergencia tras una pausa sin 201~", "[past
         (void)paste.feed(PasteKey::Start);
         (void)paste.feed(PasteKey::Character, std::string(kMaxPasteBytes, 'a'));
         (void)paste.feed(PasteKey::Character, "b");
-        time.now += 600ms;
+        idle_with_frames(time, paste, 600ms);
         const auto step = paste.feed(PasteKey::Other);
         CHECK(step.truncated);
         CHECK(step.text->size() == kMaxPasteBytes);
+    }
+}
+
+TEST_CASE("BracketedPaste: la pausa solo cuenta el tiempo con cuadros", "[paste]") {
+    // FTXUI parsea un lote entero antes de entregar su primer evento, sin
+    // dibujar (con el parche de cmake/patches/, hasta 64 KiB por vuelta: 770 ms
+    // en asan y 960 ms en tsan). Esa espera no es una pausa de la terminal.
+    using namespace std::chrono_literals;
+    FakeClock time;
+    BracketedPaste paste{time.clock()};
+    (void)paste.feed(PasteKey::Start);
+    feed_text(paste, "uno");
+
+    SECTION("Sin cuadros no hay pausa, por larga que sea la espera") {
+        time.now += 2s;
+        const auto step = paste.feed(PasteKey::Character, "x");
+        CHECK(step.consumed);
+        CHECK_FALSE(step.text.has_value());
+        CHECK(*paste.feed(PasteKey::End).text == "unox");
+    }
+    SECTION("El cuadro de justo después del lote no cuenta la espera que sigue") {
+        // El cuadro que FTXUI dibuja al terminar el lote; luego, 900 ms
+        // parseando el siguiente.
+        idle_with_frames(time, paste, 1ms);
+        time.now += 900ms;
+        CHECK(paste.feed(PasteKey::Character, "x").consumed);
+        idle_with_frames(time, paste, 1ms);
+        time.now += 900ms;
+        CHECK(paste.feed(PasteKey::Return).consumed);
+        CHECK(*paste.feed(PasteKey::End).text == "unox\n");
+    }
+    SECTION("Cuenta el último cuadro: varios seguidos suman la pausa") {
+        for (int i = 0; i < 6; ++i) {
+            idle_with_frames(time, paste, 100ms); // 600 ms con cuadros.
+        }
+        const auto step = paste.feed(PasteKey::Character, "x");
+        CHECK_FALSE(step.consumed);
+        CHECK(*step.text == "uno");
+    }
+    SECTION("Los cuadros de antes del pegado no cuentan") {
+        (void)paste.feed(PasteKey::End);
+        idle_with_frames(time, paste, 10s);
+        (void)paste.feed(PasteKey::Start);
+        time.now += 1s; // Sin cuadros desde el inicio.
+        CHECK(paste.feed(PasteKey::Character, "y").consumed);
+        CHECK(*paste.feed(PasteKey::End).text == "y");
     }
 }
