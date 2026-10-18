@@ -1,7 +1,10 @@
 #include "chatbot/markdown/markdown.h"
 
+#include "parse_spans.h"
+
 #include <md4c.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <limits>
@@ -89,7 +92,9 @@ struct Frame {
 /// ancestros del tope) no se invalidan.
 class Builder {
 public:
-    Builder() {
+    /// source: el texto que se parsea, para reconocer qué punteros de md4c
+    /// caen dentro de él (spans()).
+    explicit Builder(std::string_view source) : source_(source) {
         root_.kind = Block::Kind::Document;
         footnotes_.kind = Block::Kind::Document;
         stack_.push_back(Frame{&root_, false});
@@ -102,6 +107,7 @@ public:
             return;
         case MD_BLOCK_FOOTNOTE_DEF_SECTION:
             stack_.push_back(Frame{&footnotes_, false});
+            top_ = kNoTop; // Las notas no son bloques de primer nivel.
             return;
         case MD_BLOCK_THEAD:
             in_table_head_ = true;
@@ -132,6 +138,7 @@ public:
         case MD_BLOCK_ADMONITION:
             block.kind = Block::Kind::Alert;
             block.info = lower(attribute_text(static_cast<MD_BLOCK_ADMONITION_DETAIL*>(detail)->type));
+            pending_attribute_ = &static_cast<MD_BLOCK_ADMONITION_DETAIL*>(detail)->type;
             break;
         case MD_BLOCK_UL:
             block.kind = Block::Kind::BulletList;
@@ -145,6 +152,9 @@ public:
             block.kind = Block::Kind::ListItem;
             block.task = li->is_task != 0;
             block.checked = block.task && (li->task_mark == 'x' || li->task_mark == 'X');
+            if (block.task) {
+                note(li->task_mark_offset, 1);
+            }
             break;
         }
         case MD_BLOCK_HR:
@@ -157,6 +167,7 @@ public:
         case MD_BLOCK_CODE:
             block.kind = Block::Kind::Code;
             block.info = attribute_text(static_cast<MD_BLOCK_CODE_DETAIL*>(detail)->lang);
+            pending_attribute_ = &static_cast<MD_BLOCK_CODE_DETAIL*>(detail)->info;
             break;
         case MD_BLOCK_TABLE:
             block.kind = Block::Kind::Table;
@@ -172,6 +183,16 @@ public:
         Block& parent = *stack_.back().block;
         parent.children.push_back(std::move(block));
         stack_.push_back(Frame{&parent.children.back(), false});
+        if (&parent == &root_) {
+            top_ = root_.children.size() - 1;
+            spans_.emplace_back();
+        }
+        // El lenguaje de una cerca y el tipo de una alerta están en la línea
+        // que abre el bloque, que no tiene otro texto.
+        if (pending_attribute_ != nullptr) {
+            note(*pending_attribute_);
+            pending_attribute_ = nullptr;
+        }
     }
 
     void leave_block(MD_BLOCKTYPE type) {
@@ -280,6 +301,7 @@ public:
     }
 
     void text(MD_TEXTTYPE type, std::string_view raw) {
+        note(raw.data(), raw.size());
         Block& top = *stack_.back().block;
         if (top.kind == Block::Kind::Code && !stack_.back().implicit) {
             top.code += type == MD_TEXT_NULLCHAR ? std::string{kReplacement} : sanitize(raw);
@@ -342,7 +364,41 @@ public:
         return document;
     }
 
+    /// Bytes de source que md4c entregó dentro de cada bloque de primer
+    /// nivel, en el orden de Document::blocks.
+    [[nodiscard]] const std::vector<detail::TextSpan>& spans() const { return spans_; }
+
 private:
+    static constexpr std::size_t kNoTop = std::numeric_limits<std::size_t>::max();
+
+    /// Marca bytes del bloque de primer nivel actual. md4c entrega punteros
+    /// al texto original, salvo los que arma él (saltos de línea, sangría
+    /// del código con sangría, el carácter de reemplazo): esos no caen en
+    /// source y se ignoran.
+    void note(const char* text, std::size_t size) {
+        if (top_ == kNoTop || text == nullptr || size == 0 || source_.empty()) {
+            return;
+        }
+        const char* begin = source_.data();
+        const char* end = begin + source_.size();
+        if (text < begin || text >= end) {
+            return;
+        }
+        const auto offset = static_cast<std::size_t>(text - begin);
+        note(offset, std::min(size, source_.size() - offset));
+    }
+
+    void note(std::size_t offset, std::size_t size) {
+        if (top_ == kNoTop || offset >= source_.size()) {
+            return;
+        }
+        detail::TextSpan& span = spans_[top_];
+        span.begin = std::min(span.begin, offset);
+        span.end = std::max(span.end, offset + size);
+    }
+
+    void note(const MD_ATTRIBUTE& attribute) { note(attribute.text, attribute.size); }
+
     static std::string lower(std::string text) {
         for (char& c : text) {
             if (c >= 'A' && c <= 'Z') {
@@ -411,6 +467,10 @@ private:
         stack_.push_back(Frame{&table->rows.back().back(), false});
     }
 
+    std::string_view source_;
+    std::vector<detail::TextSpan> spans_;
+    std::size_t top_ = kNoTop;
+    const MD_ATTRIBUTE* pending_attribute_ = nullptr;
     Block root_;
     Block footnotes_;
     std::vector<Frame> stack_;
@@ -596,12 +656,14 @@ std::string sanitize(std::string_view text) {
     return out;
 }
 
-Document parse(std::string_view markdown) {
+namespace detail {
+
+ParsedSpans parse_with_spans(std::string_view markdown) {
     try {
         if (markdown.size() > std::numeric_limits<MD_SIZE>::max()) {
-            return plain_document(markdown);
+            return ParsedSpans{plain_document(markdown), {}};
         }
-        Builder builder;
+        Builder builder{markdown};
         MD_PARSER parser{};
         parser.abi_version = 0;
         parser.flags = kParserFlags;
@@ -615,16 +677,23 @@ Document parse(std::string_view markdown) {
         const int result = md_parse(markdown.data(), static_cast<MD_SIZE>(markdown.size()), &parser,
                                     &builder);
         if (result != 0) {
-            return plain_document(markdown);
+            return ParsedSpans{plain_document(markdown), {}};
         }
-        return builder.finish();
+        std::vector<TextSpan> spans = builder.spans();
+        return ParsedSpans{builder.finish(), std::move(spans)};
     } catch (...) {
         try {
-            return plain_document(markdown);
+            return ParsedSpans{plain_document(markdown), {}};
         } catch (...) {
-            return Document{};
+            return ParsedSpans{};
         }
     }
+}
+
+} // namespace detail
+
+Document parse(std::string_view markdown) {
+    return detail::parse_with_spans(markdown).document;
 }
 
 } // namespace chatbot::md

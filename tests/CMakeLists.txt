@@ -77,7 +77,8 @@ add_test(NAME chatbot_tests COMMAND chatbot_tests)
 # chatbot::markdown sola: sin el núcleo, sin cli/ y sin FTXUI, como la usan
 # los addons.
 add_executable(chatbot_markdown_tests
-    test_markdown.cpp)
+    test_markdown.cpp
+    test_source_blocks.cpp)
 target_compile_features(chatbot_markdown_tests PRIVATE cxx_std_20)
 target_include_directories(chatbot_markdown_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(chatbot_markdown_tests PRIVATE chatbot::markdown Catch2::Catch2WithMain)

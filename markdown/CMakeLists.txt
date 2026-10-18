@@ -1,6 +1,6 @@
-# chatbot::markdown: markdown → árbol propio con md4c y filtrado del texto.
-# Sin FTXUI ni terminal: la usan la interfaz (cli/, que dibuja el árbol) y,
-# más adelante, los addons.
+# chatbot::markdown: markdown → árbol propio con md4c, filtrado del texto y
+# bloques de primer nivel con su rango en bytes. Sin FTXUI ni terminal: la
+# usan la interfaz (cli/, que dibuja el árbol) y los addons (addons/).
 
 # md4c (parser de markdown en C, MIT). Siempre por FetchContent con versión
 # fija: su configuración de CMake no instala un archivo de versión, así que
@@ -24,7 +24,8 @@ get_target_property(MD4C_INCLUDE_DIRS md4c INTERFACE_INCLUDE_DIRECTORIES)
 set_target_properties(md4c PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${MD4C_INCLUDE_DIRS}")
 
 add_library(chatbot_markdown STATIC
-    src/markdown.cpp)
+    src/markdown.cpp
+    src/source_blocks.cpp)
 
 add_library(chatbot::markdown ALIAS chatbot_markdown)
 
