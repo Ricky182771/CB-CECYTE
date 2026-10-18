@@ -2,6 +2,9 @@
 # nunca cli/ ni FTXUI (AGENTS.md, sección "Addons"). Este directorio solo se
 # incluye si algún addon está encendido (CHATBOT_BUILD_<ADDON>).
 
+# Capa común de los bots (chatbot::bot): se compila con cualquier addon.
+add_subdirectory(common)
+
 # Telegram: el cliente de la Bot API y el ejecutable llegan en el siguiente
 # PR (feat/telegram); por ahora CHATBOT_BUILD_TELEGRAM compila common/ y sus
 # pruebas.
