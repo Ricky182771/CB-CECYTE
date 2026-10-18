@@ -5,10 +5,10 @@
 // Con colores si la salida es una terminal; si no, texto plano. Sin --theme,
 // el tema por defecto del chatbot.
 
-#include "markdown.h"
 #include "markdown_view.h"
 #include "theme.h"
 
+#include "chatbot/markdown/markdown.h"
 #include "chatbot/platform.h"
 
 #include <ftxui/dom/elements.hpp>
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
 
     const chatbot::cli::Palette palette(*theme, background, symbols);
     ftxui::Element element =
-        chatbot::cli::md::render(chatbot::cli::md::parse(content.str()), width, palette) |
+        chatbot::md::render(chatbot::md::parse(content.str()), width, palette) |
         palette.base();
     ftxui::Screen screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
                                                  ftxui::Dimension::Fit(element, true));

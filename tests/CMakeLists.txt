@@ -34,7 +34,6 @@ add_executable(chatbot_tests
     test_history.cpp
     test_input_edit.cpp
     test_key_log.cpp
-    test_markdown.cpp
     test_models_loader.cpp
     test_paste.cpp
     test_provider_settings.cpp
@@ -74,6 +73,17 @@ chatbot_set_warnings(chatbot_tests)
 chatbot_windows_manifest(chatbot_tests)
 
 add_test(NAME chatbot_tests COMMAND chatbot_tests)
+
+# chatbot::markdown sola: sin el núcleo, sin cli/ y sin FTXUI, como la usan
+# los addons.
+add_executable(chatbot_markdown_tests
+    test_markdown.cpp)
+target_compile_features(chatbot_markdown_tests PRIVATE cxx_std_20)
+target_include_directories(chatbot_markdown_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(chatbot_markdown_tests PRIVATE chatbot::markdown Catch2::Catch2WithMain)
+chatbot_set_warnings(chatbot_markdown_tests)
+chatbot_windows_manifest(chatbot_markdown_tests)
+add_test(NAME chatbot_markdown_tests COMMAND chatbot_markdown_tests)
 
 # Pruebas de la vista de markdown: dibujan con ftxui::Screen (sin terminal).
 # Van aparte para que chatbot_tests no enlace FTXUI.

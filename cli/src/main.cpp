@@ -20,7 +20,6 @@
 #include "history_view.h"
 #include "input_edit.h"
 #include "key_log.h"
-#include "markdown.h"
 #include "models_loader.h"
 #include "paste.h"
 #include "provider_settings.h"
@@ -42,6 +41,7 @@
 #include "chatbot/credentials.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
+#include "chatbot/markdown/markdown.h"
 #include "chatbot/platform.h"
 #include "chatbot/result.h"
 #include "chatbot/tavily_search.h"
@@ -990,7 +990,7 @@ int main() {
         const std::string title =
             "Chatbot CECyTE — " + (model.empty() ? std::string{"sin configurar"} : model) + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
-                                          : chatbot::cli::md::sanitize(conversation.title()));
+                                          : chatbot::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
             chatbot::cli::title_bar(title, width, palette,
                                     {conversation.has_turns(), export_hover}, export_box),

@@ -1,10 +1,11 @@
 #include "history_view.h"
 #include "list_style.h"
-#include "markdown.h"
 #include "markdown_view.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
 #include "theme.h"
+
+#include "chatbot/markdown/markdown.h"
 
 #include "chatbot/config.h"
 #include "temp_dir.hpp"
@@ -37,7 +38,7 @@ using chatbot::cli::HistoryView;
 using chatbot::cli::Palette;
 using chatbot::cli::Theme;
 using chatbot::cli::ThemeColor;
-namespace md = chatbot::cli::md;
+namespace md = chatbot::md;
 
 /// Los colores RGB se convierten según lo que soporte la terminal (FTXUI
 /// v7.0.3, Color::Color): las pruebas fijan 24 bits para comparar RGB.

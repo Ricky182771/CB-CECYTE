@@ -1,5 +1,5 @@
-#ifndef CHATBOT_CLI_MARKDOWN_H
-#define CHATBOT_CLI_MARKDOWN_H
+#ifndef CHATBOT_MARKDOWN_MARKDOWN_H
+#define CHATBOT_MARKDOWN_MARKDOWN_H
 
 #include <cstddef>
 #include <cstdint>
@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace chatbot::cli::md {
+namespace chatbot::md {
 
 /// Estilos en línea; se combinan como bits.
 enum Style : std::uint8_t {
@@ -102,6 +102,6 @@ struct Document {
 /// desconocida se devuelve tal cual.
 [[nodiscard]] std::string decode_entity(std::string_view entity);
 
-} // namespace chatbot::cli::md
+} // namespace chatbot::md
 
-#endif // CHATBOT_CLI_MARKDOWN_H
+#endif // CHATBOT_MARKDOWN_MARKDOWN_H

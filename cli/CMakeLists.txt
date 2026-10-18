@@ -31,28 +31,8 @@ FetchContent_Declare(
         -P "${PROJECT_SOURCE_DIR}/cmake/apply_patch.cmake")
 FetchContent_MakeAvailable(ftxui)
 
-# md4c (parser de markdown en C, MIT). Siempre por FetchContent con versión
-# fija: su configuración de CMake no instala un archivo de versión, así que
-# find_package no puede garantizar la 0.6 (las distribuciones traen la 0.5.x,
-# sin notas al pie). Solo la biblioteca de parseo, estática. md4c pide CMake
-# >= 3.14 (CMP0077), así que sus option() respetan estas variables normales,
-# que solo valen dentro de cli/.
-set(BUILD_SHARED_LIBS OFF)
-set(BUILD_HTML_LIBRARY OFF)
-set(BUILD_MD2HTML_EXECUTABLE OFF)
-include(FetchContent)
-FetchContent_Declare(
-    md4c
-    GIT_REPOSITORY https://github.com/mity/md4c.git
-    GIT_TAG v0.6.0
-    GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(md4c)
-# Sus headers se incluyen como SYSTEM: no es código nuestro y no lleva
-# nuestros flags (funciona con CMake 3.21, sin FetchContent ... SYSTEM).
-get_target_property(MD4C_INCLUDE_DIRS md4c INTERFACE_INCLUDE_DIRECTORIES)
-set_target_properties(md4c PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${MD4C_INCLUDE_DIRS}")
-
-# Lógica de la conversación y del hilo de trabajo: solo depende del núcleo,
+# Lógica de la conversación y del hilo de trabajo: solo depende del núcleo
+# y de chatbot::markdown,
 # sin FTXUI, para poder probarla sin terminal.
 find_package(Threads REQUIRED)
 # Portapapeles: el lanzador de programas (posix_spawnp) solo en POSIX; la API
@@ -76,7 +56,6 @@ add_library(chatbot_cli_lib STATIC
     src/conversation_store.cpp
     src/downloads.cpp
     src/glyphs.cpp
-    src/markdown.cpp
     src/input_edit.cpp
     src/key_log.cpp
     src/models_loader.cpp
@@ -93,8 +72,8 @@ target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 find_package(nlohmann_json 3.9 REQUIRED)
 target_link_libraries(chatbot_cli_lib
-    PUBLIC chatbot::core Threads::Threads
-    PRIVATE nlohmann_json::nlohmann_json md4c)
+    PUBLIC chatbot::core chatbot::markdown Threads::Threads
+    PRIVATE nlohmann_json::nlohmann_json)
 chatbot_set_warnings(chatbot_cli_lib)
 # Windows: portapapeles y ventana de solo mensajes (user32). Biblioteca del
 # sistema, no una dependencia nueva.

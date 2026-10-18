@@ -1,4 +1,4 @@
-#include "markdown.h"
+#include "chatbot/markdown/markdown.h"
 
 #include <md4c.h>
 
@@ -7,7 +7,7 @@
 #include <limits>
 #include <utility>
 
-namespace chatbot::cli::md {
+namespace chatbot::md {
 namespace {
 
 /// Dialecto: GitHub (tablas, tachado, tareas, autolinks, alertas, notas al
@@ -627,4 +627,4 @@ Document parse(std::string_view markdown) {
     }
 }
 
-} // namespace chatbot::cli::md
+} // namespace chatbot::md

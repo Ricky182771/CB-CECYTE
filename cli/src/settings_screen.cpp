@@ -2,10 +2,10 @@
 
 #include "input_style.h"
 #include "list_style.h"
-#include "markdown.h"
 #include "system_prompt.h"
 
 #include "chatbot/error.h"
+#include "chatbot/markdown/markdown.h"
 
 #include <ftxui/component/component_options.hpp>
 #include <ftxui/dom/elements.hpp>

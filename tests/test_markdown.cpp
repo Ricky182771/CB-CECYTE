@@ -1,4 +1,4 @@
-#include "markdown.h"
+#include "chatbot/markdown/markdown.h"
 #include "performance.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -10,14 +10,14 @@
 
 namespace {
 
-using chatbot::cli::md::Align;
-using chatbot::cli::md::Block;
-using chatbot::cli::md::Document;
-using chatbot::cli::md::Link;
-using chatbot::cli::md::parse;
-using chatbot::cli::md::Run;
-using chatbot::cli::md::sanitize;
-namespace md = chatbot::cli::md;
+using chatbot::md::Align;
+using chatbot::md::Block;
+using chatbot::md::Document;
+using chatbot::md::Link;
+using chatbot::md::parse;
+using chatbot::md::Run;
+using chatbot::md::sanitize;
+namespace md = chatbot::md;
 
 /// Texto plano de los tramos (los saltos duros como '\n').
 std::string plain(const std::vector<Run>& runs) {

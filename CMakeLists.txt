@@ -52,6 +52,7 @@ endfunction()
 option(CHATBOT_BUILD_TESTS "Compilar las pruebas (requiere Catch2 v3)" ON)
 
 add_subdirectory(core)
+add_subdirectory(markdown)
 add_subdirectory(cli)
 add_subdirectory(tools)
 

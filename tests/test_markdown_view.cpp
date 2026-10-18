@@ -1,7 +1,8 @@
-#include "markdown.h"
 #include "markdown_view.h"
 #include "performance.hpp"
 #include "table_fixture.hpp"
+
+#include "chatbot/markdown/markdown.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -21,7 +22,7 @@
 
 namespace {
 
-namespace md = chatbot::cli::md;
+namespace md = chatbot::md;
 
 /// Dibuja el markdown con el ancho dado y el alto que necesite.
 ftxui::Screen draw(std::string_view markdown, int width) {

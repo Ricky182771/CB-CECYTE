@@ -12,7 +12,6 @@
 #include "conversation.h"
 #include "glyphs.h"
 #include "history_view.h"
-#include "markdown.h"
 #include "markdown_view.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
@@ -20,6 +19,8 @@
 #include "symbols_check.hpp"
 #include "theme.h"
 #include "title_bar.h"
+
+#include "chatbot/markdown/markdown.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -171,13 +172,13 @@ TEST_CASE("símbolos sencillos: bloques de código con botones", "[simbolos][bot
 
 TEST_CASE("símbolos sencillos: tareas de markdown con [x] y la sangría medida",
           "[simbolos][markdown]") {
-    const chatbot::cli::md::Document document = chatbot::cli::md::parse(
+    const chatbot::md::Document document = chatbot::md::parse(
         "- [x] una tarea hecha con texto largo que se parte\n- [ ] pendiente\n\n"
         "1. [x] numerada");
     for (const Palette& palette : chatbot_test::palettes_with(Symbols::Simple)) {
         INFO("paleta " << palette.key());
         const std::string text =
-            screen_text(draw_fit(chatbot::cli::md::render(document, 24, palette), 24));
+            screen_text(draw_fit(chatbot::md::render(document, 24, palette), 24));
         CAPTURE(text);
         CHECK(text.find("☑") == std::string::npos);
         CHECK(text.find("☐") == std::string::npos);
@@ -188,7 +189,7 @@ TEST_CASE("símbolos sencillos: tareas de markdown con [x] y la sangría medida"
         CHECK(text.find("[ ] pendiente") != std::string::npos);
         CHECK(text.find("1. [x] numerada") != std::string::npos);
     }
-    const std::string unicode = screen_text(draw_fit(chatbot::cli::md::render(document, 24, Palette{}), 24));
+    const std::string unicode = screen_text(draw_fit(chatbot::md::render(document, 24, Palette{}), 24));
     CHECK(unicode.find("☑ una tarea hecha con") != std::string::npos);
     CHECK(unicode.find("☐ pendiente") != std::string::npos);
 }

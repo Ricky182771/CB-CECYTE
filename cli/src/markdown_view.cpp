@@ -11,9 +11,17 @@
 #include <utility>
 #include <vector>
 
-namespace chatbot::cli::md {
+namespace chatbot::md {
 namespace {
 
+// La vista vive en chatbot::md junto al parser, pero los colores, los
+// símbolos y la numeración de los bloques son de cli/.
+using cli::code_blocks_of;
+using cli::terminal_palette;
+using cli::Glyph;
+using cli::Palette;
+using cli::Theme;
+using cli::ThemeColor;
 using ftxui::Element;
 using ftxui::Elements;
 
@@ -1125,4 +1133,4 @@ Element render(const Document& document, int width, const Palette& palette, int 
     return ftxui::vbox(std::move(rows));
 }
 
-} // namespace chatbot::cli::md
+} // namespace chatbot::md
