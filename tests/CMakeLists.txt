@@ -1,15 +1,4 @@
-# Catch2 v3 es obligatoria (sección 4). Se usa la del sistema si existe una
-# v3; si no, FetchContent con versión fija (nunca master/main).
-find_package(Catch2 3 QUIET COMPONENTS Catch2WithMain)
-if(NOT Catch2_FOUND)
-    include(FetchContent)
-    FetchContent_Declare(
-        Catch2
-        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG v3.16.0
-        GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(Catch2)
-endif()
+# Catch2 v3 se resuelve en el CMakeLists.txt raíz.
 
 find_package(nlohmann_json 3.9 REQUIRED)
 
@@ -142,3 +131,10 @@ if(NOT WIN32)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/portable_startup.cmake)
     set_tests_properties(chatbot_portable_readonly PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
 endif()
+
+# Dirección de las dependencias en los #include: nada fuera de addons/ los
+# incluye, y markdown/ y addons/ no incluyen cli/ ni FTXUI. Corre siempre,
+# también con los addons apagados (include_rules.cmake).
+add_test(NAME chatbot_include_rules
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/include_rules.cmake)
