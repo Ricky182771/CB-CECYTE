@@ -5,7 +5,6 @@
 #include "conversation.h"
 #include "conversation_store.h"
 #include "request_runner.h"
-#include "search_context.h"
 
 #include "blocking_transport.hpp"
 #include "fake_search_provider.hpp"
@@ -15,6 +14,7 @@
 
 #include "chatbot/chat_client.h"
 #include "chatbot/history.h"
+#include "chatbot/search_context.h"
 #include "chatbot/tavily_search.h"
 
 #include <nlohmann/json.hpp>
@@ -111,7 +111,7 @@ struct Session {
             const std::string date = "2026-10-09";
             REQUIRE(runner->start_with_search(
                 std::move(*messages), query, std::move(provider),
-                chatbot::cli::spanish_date(date),
+                chatbot::spanish_date(date),
                 [this, &outcome, date](RequestRunner::SearchContext found) {
                     // El runner mandó al modelo el bloque en lugar del comando.
                     outcome.history.back().content = found.block;

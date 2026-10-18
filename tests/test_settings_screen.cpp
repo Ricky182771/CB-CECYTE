@@ -1,5 +1,6 @@
 #include "settings_screen.h"
-#include "system_prompt.h"
+
+#include "chatbot/system_prompt.h"
 
 #include "blocking_transport.hpp"
 #include "fake_transport.hpp"
@@ -96,7 +97,7 @@ struct Harness {
         [this] { ++closes; }};
 
     void open(std::string model, std::string key = {},
-              std::string system_prompt = std::string{chatbot::cli::kDefaultSystemPrompt},
+              std::string system_prompt = std::string{chatbot::kDefaultSystemPrompt},
               std::size_t history_limit = 32000,
               chatbot::cli::SearchSettings search = {}) {
         chatbot::Config config;
@@ -475,7 +476,7 @@ TEST_CASE("configuración: instrucciones inválidas no se guardan y el error se 
         REQUIRE(h.key(ftxui::Event::Character("a")));
     }
     SECTION("largo") {
-        h.open("modelo-0", {}, std::string(chatbot::cli::kMaxSystemPromptBytes, 'a'));
+        h.open("modelo-0", {}, std::string(chatbot::kMaxSystemPromptBytes, 'a'));
         h.go_to_prompt();
         CHECK(find(h.draw(), "8000 / 8000 bytes").x >= 0);
         REQUIRE(h.key(ftxui::Event::Character("a")));
@@ -522,7 +523,7 @@ TEST_CASE("configuración: el error del guardado de instrucciones se muestra",
 TEST_CASE("configuración: guardar la key de búsqueda", "[ajustes][busqueda]") {
     const chatbot_test::NoColorGuard environment(nullptr);
     Harness h;
-    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+    h.open("modelo-0", {}, std::string{chatbot::kDefaultSystemPrompt}, 32000,
            chatbot::cli::SearchSettings{"", std::nullopt});
     h.go_to_search();
     auto screen = h.draw();
@@ -549,7 +550,7 @@ TEST_CASE("configuración: guardar la key de búsqueda", "[ajustes][busqueda]") 
 TEST_CASE("configuración: key de búsqueda guardada se ve enmascarada", "[ajustes][busqueda]") {
     const chatbot_test::NoColorGuard environment(nullptr);
     Harness h;
-    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+    h.open("modelo-0", {}, std::string{chatbot::kDefaultSystemPrompt}, 32000,
            chatbot::cli::SearchSettings{"tvly-guardada-secreta-0123456789abcd", std::nullopt});
     h.go_to_search();
     const auto screen = h.draw();
@@ -562,7 +563,7 @@ TEST_CASE("configuración: CHAT_SEARCH_API_KEY bloquea el campo de búsqueda",
           "[ajustes][busqueda]") {
     const chatbot_test::NoColorGuard environment(nullptr);
     Harness h;
-    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+    h.open("modelo-0", {}, std::string{chatbot::kDefaultSystemPrompt}, 32000,
            chatbot::cli::SearchSettings{"tvly-guardada-0000000000000000",
                                         std::string{"tvly-del-entorno-0000000000009876"}});
     h.go_to_search();
@@ -586,7 +587,7 @@ TEST_CASE("configuración: CHAT_SEARCH_API_KEY bloquea el campo de búsqueda",
 TEST_CASE("configuración: key de búsqueda incompleta no se guarda", "[ajustes][busqueda]") {
     const chatbot_test::NoColorGuard environment(nullptr);
     Harness h;
-    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+    h.open("modelo-0", {}, std::string{chatbot::kDefaultSystemPrompt}, 32000,
            chatbot::cli::SearchSettings{"", std::nullopt});
     h.go_to_search();
     REQUIRE(h.key(ftxui::Event::Tab));
@@ -604,7 +605,7 @@ TEST_CASE("configuración: descartar una key de búsqueda escrita pregunta",
           "[ajustes][busqueda]") {
     const chatbot_test::NoColorGuard environment(nullptr);
     Harness h;
-    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+    h.open("modelo-0", {}, std::string{chatbot::kDefaultSystemPrompt}, 32000,
            chatbot::cli::SearchSettings{"", std::nullopt});
     h.go_to_search();
     REQUIRE(h.key(ftxui::Event::Tab));
@@ -652,7 +653,7 @@ TEST_CASE("configuración: pegar una key con salto de línea, sin mostrarla", "[
     const chatbot_test::NoColorGuard environment(nullptr);
     using chatbot::cli::PasteTarget;
     Harness h;
-    h.open("modelo-0", {}, std::string{chatbot::cli::kDefaultSystemPrompt}, 32000,
+    h.open("modelo-0", {}, std::string{chatbot::kDefaultSystemPrompt}, 32000,
            chatbot::cli::SearchSettings{"", std::nullopt});
     h.go_to_search();
     REQUIRE(h.key(ftxui::Event::Tab)); // El campo de la key.
@@ -836,7 +837,7 @@ TEST_CASE("configuración: las instrucciones predeterminadas se leen completas c
         }
         shown += ' ';
     }
-    CHECK(words(shown) == words(std::string{chatbot::cli::kDefaultSystemPrompt}));
+    CHECK(words(shown) == words(std::string{chatbot::kDefaultSystemPrompt}));
 }
 
 TEST_CASE("configuración: el campo de las instrucciones mide al menos 5 filas",

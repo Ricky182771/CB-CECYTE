@@ -1,10 +1,10 @@
-#include "system_prompt.h"
+#include "chatbot/system_prompt.h"
 
 #include "chatbot/utf8.h"
 
 #include <cstdint>
 
-namespace chatbot::cli {
+namespace chatbot {
 namespace {
 
 /// Línea (desde 1) en la que está el byte offset.
@@ -73,4 +73,4 @@ std::optional<std::string> system_prompt_to_store(std::string_view text) {
     return std::string{text};
 }
 
-} // namespace chatbot::cli
+} // namespace chatbot

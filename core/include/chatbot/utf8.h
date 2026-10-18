@@ -9,7 +9,7 @@
 namespace chatbot::utf8 {
 
 // Decodificador UTF-8 mínimo: lo usan el núcleo (limpieza de los resultados
-// de búsqueda) y cli/ (validación de las instrucciones del sistema).
+// de búsqueda, validación de las instrucciones del sistema), cli/ y addons/.
 
 /// U+FFFD en UTF-8: reemplaza las secuencias inválidas.
 inline constexpr std::string_view kReplacement = "\xEF\xBF\xBD";

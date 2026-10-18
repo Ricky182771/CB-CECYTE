@@ -18,15 +18,18 @@ add_library(chatbot_core STATIC
     src/history.cpp
     src/published_date.cpp
     src/redirect.cpp
+    src/search_context.cpp
     src/config.cpp
     src/sleeper.cpp
     src/sse.cpp
+    src/system_prompt.cpp
     src/curl_transport.cpp
     src/chat_client.cpp
     src/url.cpp
     src/utf8.cpp
     src/web_search.cpp
-    src/tavily_search.cpp)
+    src/tavily_search.cpp
+    src/trimmed_completion.cpp)
 
 add_library(chatbot::core ALIAS chatbot_core)
 

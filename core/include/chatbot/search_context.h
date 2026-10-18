@@ -1,18 +1,14 @@
-#ifndef CHATBOT_CLI_SEARCH_CONTEXT_H
-#define CHATBOT_CLI_SEARCH_CONTEXT_H
+#ifndef CHATBOT_SEARCH_CONTEXT_H
+#define CHATBOT_SEARCH_CONTEXT_H
 
 #include <ctime>
 #include <string>
 #include <string_view>
 
-namespace chatbot::cli {
+namespace chatbot {
 
 /// Mensaje cuando la búsqueda no trae resultados: no se llama al modelo.
 inline constexpr std::string_view kNoSearchResults = "La búsqueda no encontró resultados.";
-
-/// Aviso cuando no hay key de búsqueda: /buscar no se envía.
-inline constexpr std::string_view kMissingSearchKey =
-    "Configura la key de búsqueda en Configuración (F2) → Búsqueda web";
 
 /// Nonce del bloque de resultados: 16 caracteres hexadecimales aleatorios,
 /// uno por bloque. Seguro entre hilos.
@@ -27,6 +23,6 @@ inline constexpr std::string_view kMissingSearchKey =
 /// forma, la devuelve tal cual; vacía, "fecha desconocida".
 [[nodiscard]] std::string spanish_date(std::string_view iso_date);
 
-} // namespace chatbot::cli
+} // namespace chatbot
 
-#endif // CHATBOT_CLI_SEARCH_CONTEXT_H
+#endif // CHATBOT_SEARCH_CONTEXT_H

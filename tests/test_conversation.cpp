@@ -1,11 +1,11 @@
 #include "conversation.h"
-#include "search_context.h"
-#include "system_prompt.h"
 
 #include "system_prompt_invariants.hpp"
 #include "temp_dir.hpp"
 
 #include "chatbot/error.h"
+#include "chatbot/search_context.h"
+#include "chatbot/system_prompt.h"
 #include "chatbot/types.h"
 #include "chatbot/web_search.h"
 
@@ -21,11 +21,11 @@
 
 namespace {
 
+using chatbot::kDefaultSystemPrompt;
 using chatbot::Role;
 using chatbot::cli::Conversation;
 using chatbot::cli::Entry;
 using chatbot::cli::EntryKind;
-using chatbot::cli::kDefaultSystemPrompt;
 
 chatbot::ChatError sample_error() {
     return chatbot::ChatError{chatbot::ErrorKind::ModelNotFound, 404,
@@ -607,7 +607,7 @@ Conversation searched_conversation(const std::string& nonce) {
     Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("/buscar quién ganó el último partido").has_value());
     const std::string block = chatbot::format_search_context(
-        sample_search(), chatbot::cli::spanish_date("2026-10-08"), nonce);
+        sample_search(), chatbot::spanish_date("2026-10-08"), nonce);
     REQUIRE(conversation.attach_search(sample_search(), "2026-10-08", block));
     conversation.append_delta("Ganó el local [1].");
     REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
@@ -743,7 +743,7 @@ TEST_CASE("Conversation: sin resultados es un aviso, no un error",
     Conversation conversation{kDefaultSystemPrompt};
     REQUIRE(conversation.submit("/buscar nada").has_value());
     const std::string restored = conversation.finish_error(chatbot::ChatError{
-        chatbot::ErrorKind::NoSearchResults, 0, std::string{chatbot::cli::kNoSearchResults},
+        chatbot::ErrorKind::NoSearchResults, 0, std::string{chatbot::kNoSearchResults},
         std::nullopt});
     CHECK(restored == "/buscar nada");
     REQUIRE(conversation.entries().size() == 2);
@@ -768,7 +768,7 @@ TEST_CASE("Conversation: sin resultados se detecta por el tipo, no por el texto"
         Conversation conversation{kDefaultSystemPrompt};
         REQUIRE(conversation.submit("/buscar nada").has_value());
         (void)conversation.finish_error(chatbot::ChatError{
-            chatbot::ErrorKind::BadResponse, 0, std::string{chatbot::cli::kNoSearchResults},
+            chatbot::ErrorKind::BadResponse, 0, std::string{chatbot::kNoSearchResults},
             std::nullopt});
         REQUIRE(conversation.entries().size() == 2);
         CHECK(conversation.entries()[1].kind == EntryKind::Error);
@@ -923,7 +923,7 @@ void check_restored(const Conversation& restored, const chatbot::cli::StoredConv
             ++searches;
             CHECK(sent == chatbot::format_search_context(
                               saved.search->response,
-                              chatbot::cli::spanish_date(saved.search->date),
+                              chatbot::spanish_date(saved.search->date),
                               "nonce-" + std::to_string(nonce++)));
         } else {
             CHECK(sent == saved.content);
@@ -987,7 +987,7 @@ TEST_CASE("Conversation: sesión larga de 300 turnos conserva el sistema",
             kind == TurnKind::SearchCancelPartial) {
             const chatbot::SearchResponse response = session_search(turn);
             const std::string block = chatbot::format_search_context(
-                response, chatbot::cli::spanish_date("2026-10-09"),
+                response, chatbot::spanish_date("2026-10-09"),
                 "turno-" + std::to_string(turn));
             REQUIRE(conversation.attach_search(response, "2026-10-09", block));
             CHECK(chatbot_test::check_invariants(conversation.history(), prompt, Ending::Sent,
@@ -1033,7 +1033,7 @@ TEST_CASE("Conversation: sesión larga de 300 turnos conserva el sistema",
         case TurnKind::SearchNoResults:
             CHECK(conversation.finish_error(
                       error_of(chatbot::ErrorKind::NoSearchResults,
-                               std::string{chatbot::cli::kNoSearchResults})) == typed);
+                               std::string{chatbot::kNoSearchResults})) == typed);
             CHECK(conversation.entries().back().kind == EntryKind::Notice);
             break;
         }
