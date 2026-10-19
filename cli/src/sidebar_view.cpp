@@ -1,7 +1,8 @@
 #include "sidebar_view.h"
 
 #include "list_style.h"
-#include "markdown.h"
+
+#include "chatbot/markdown/markdown.h"
 
 #include <ftxui/screen/string.hpp>
 

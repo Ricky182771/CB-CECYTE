@@ -1,8 +1,9 @@
 #ifndef CHATBOT_CLI_MARKDOWN_VIEW_H
 #define CHATBOT_CLI_MARKDOWN_VIEW_H
 
-#include "markdown.h"
 #include "theme.h"
+
+#include "chatbot/markdown/markdown.h"
 
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/box.hpp>
@@ -11,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-namespace chatbot::cli::md {
+namespace chatbot::md {
 
 /// Dibuja el documento para un ancho de width columnas. El ajuste de líneas
 /// se calcula aquí (no en FTXUI), así que el alto del resultado depende solo
@@ -26,7 +27,7 @@ namespace chatbot::cli::md {
 /// dibujar el elemento: en Render(screen, element), en coordenadas de esa
 /// pantalla). Con nullptr la salida es idéntica.
 [[nodiscard]] ftxui::Element render(const Document& document, int width,
-                                    const Palette& palette, int first_code = 0,
+                                    const cli::Palette& palette, int first_code = 0,
                                     std::vector<ftxui::Box>* code_boxes = nullptr);
 
 /// Título del marco de un bloque de código, con un espacio a cada lado:
@@ -51,6 +52,6 @@ namespace chatbot::cli::md {
 /// una secuencia OSC 8: todo byte fuera de 0x21-0x7E se codifica como %XX.
 [[nodiscard]] std::string hyperlink_target(std::string_view url);
 
-} // namespace chatbot::cli::md
+} // namespace chatbot::md
 
 #endif // CHATBOT_CLI_MARKDOWN_VIEW_H

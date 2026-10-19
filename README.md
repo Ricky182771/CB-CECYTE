@@ -46,6 +46,7 @@ Otros presets:
 - `asan`: AddressSanitizer + UndefinedBehaviorSanitizer.
 - `tsan`: ThreadSanitizer.
 - `release`: la build optimizada; sus pruebas también deben pasar.
+- `dev-telegram` y `release-telegram`: `dev` y `release` con los addons (ver [Addons](#addons)).
 
 Se usan igual, cambiando `dev` por el nombre del preset. Cada preset compila en `build/<preset>/`.
 
@@ -125,7 +126,17 @@ El script toma las DLL que reporta `ldd`, busca con `pacman -Qo` el paquete de c
 
 ### Integración continua
 
-En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las dos suites de pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`. En Windows (MSYS2 UCRT64 con GCC) compila y prueba `dev` y `release`, sin `CHATBOT_STRICT_PERF` (los tiempos de esas máquinas varían mucho), y en `release` arma el ZIP con `tools/package-windows.sh`, lo descomprime y arranca `chatbot.exe` desde ahí sin MSYS2 en el `PATH` (también con `chatbot.portable`), y lo sube como `chatbot-windows-x64`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
+En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`; aparte, compila y prueba los addons con GCC en `dev-telegram`. En Windows (MSYS2 UCRT64 con GCC) compila y prueba `dev` y `release`, sin `CHATBOT_STRICT_PERF` (los tiempos de esas máquinas varían mucho), y en `release` arma el ZIP con `tools/package-windows.sh`, lo descomprime y arranca `chatbot.exe` desde ahí sin MSYS2 en el `PATH` (también con `chatbot.portable`), y lo sube como `chatbot-windows-x64`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
+
+### Addons
+
+Los addons son programas aparte, como un bot de Telegram, que usan el mismo núcleo que el chatbot de la terminal: el alumno le escribe al bot y responde el modelo configurado. Viven en `addons/` y van **apagados**: una compilación normal no compila ni descarga nada de ellos. Para compilarlos:
+
+```bash
+cmake --preset dev-telegram && cmake --build --preset dev-telegram && ctest --preset dev-telegram --output-on-failure
+```
+
+Por ahora solo está la capa común de los bots (`addons/common/`: acceso solo para usuarios autorizados, conversaciones solo en memoria que se borran solas, límites por usuario y respuestas largas partidas), con sus pruebas y sin red. El bot de Telegram llega en el siguiente PR. Solo se prueban en Linux. No hay bot de WhatsApp: sus términos no permiten un asistente de IA de propósito general (los detalles están en `AGENTS.md`, sección 14).
 
 ### Configurar
 

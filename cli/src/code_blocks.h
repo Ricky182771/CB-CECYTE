@@ -2,7 +2,8 @@
 #define CHATBOT_CLI_CODE_BLOCKS_H
 
 #include "conversation.h"
-#include "markdown.h"
+
+#include "chatbot/markdown/markdown.h"
 
 #include <cstddef>
 #include <optional>

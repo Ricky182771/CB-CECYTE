@@ -1,7 +1,7 @@
 // Instrucciones de sistema: lectura y escritura de "system_prompt" en
-// config.json (núcleo) y su validación y resolución (cli/).
+// config.json y su validación y resolución (todo en el núcleo).
 
-#include "system_prompt.h"
+#include "chatbot/system_prompt.h"
 
 #include "chatbot/config.h"
 #include "posix_permissions.hpp"
@@ -18,9 +18,9 @@
 namespace {
 
 using chatbot::ErrorKind;
+using chatbot::kDefaultSystemPrompt;
+using chatbot::kMaxSystemPromptBytes;
 using chatbot_test::ScopedTempDir;
-using chatbot::cli::kDefaultSystemPrompt;
-using chatbot::cli::kMaxSystemPromptBytes;
 
 std::string read(const std::filesystem::path& path) {
     std::ifstream file{path};
@@ -157,7 +157,7 @@ TEST_CASE("save_system_prompt con nullopt borra la llave", "[sistema][config]") 
 }
 
 TEST_CASE("resolve_system_prompt: predeterminadas, cadena y aviso", "[sistema]") {
-    using chatbot::cli::resolve_system_prompt;
+    using chatbot::resolve_system_prompt;
     using Loaded = chatbot::Result<std::optional<std::string>>;
 
     const auto missing = resolve_system_prompt(Loaded{std::optional<std::string>{}});
@@ -180,7 +180,7 @@ TEST_CASE("resolve_system_prompt: predeterminadas, cadena y aviso", "[sistema]")
 }
 
 TEST_CASE("validate_system_prompt: límite de bytes", "[sistema]") {
-    using chatbot::cli::validate_system_prompt;
+    using chatbot::validate_system_prompt;
     CHECK_FALSE(validate_system_prompt("").has_value());
     CHECK_FALSE(validate_system_prompt(std::string(kMaxSystemPromptBytes, 'a')).has_value());
     const auto over = validate_system_prompt(std::string(kMaxSystemPromptBytes + 1, 'a'));
@@ -197,7 +197,7 @@ TEST_CASE("validate_system_prompt: límite de bytes", "[sistema]") {
 }
 
 TEST_CASE("validate_system_prompt: UTF-8 inválido", "[sistema]") {
-    using chatbot::cli::validate_system_prompt;
+    using chatbot::validate_system_prompt;
     for (const std::string& bad : {std::string{"a\xFF"}, std::string{"\xC3"},
                                    std::string{"\xC0\xAF"},        // Sobrelarga.
                                    std::string{"\xED\xA0\x80"},    // Sustituto.
@@ -211,7 +211,7 @@ TEST_CASE("validate_system_prompt: UTF-8 inválido", "[sistema]") {
 }
 
 TEST_CASE("validate_system_prompt: controles", "[sistema]") {
-    using chatbot::cli::validate_system_prompt;
+    using chatbot::validate_system_prompt;
     CHECK_FALSE(validate_system_prompt("uno\ndos\tcon tabulador\n").has_value());
     for (const std::string& bad :
          {std::string{"a\x1b[31m"}, std::string{"a\rb"}, std::string{"a\x7f"},
@@ -229,7 +229,7 @@ TEST_CASE("validate_system_prompt: controles", "[sistema]") {
 }
 
 TEST_CASE("system_prompt_limit_warning contra history_limit_bytes", "[sistema]") {
-    using chatbot::cli::system_prompt_limit_warning;
+    using chatbot::system_prompt_limit_warning;
     CHECK_FALSE(system_prompt_limit_warning(std::string(99, 'a'), 100).has_value());
     const auto equal = system_prompt_limit_warning(std::string(100, 'a'), 100);
     REQUIRE(equal.has_value());
@@ -241,7 +241,7 @@ TEST_CASE("system_prompt_limit_warning contra history_limit_bytes", "[sistema]")
 }
 
 TEST_CASE("system_prompt_to_store: el predeterminado borra la llave", "[sistema]") {
-    using chatbot::cli::system_prompt_to_store;
+    using chatbot::system_prompt_to_store;
     CHECK_FALSE(system_prompt_to_store(kDefaultSystemPrompt).has_value());
     CHECK(system_prompt_to_store("") == std::string{});
     CHECK(system_prompt_to_store("Otro") == std::string{"Otro"});

@@ -47,13 +47,31 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "dev-telegram",
+            "inherits": "dev",
+            "displayName": "Desarrollo con el addon de Telegram",
+            "cacheVariables": {
+                "CHATBOT_BUILD_TELEGRAM": "ON"
+            }
+        },
+        {
+            "name": "release-telegram",
+            "inherits": "release",
+            "displayName": "Release con el addon de Telegram",
+            "cacheVariables": {
+                "CHATBOT_BUILD_TELEGRAM": "ON"
+            }
         }
     ],
     "buildPresets": [
         { "name": "dev", "configurePreset": "dev" },
         { "name": "asan", "configurePreset": "asan" },
         { "name": "tsan", "configurePreset": "tsan" },
-        { "name": "release", "configurePreset": "release" }
+        { "name": "release", "configurePreset": "release" },
+        { "name": "dev-telegram", "configurePreset": "dev-telegram" },
+        { "name": "release-telegram", "configurePreset": "release-telegram" }
     ],
     "testPresets": [
         {
@@ -74,6 +92,16 @@
         {
             "name": "release",
             "configurePreset": "release",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "dev-telegram",
+            "configurePreset": "dev-telegram",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "release-telegram",
+            "configurePreset": "release-telegram",
             "output": { "outputOnFailure": true }
         }
     ]

@@ -3,8 +3,9 @@
 
 #include "block_actions.h"
 #include "conversation.h"
-#include "markdown.h"
 #include "theme.h"
+
+#include "chatbot/markdown/markdown.h"
 
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/box.hpp>

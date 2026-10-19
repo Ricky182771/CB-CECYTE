@@ -1,4 +1,4 @@
-#include "search_context.h"
+#include "chatbot/search_context.h"
 
 #include "chatbot/platform.h"
 
@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <random>
 
-namespace chatbot::cli {
+namespace chatbot {
 
 std::string generate_search_nonce() {
     std::random_device device;
@@ -63,4 +63,4 @@ std::string spanish_date(std::string_view iso_date) {
            std::to_string(year);
 }
 
-} // namespace chatbot::cli
+} // namespace chatbot

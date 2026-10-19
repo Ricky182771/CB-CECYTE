@@ -3,9 +3,14 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace chatbot::cli {
+
+/// Aviso cuando no hay key de búsqueda: /buscar no se envía.
+inline constexpr std::string_view kMissingSearchKey =
+    "Configura la key de búsqueda en Configuración (F2) → Búsqueda web";
 
 /// Estado del formulario "Búsqueda web", sin FTXUI: la key de Tavily
 /// escrita, la guardada en credentials.json ("search:tavily") y la de

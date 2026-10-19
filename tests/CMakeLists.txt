@@ -1,15 +1,4 @@
-# Catch2 v3 es obligatoria (sección 4). Se usa la del sistema si existe una
-# v3; si no, FetchContent con versión fija (nunca master/main).
-find_package(Catch2 3 QUIET COMPONENTS Catch2WithMain)
-if(NOT Catch2_FOUND)
-    include(FetchContent)
-    FetchContent_Declare(
-        Catch2
-        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG v3.16.0
-        GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(Catch2)
-endif()
+# Catch2 v3 se resuelve en el CMakeLists.txt raíz.
 
 find_package(nlohmann_json 3.9 REQUIRED)
 
@@ -34,7 +23,6 @@ add_executable(chatbot_tests
     test_history.cpp
     test_input_edit.cpp
     test_key_log.cpp
-    test_markdown.cpp
     test_models_loader.cpp
     test_paste.cpp
     test_provider_settings.cpp
@@ -74,6 +62,18 @@ chatbot_set_warnings(chatbot_tests)
 chatbot_windows_manifest(chatbot_tests)
 
 add_test(NAME chatbot_tests COMMAND chatbot_tests)
+
+# chatbot::markdown sola: sin el núcleo, sin cli/ y sin FTXUI, como la usan
+# los addons.
+add_executable(chatbot_markdown_tests
+    test_markdown.cpp
+    test_source_blocks.cpp)
+target_compile_features(chatbot_markdown_tests PRIVATE cxx_std_20)
+target_include_directories(chatbot_markdown_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(chatbot_markdown_tests PRIVATE chatbot::markdown Catch2::Catch2WithMain)
+chatbot_set_warnings(chatbot_markdown_tests)
+chatbot_windows_manifest(chatbot_markdown_tests)
+add_test(NAME chatbot_markdown_tests COMMAND chatbot_markdown_tests)
 
 # Pruebas de la vista de markdown: dibujan con ftxui::Screen (sin terminal).
 # Van aparte para que chatbot_tests no enlace FTXUI.
@@ -131,3 +131,10 @@ if(NOT WIN32)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/portable_startup.cmake)
     set_tests_properties(chatbot_portable_readonly PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
 endif()
+
+# Dirección de las dependencias en los #include: nada fuera de addons/ los
+# incluye, y markdown/ y addons/ no incluyen cli/ ni FTXUI. Corre siempre,
+# también con los addons apagados (include_rules.cmake).
+add_test(NAME chatbot_include_rules
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/include_rules.cmake)

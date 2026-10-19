@@ -2,9 +2,9 @@
 #define CHATBOT_CLI_CONVERSATION_H
 
 #include "conversation_store.h"
-#include "search_context.h"
 
 #include "chatbot/error.h"
+#include "chatbot/search_context.h"
 #include "chatbot/types.h"
 #include "chatbot/web_search.h"
 

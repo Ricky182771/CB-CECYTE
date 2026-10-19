@@ -1,4 +1,4 @@
-#include "search_context.h"
+#include "chatbot/search_context.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -6,9 +6,9 @@
 #include <set>
 #include <string>
 
-using chatbot::cli::generate_search_nonce;
-using chatbot::cli::local_iso_date;
-using chatbot::cli::spanish_date;
+using chatbot::generate_search_nonce;
+using chatbot::local_iso_date;
+using chatbot::spanish_date;
 
 TEST_CASE("spanish_date: AAAA-MM-DD en español", "[busqueda][fecha]") {
     CHECK(spanish_date("2026-10-08") == "8 de octubre de 2026");

@@ -1,5 +1,5 @@
-#ifndef CHATBOT_CLI_SYSTEM_PROMPT_H
-#define CHATBOT_CLI_SYSTEM_PROMPT_H
+#ifndef CHATBOT_SYSTEM_PROMPT_H
+#define CHATBOT_SYSTEM_PROMPT_H
 
 #include "chatbot/result.h"
 
@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace chatbot::cli {
+namespace chatbot {
 
 /// Instrucciones de sistema cuando "system_prompt" no está en config.json.
 inline constexpr std::string_view kDefaultSystemPrompt =
@@ -46,6 +46,6 @@ struct ResolvedSystemPrompt {
 /// el predeterminado; si no, el texto.
 [[nodiscard]] std::optional<std::string> system_prompt_to_store(std::string_view text);
 
-} // namespace chatbot::cli
+} // namespace chatbot
 
-#endif // CHATBOT_CLI_SYSTEM_PROMPT_H
+#endif // CHATBOT_SYSTEM_PROMPT_H

@@ -20,18 +20,15 @@
 #include "history_view.h"
 #include "input_edit.h"
 #include "key_log.h"
-#include "markdown.h"
 #include "models_loader.h"
 #include "paste.h"
 #include "provider_settings.h"
 #include "request_runner.h"
-#include "search_context.h"
 #include "search_settings.h"
 #include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
 #include "status_line.h"
-#include "system_prompt.h"
 #include "terminal_reply.h"
 #include "text_area.h"
 #include "theme.h"
@@ -42,8 +39,11 @@
 #include "chatbot/credentials.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
+#include "chatbot/markdown/markdown.h"
 #include "chatbot/platform.h"
 #include "chatbot/result.h"
+#include "chatbot/search_context.h"
+#include "chatbot/system_prompt.h"
 #include "chatbot/tavily_search.h"
 #include "chatbot/types.h"
 #include "chatbot/web_search.h"
@@ -359,10 +359,10 @@ int main() {
     // que no es cadena usa las predeterminadas y deja un aviso.
     std::string startup_warning = appearance_warning;
     /// Las vigentes (vacías: sin mensaje de sistema); cambian al guardarlas.
-    std::string system_prompt{chatbot::cli::kDefaultSystemPrompt};
+    std::string system_prompt{chatbot::kDefaultSystemPrompt};
     if (const std::optional<std::string> path = chatbot::default_config_path()) {
-        chatbot::cli::ResolvedSystemPrompt resolved =
-            chatbot::cli::resolve_system_prompt(chatbot::load_system_prompt_value(*path));
+        chatbot::ResolvedSystemPrompt resolved =
+            chatbot::resolve_system_prompt(chatbot::load_system_prompt_value(*path));
         system_prompt = std::move(resolved.text);
         if (!resolved.warning.empty()) {
             startup_warning += (startup_warning.empty() ? "" : " ") + resolved.warning;
@@ -609,10 +609,10 @@ int main() {
         }
         // La fecha se guarda con la búsqueda (AAAA-MM-DD) y el bloque la
         // lleva en español.
-        const std::string date = chatbot::cli::local_iso_date(std::time(nullptr));
+        const std::string date = chatbot::local_iso_date(std::time(nullptr));
         searching = true;
         runner->start_with_search(
-            std::move(*messages), command.text, search_provider, chatbot::cli::spanish_date(date),
+            std::move(*messages), command.text, search_provider, chatbot::spanish_date(date),
             [&conversation, &searching, date](chatbot::cli::RequestRunner::SearchContext found) {
                 searching = false;
                 (void)conversation.attach_search(std::move(found.response), date,
@@ -741,7 +741,7 @@ int main() {
             // Se aplica sin reiniciar y sin perder la conversación: valen
             // desde el siguiente mensaje (la pantalla no se abre con una
             // respuesta en curso).
-            system_prompt = stored.value_or(std::string{chatbot::cli::kDefaultSystemPrompt});
+            system_prompt = stored.value_or(std::string{chatbot::kDefaultSystemPrompt});
             (void)conversation.set_system_prompt(system_prompt);
             conversation.add_notice(system_prompt.empty()
                                         ? "Sin instrucciones del sistema desde el siguiente "
@@ -749,7 +749,7 @@ int main() {
                                         : "Instrucciones del sistema actualizadas: valen desde "
                                           "el siguiente mensaje.");
             if (const std::optional<std::string> warning =
-                    chatbot::cli::system_prompt_limit_warning(system_prompt,
+                    chatbot::system_prompt_limit_warning(system_prompt,
                                                               config.history_limit_bytes)) {
                 conversation.add_notice(*warning);
             }
@@ -990,7 +990,7 @@ int main() {
         const std::string title =
             "Chatbot CECyTE — " + (model.empty() ? std::string{"sin configurar"} : model) + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
-                                          : chatbot::cli::md::sanitize(conversation.title()));
+                                          : chatbot::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
             chatbot::cli::title_bar(title, width, palette,
                                     {conversation.has_turns(), export_hover}, export_box),

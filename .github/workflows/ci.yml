@@ -79,6 +79,35 @@ jobs:
           grep -q "error de configuración" errores.txt
           grep -q "CHAT_API_KEY" errores.txt
 
+  # Addons (addons/): con CHATBOT_BUILD_TELEGRAM compila la capa común de
+  # los bots (chatbot::bot) y sus pruebas, además de todo lo demás. Solo
+  # Linux y GCC por ahora. Los trabajos de arriba compilan sin addons y la
+  # configuración falla si un addon depende de cli/ o de FTXUI.
+  addons:
+    name: addons / gcc / dev-telegram
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ libcurl4-openssl-dev nlohmann-json3-dev catch2
+
+      - name: Configurar
+        run: cmake --preset dev-telegram
+
+      - name: Compilar
+        run: cmake --build --preset dev-telegram
+
+      - name: Pruebas
+        run: ctest --preset dev-telegram --output-on-failure
+
   # Windows con MSYS2 UCRT64 y GCC, con los mismos flags y -Werror. Solo dev y
   # release: asan y tsan son de Linux. Sin CHATBOT_STRICT_PERF: los tiempos de
   # los runners de Windows varían demasiado (la latencia de cancelación < 2 s
