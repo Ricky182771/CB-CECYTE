@@ -13,7 +13,9 @@ add_executable(chatbot_bot_tests
     test_bot_replies.cpp
     test_bot_search.cpp
     test_bot_sessions.cpp
-    test_bot_split.cpp)
+    test_bot_split.cpp
+    test_bot_streaming.cpp
+    test_bot_time_zone.cpp)
 target_compile_features(chatbot_bot_tests PRIVATE cxx_std_20)
 target_include_directories(chatbot_bot_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)

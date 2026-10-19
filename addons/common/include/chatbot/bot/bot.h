@@ -5,6 +5,8 @@
 #include "chatbot/bot/config.h"
 #include "chatbot/bot/outbox.h"
 #include "chatbot/bot/sessions.h"
+#include "chatbot/bot/split.h"
+#include "chatbot/bot/time_zone.h"
 #include "chatbot/bot/types.h"
 
 #include "chatbot/cancel_token.h"
@@ -34,6 +36,11 @@ using ClientFactory = std::function<std::unique_ptr<ChatClient>()>;
 /// Crea el proveedor de búsqueda para un /buscar (igual que ClientFactory).
 using SearchFactory = std::function<std::unique_ptr<SearchProvider>()>;
 
+/// Guarda la lista completa de invitados (en orden) cuando alguien canjea
+/// el código. false si no se pudo (Bot lo anota; el invitado entra igual,
+/// pero solo hasta que el bot se reinicie).
+using SaveInvited = std::function<bool(const std::vector<UserId>&)>;
+
 /// Lo que el bot necesita de afuera. outbox, clock y log deben vivir más
 /// que el Bot.
 struct BotDependencies {
@@ -42,6 +49,14 @@ struct BotDependencies {
     Outbox& outbox;
     Clock& clock;
     Log& log;
+    /// Fecha local para el tope diario y /buscar (day_in_zone). Vacía: la
+    /// zona del proceso (local_iso_date).
+    DayFunction day = {};
+    /// Los que ya se habían autorizado con el código (los guardó la
+    /// plataforma).
+    std::vector<UserId> invited = {};
+    /// Vacía: los invitados viven solo en memoria.
+    SaveInvited save_invited = {};
 };
 
 /// La lógica común de los bots, sin red ni plataforma: acceso, comandos,
@@ -51,9 +66,15 @@ struct BotDependencies {
 /// Las respuestas corren en max_concurrent_responses hilos de trabajo; las
 /// que no caben esperan su turno en una fila, en orden de llegada (como
 /// cada chat tiene a lo más una pendiente, la fila no pasa del número de
-/// chats). shutdown() (o el destructor) cancela todo con un CancelToken
-/// compartido y espera a los hilos: la latencia es la de la cancelación del
+/// chats). Cada respuesta tiene su CancelToken: stop() cancela una (el
+/// botón "Detener" de la plataforma) y shutdown() (o el destructor), todas;
+/// después espera a los hilos. La latencia es la de la cancelación del
 /// núcleo (~1 s con curl).
+///
+/// Si la plataforma tiene vista previa (Outbox::open_draft), la respuesta se
+/// muestra mientras llega, cada BotConfig::draft_interval como mucho; lo que
+/// ya no cabe en un mensaje se manda como mensaje final y la vista previa
+/// sigue con el resto (StreamingReply).
 class Bot {
 public:
     Bot(ValidBotConfig config, BotDependencies dependencies);
@@ -70,6 +91,13 @@ public:
     /// en la fila y la responde un hilo de trabajo. Nunca espera al modelo.
     /// Seguro entre hilos. Después de shutdown() no hace nada.
     void handle(const IncomingMessage& message);
+
+    /// El usuario detuvo la respuesta reply del chat (Telegram:
+    /// stopped_message_generation): se cancela, lo que se alcanzó a generar
+    /// se manda con kStoppedNote y el par no entra al historial (como una
+    /// respuesta cancelada en la app). false si esa respuesta ya no está en
+    /// curso. Seguro entre hilos.
+    bool stop(ChatId chat, ReplyId reply);
 
     /// Borra las conversaciones inactivas (las ocupadas no). handle() ya lo
     /// hace con cada mensaje; la plataforma lo llama de vez en cuando para
@@ -95,6 +123,7 @@ private:
     struct Job {
         ChatId chat = 0;
         UserId user = 0;
+        ReplyId reply = 0;
         std::string platform;
         std::string day;                  ///< Día en que contó para el tope diario.
         std::string text;                 ///< Normal: lo que escribió.
@@ -102,8 +131,14 @@ private:
         std::vector<Message> history;     ///< Copia al aceptarlo.
     };
 
+    /// Una respuesta en curso: stop() y shutdown() cancelan su token.
+    struct Running {
+        ReplyId reply = 0;
+        CancelToken* cancel = nullptr;
+    };
+
     void work();
-    void run(const Job& job);
+    void run(const Job& job, const CancelToken& cancel);
     /// Manda un texto partido (split_markdown o split_plain). Devuelve
     /// cuántos pedazos mandó, o nullopt si la plataforma rechazó uno (los
     /// que seguían ya no se mandan).
@@ -113,11 +148,15 @@ private:
     void release(ChatId chat, std::optional<std::string> user_content,
                  std::optional<std::string> answer);
     void log(LogLevel level, const std::string& line);
-    [[nodiscard]] std::string today() const;
+    /// La fecha local de when (BotDependencies::day).
+    [[nodiscard]] std::string day_of(TimePoint when) const;
+    /// Guarda los invitados después de que alguien canjeó el código.
+    void save_invited();
 
     const BotConfig config_;
     BotDependencies dependencies_;
-    const MessageLimit limit_;
+    const MessageLimit markdown_limit_;
+    const MessageLimit plain_limit_;
 
     mutable std::mutex mutex_;
     std::condition_variable work_ready_;
@@ -129,9 +168,14 @@ private:
     std::map<UserId, unsigned> denied_;
     std::deque<Job> queue_;
     std::size_t running_ = 0;
+    std::map<ChatId, Running> running_jobs_;
+    ReplyId next_reply_ = 1;
     bool stopping_ = false;
+    /// Una sola escritura de invitados a la vez, en orden.
+    std::mutex save_mutex_;
 
-    /// Compartido por todas las respuestas: solo shutdown() lo cancela.
+    /// Solo shutdown() lo cancela (además de los tokens de cada respuesta):
+    /// deliver deja de mandar y una respuesta cancelada no manda nada.
     CancelToken cancel_;
     std::once_flag shutdown_once_;
     std::vector<std::thread> workers_;

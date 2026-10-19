@@ -85,6 +85,11 @@ std::string search_error(const ChatError& error) {
 
 } // namespace
 
+std::string access_denied_text(UserId user) {
+    return std::string{kAccessDenied} + "\nTu ID es " + std::to_string(user) +
+           ". Si te van a dar acceso, dáselo a tu profe.";
+}
+
 std::string daily_limit_reached(std::size_t limit) {
     return "Llegaste al límite de " + std::to_string(limit) +
            (limit == 1 ? " mensaje" : " mensajes") + " por hoy. Vuelve mañana.";

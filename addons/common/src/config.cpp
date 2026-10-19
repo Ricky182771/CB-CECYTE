@@ -55,6 +55,16 @@ Result<ValidBotConfig> validate_bot_config(BotConfig config) {
         return config_error("Las respuestas simultáneas deben ser de 1 a " +
                             std::to_string(kMaxConcurrentResponses) + ".");
     }
+    if (config.stale_after < kMinStaleAfter || config.stale_after > kMaxStaleAfter) {
+        return config_error("Los minutos para considerar viejo un mensaje deben ser de " +
+                            std::to_string(kMinStaleAfter.count()) + " a " +
+                            std::to_string(kMaxStaleAfter.count()) + ".");
+    }
+    if (config.draft_interval < kMinDraftInterval || config.draft_interval > kMaxDraftInterval) {
+        return config_error("La frecuencia de la vista previa debe ser de " +
+                            std::to_string(kMinDraftInterval.count()) + " a " +
+                            std::to_string(kMaxDraftInterval.count()) + " ms.");
+    }
     if (const std::optional<std::string> problem = validate_system_prompt(config.system_prompt)) {
         return config_error("Instrucciones del sistema: " + *problem);
     }
