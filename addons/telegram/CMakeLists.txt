@@ -7,6 +7,7 @@ find_package(Threads REQUIRED)
 
 add_library(chatbot_telegram STATIC
     src/api.cpp
+    src/outbox.cpp
     src/poller.cpp
     src/rich_markdown.cpp
     src/startup.cpp)

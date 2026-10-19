@@ -3,6 +3,8 @@
 # arnés de addons/common/tests, nunca cli/.
 add_executable(chatbot_telegram_tests
     test_api.cpp
+    test_integration.cpp
+    test_outbox.cpp
     test_poller.cpp
     test_rich_markdown.cpp)
 target_compile_features(chatbot_telegram_tests PRIVATE cxx_std_20)
