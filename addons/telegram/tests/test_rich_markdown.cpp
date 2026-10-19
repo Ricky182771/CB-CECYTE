@@ -107,7 +107,52 @@ bool has_raw_tag(std::string_view rich) {
     return false;
 }
 
+/// true si fuera del código hay un "\\<" o un "\\&": Telegram deja ver esa
+/// barra (lo confirmó la sonda); '<' y '&' van como entidades.
+bool has_backslash_entity(std::string_view rich) {
+    std::size_t i = 0;
+    while (i < rich.size()) {
+        const char c = rich[i];
+        if (c == '`') {
+            std::size_t ticks = 0;
+            while (i + ticks < rich.size() && rich[i + ticks] == '`') {
+                ++ticks;
+            }
+            const std::string fence(ticks, '`');
+            const std::size_t close = rich.find(fence, i + ticks);
+            i = close == std::string_view::npos ? rich.size() : close + ticks;
+            continue;
+        }
+        if (c == '\\' && i + 1 < rich.size()) {
+            if (rich[i + 1] == '<' || rich[i + 1] == '&') {
+                return true;
+            }
+            i += 2;
+            continue;
+        }
+        ++i;
+    }
+    return false;
+}
+
 } // namespace
+
+TEST_CASE("saneado: < y & van como entidades, no con barra", "[telegram][saneado]") {
+    CHECK(to_rich_markdown("a <b>c</b> & d") == "a &lt;b\\>c&lt;/b\\> &amp; d");
+    // Una entidad que escribió el modelo se ve tal cual (no se decodifica
+    // dos veces): md4c la entiende como "<" y sale como &lt;.
+    CHECK(to_rich_markdown("&lt;b&gt;") == "&lt;b\\>");
+    CHECK(to_rich_markdown("AT&amp;T y &amp;lt;") == "AT&amp;T y &amp;lt;");
+    CHECK(to_rich_markdown("Tom & Jerry") == "Tom &amp; Jerry");
+    // Al principio de una línea, '<' tampoco abre un bloque HTML.
+    CHECK(to_rich_markdown("<div>\nhola\n</div>") == "&lt;div\\>\nhola\n&lt;/div\\>");
+    // El código no cambia.
+    CHECK(to_rich_markdown("`a<b && c`") == "`a<b && c`");
+    // md4c (y Telegram) leen el mismo texto.
+    const md::Document document = md::parse(to_rich_markdown("x < y & z"));
+    REQUIRE(document.blocks.size() == 1);
+    CHECK(document.blocks[0].runs[0].text == "x < y & z");
+}
 
 TEST_CASE("saneado: el HTML del modelo va como texto", "[telegram][saneado]") {
     for (const char* tag :
@@ -294,6 +339,7 @@ TEST_CASE("saneado: sanear dos veces da lo mismo", "[telegram][saneado]") {
         }
         const std::string twice = to_rich_markdown(once);
         CHECK_FALSE(has_raw_tag(twice));
+        CHECK_FALSE(has_backslash_entity(once));
         CHECK_FALSE(has_raw_tag(once));
         // El código no cambia nunca.
         CHECK(code_of(once) == code_of(sample));

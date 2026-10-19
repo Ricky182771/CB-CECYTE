@@ -359,9 +359,10 @@ private:
 
     void close_styles() { close_unless(0); }
 
-    /// Texto escapado: todo lo que Telegram podría entender como formato,
-    /// etiqueta, entidad o medio va con '\'. Al principio de una línea,
-    /// también lo que abriría un bloque (#, >, -, +, "1.", "1)").
+    /// Texto escapado: todo lo que Telegram podría entender como formato o
+    /// medio va con '\'; '<' y '&' (etiqueta y entidad) van como &lt; y
+    /// &amp;. Al principio de una línea, también lo que abriría un bloque
+    /// (#, >, -, +, "1.", "1)").
     void escape(std::string_view text) {
         for (std::size_t i = 0; i < text.size(); ++i) {
             const char c = text[i];
@@ -401,6 +402,14 @@ private:
                 line_start_ = false;
             }
             switch (c) {
+            // Telegram no respeta "\\<" ni "\\&" (deja ver la barra; lo
+            // confirmó chatbot-telegram-probe): esos dos van como entidad.
+            case '<':
+                out_ += "&lt;";
+                break;
+            case '&':
+                out_ += "&amp;";
+                break;
             case '\\':
             case '`':
             case '*':
@@ -408,11 +417,9 @@ private:
             case '~':
             case '[':
             case ']':
-            case '<':
             case '>':
             case '|':
             case '$':
-            case '&':
                 out_ += '\\';
                 out_ += c;
                 break;
