@@ -6,7 +6,8 @@ add_executable(chatbot_telegram_tests
     test_integration.cpp
     test_outbox.cpp
     test_poller.cpp
-    test_rich_markdown.cpp)
+    test_rich_markdown.cpp
+    test_settings.cpp)
 target_compile_features(chatbot_telegram_tests PRIVATE cxx_std_20)
 target_include_directories(chatbot_telegram_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
