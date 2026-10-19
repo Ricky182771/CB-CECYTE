@@ -13,6 +13,9 @@
 
 namespace chatbot {
 
+/// URL base predeterminada (NVIDIA NIM). También la usan los addons.
+inline constexpr std::string_view kDefaultBaseUrl = "https://integrate.api.nvidia.com/v1";
+
 /// Configuración efectiva del núcleo (sección 7).
 struct Config {
     /// CHAT_API_KEY o, si no está, credentials.json (la key del proveedor del

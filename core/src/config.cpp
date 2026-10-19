@@ -32,8 +32,6 @@ namespace {
 
 using nlohmann::json;
 
-const char* kDefaultBaseUrl = "https://integrate.api.nvidia.com/v1";
-
 /// Timeout máximo aceptado (1 hora). Evita desbordar la conversión a
 /// milisegundos con valores enormes.
 constexpr std::chrono::seconds kMaxTimeout{3600};
@@ -404,7 +402,7 @@ Result<Config> load_config(const ConfigOptions& options) {
     const PathProvider path = options.path ? options.path : PathProvider{default_config_path};
 
     Config config;
-    config.base_url = kDefaultBaseUrl;
+    config.base_url = std::string{kDefaultBaseUrl};
 
     // 1) Archivo de configuración: la precedencia más baja (sección 7).
     if (const std::optional<std::string> config_path = path()) {
