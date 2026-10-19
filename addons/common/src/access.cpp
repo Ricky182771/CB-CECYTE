@@ -17,9 +17,9 @@ bool same_code(std::string_view expected, std::string_view given) {
 
 } // namespace
 
-AccessControl::AccessControl(const BotConfig& config)
+AccessControl::AccessControl(const BotConfig& config, const std::vector<UserId>& invited)
     : allowed_(config.allowed_users.begin(), config.allowed_users.end()),
-      invite_code_(config.invite_code) {}
+      invited_(invited.begin(), invited.end()), invite_code_(config.invite_code) {}
 
 bool AccessControl::is_allowed(UserId user) const {
     return allowed_.count(user) > 0 || invited_.count(user) > 0;

@@ -87,11 +87,27 @@ struct Document {
     std::vector<Block> footnotes; ///< Bloques FootnoteDef, en orden.
 };
 
+/// Opciones de parse(). Las predeterminadas son las de la interfaz, que
+/// dibuja el árbol en una terminal.
+struct ParseOptions {
+    /// true: el texto de los bloques y fragmentos de código queda tal cual
+    /// salió de md4c, sin sanitize (con tabuladores y controles), para quien
+    /// rearma el markdown en lugar de dibujarlo (el bot de Telegram).
+    bool raw_code = false;
+    /// true: un salto de línea suave fuera del código queda como '\n' en el
+    /// texto, en lugar de un espacio. Dentro de un fragmento de código sigue
+    /// siendo un espacio, como dice CommonMark.
+    bool keep_soft_breaks = false;
+};
+
 /// Convierte markdown en el árbol propio con md4c (MD_DIALECT_GITHUB |
 /// MD_FLAG_LATEXMATHSPANS | MD_FLAG_HIGHLIGHT | MD_FLAG_NOHTML). Nunca
 /// falla: el markdown incompleto se parsea como md4c lo entienda y, si md4c
 /// no pudiera, el texto queda como un solo párrafo. No lanza excepciones.
 [[nodiscard]] Document parse(std::string_view markdown);
+
+/// parse() con opciones.
+[[nodiscard]] Document parse(std::string_view markdown, const ParseOptions& options);
 
 /// Quita lo que podría controlar la terminal: los controles C0 (salvo '\n')
 /// y C1, ESC y DEL se reemplazan por U+FFFD, '\r' se quita, '\t' pasa a 4

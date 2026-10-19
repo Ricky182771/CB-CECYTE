@@ -70,6 +70,35 @@ std::optional<std::size_t> largest_fitting(const std::vector<std::size_t>& candi
     return best;
 }
 
+/// El mayor n en [0, count] con fits(n), suponiendo fits(0) y que, a partir
+/// de algún n, fits deja de cumplirse (si no, puede quedarse con uno menor,
+/// que también cabe). Prueba 1, 2, 4… y luego busca en medio: O(log count)
+/// llamadas, para que una medida cara (el markdown de Telegram ya saneado)
+/// no se calcule una vez por bloque.
+std::size_t largest_count(std::size_t count, const std::function<bool(std::size_t)>& fits) {
+    std::size_t good = 0;
+    std::size_t bad = count + 1;
+    std::size_t step = 1;
+    while (good < count) {
+        const std::size_t next = std::min(count, good + step);
+        if (!fits(next)) {
+            bad = next;
+            break;
+        }
+        good = next;
+        step *= 2;
+    }
+    while (bad - good > 1) {
+        const std::size_t middle = good + (bad - good) / 2;
+        if (fits(middle)) {
+            good = middle;
+        } else {
+            bad = middle;
+        }
+    }
+    return good;
+}
+
 /// Dónde cortar: el pedazo es text[pos, cut) y el siguiente empieza en next.
 struct Cut {
     std::size_t cut = 0;
@@ -141,9 +170,7 @@ public:
     explicit Splitter(const MessageLimit& limit)
         : limit_(limit), max_(std::max(limit.max_size, kMinMessageLimit)) {}
 
-    [[nodiscard]] bool fits(std::string_view text) const {
-        return limit_.size_of(trimmed(text)) <= max_;
-    }
+    [[nodiscard]] bool fits(std::string_view text) const { return fits_exactly(trimmed(text)); }
 
     /// Bytes que puede tener, como mucho, un pedazo que cabe: measure mide
     /// al menos 1 por carácter y un carácter tiene a lo más 4 bytes. Acota
@@ -203,25 +230,44 @@ public:
                 lines.clear();
             }
         };
-        std::size_t pos = 0;
-        while (pos < content.size()) {
+        // Las líneas, cada una con su '\n', seguidas en all.
+        std::string all;
+        std::vector<std::size_t> starts;
+        for (std::size_t pos = 0; pos < content.size();) {
             const std::size_t newline = content.find('\n', pos);
             const std::size_t stop = newline == std::string_view::npos ? content.size() : newline;
-            std::string line{content.substr(pos, stop - pos)};
-            line += '\n';
+            starts.push_back(all.size());
+            all.append(content.substr(pos, stop - pos));
+            all += '\n';
             pos = newline == std::string_view::npos ? content.size() : newline + 1;
-
-            if (fits_exactly(open + lines + line + close)) {
-                lines += line;
+        }
+        starts.push_back(all.size());
+        const auto join = [&](std::size_t first, std::size_t count) {
+            return std::string_view{all}.substr(starts[first], starts[first + count] - starts[first]);
+        };
+        const std::size_t total = starts.size() - 1;
+        std::size_t i = 0;
+        while (i < total) {
+            // Las que caben junto con lo que ya hay (buscando el mayor número).
+            const std::size_t count = largest_count(total - i, [&](std::size_t n) {
+                return fits_exactly(open + lines + std::string{join(i, n)} + close);
+            });
+            if (count > 0) {
+                lines += join(i, count);
+                i += count;
+                if (i < total) {
+                    flush(); // La siguiente ya no cabe con estas.
+                }
                 continue;
             }
-            flush();
-            if (fits_exactly(open + line + close)) {
-                lines = line;
+            if (!lines.empty()) {
+                flush();
                 continue;
             }
             // Una línea que no cabe sola: en pedazos, sin quitar espacios.
-            const std::string_view text{line.data(), line.size() - 1};
+            const std::string_view line = join(i, 1);
+            const std::string_view text = line.substr(0, line.size() - 1);
+            ++i;
             std::size_t at = 0;
             while (at < text.size()) {
                 const std::size_t end = std::min(text.size(), at + window());
@@ -249,8 +295,9 @@ public:
 
 private:
     /// Sin recortar: para los bloques de código, que ya terminan en la cerca.
-    [[nodiscard]] bool fits_exactly(const std::string& text) const {
-        return limit_.size_of(text) <= max_;
+    [[nodiscard]] bool fits_exactly(std::string_view text) const {
+        return limit_.size_of(text) <= max_ &&
+               (limit_.max_blocks == 0 || limit_.blocks_of(text) <= limit_.max_blocks);
     }
 
     const MessageLimit& limit_;
@@ -270,6 +317,87 @@ std::string_view trailing_space(std::string_view text) {
 
 std::vector<std::string> split_plain(std::string_view text, const MessageLimit& limit) {
     return Splitter{limit}.plain(text);
+}
+
+bool fits_in_message(std::string_view text, const MessageLimit& limit) {
+    return Splitter{limit}.fits(text);
+}
+
+std::string StreamingReply::pending() const {
+    return carry_ + text_.substr(offset_);
+}
+
+std::vector<std::string> StreamingReply::take_complete() {
+    const Splitter splitter{limit_};
+    std::vector<std::string> taken;
+    while (true) {
+        const std::string view = pending();
+        if (splitter.fits(view)) {
+            return taken;
+        }
+        const std::size_t floor = carry_.size(); // Nunca se corta solo la cerca.
+        const std::vector<md::SourceBlock> blocks = md::source_blocks(view);
+
+        // Primero entre bloques de primer nivel: el mayor corte que cabe.
+        std::vector<std::size_t> candidates;
+        for (const md::SourceBlock& block : blocks) {
+            if (block.begin > floor) {
+                candidates.push_back(block.begin);
+            }
+        }
+        const auto prefix_fits = [&](std::size_t c) {
+            return splitter.fits(std::string_view{view}.substr(0, c));
+        };
+        std::optional<std::size_t> cut = largest_fitting(candidates, prefix_fits);
+        std::size_t next = 0;
+        if (cut.has_value()) {
+            next = *cut;
+        } else {
+            // Un solo bloque que no cabe: dentro de él. Si es código, sin
+            // quitar los espacios del corte.
+            const md::SourceBlock* current = blocks.empty() ? nullptr : &blocks.front();
+            for (const md::SourceBlock& block : blocks) {
+                if (block.begin <= floor && floor < block.end) {
+                    current = &block;
+                }
+            }
+            const bool in_code = current != nullptr && current->fence.has_value();
+            const Cut found =
+                find_cut(view, floor, view.size(), prefix_fits, true, in_code);
+            cut = found.cut;
+            next = found.next;
+        }
+
+        const std::string_view piece = trimmed(std::string_view{view}.substr(0, *cut));
+        if (!piece.empty()) {
+            taken.emplace_back(piece);
+        }
+        // ¿El corte quedó dentro del contenido de un bloque de código con
+        // cerca? Entonces el resto vuelve a abrirla.
+        std::string carry;
+        for (const md::SourceBlock& block : blocks) {
+            if (!block.fence.has_value()) {
+                continue;
+            }
+            const md::CodeFence& fence = *block.fence;
+            if (fence.content_begin <= *cut && *cut < fence.content_end) {
+                carry = view.substr(fence.open_begin, fence.content_begin - fence.open_begin);
+                if (carry.empty() || carry.back() != '\n') {
+                    carry += '\n';
+                }
+                break;
+            }
+            if (fence.content_end <= *cut && *cut < fence.close_end) {
+                // Justo antes de la cerca que cierra: el resto no debe
+                // empezar con ella (abriría otro bloque de código).
+                next = std::max(next, fence.close_end);
+                break;
+            }
+        }
+        offset_ += next - carry_.size();
+        carry_ = std::move(carry);
+        taken_ = true;
+    }
 }
 
 std::vector<std::string> split_markdown(std::string_view markdown, const MessageLimit& limit) {
@@ -301,22 +429,31 @@ std::vector<std::string> split_markdown(std::string_view markdown, const Message
         }
     }
 
+    // Se juntan las que caben, de izquierda a derecha: cada pedazo es el
+    // mayor número de unidades seguidas que cabe (al menos una).
+    std::string all;
+    std::vector<std::size_t> starts;
+    for (const std::string& unit : units) {
+        starts.push_back(all.size());
+        all += unit;
+    }
+    starts.push_back(all.size());
     std::vector<std::string> pieces;
-    std::string current;
-    const auto flush = [&] {
-        const std::string_view piece = trimmed(current);
+    std::size_t i = 0;
+    while (i < units.size()) {
+        const auto joined = [&](std::size_t n) {
+            return std::string_view{all}.substr(starts[i], starts[i + n] - starts[i]);
+        };
+        const std::size_t count = std::max<std::size_t>(
+            1, largest_count(units.size() - i, [&](std::size_t n) {
+                return n == 0 || splitter.fits(joined(n));
+            }));
+        const std::string_view piece = trimmed(joined(count));
         if (!piece.empty()) {
             pieces.emplace_back(piece);
         }
-        current.clear();
-    };
-    for (std::string& unit : units) {
-        if (!current.empty() && !splitter.fits(current + unit)) {
-            flush();
-        }
-        current += unit;
+        i += count;
     }
-    flush();
     return pieces;
 }
 

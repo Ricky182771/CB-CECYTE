@@ -12,6 +12,7 @@ namespace {
 
 using chatbot::bot::AccessControl;
 using chatbot::bot::BotConfig;
+using chatbot::bot::access_denied_text;
 using chatbot::bot::kAccessDenied;
 using chatbot::bot::kWelcome;
 using chatbot_bot_test::BotHarness;
@@ -45,7 +46,7 @@ TEST_CASE("acceso: AccessControl con lista y código", "[bot][acceso]") {
     CHECK(access.invited_count() == 1);
 }
 
-TEST_CASE("acceso: sin configuración nadie entra y solo recibe la frase neutra",
+TEST_CASE("acceso: sin configuración nadie entra y recibe la frase neutra con su ID",
           "[bot][acceso]") {
     BotHarness h;
     BotConfig config;
@@ -56,13 +57,15 @@ TEST_CASE("acceso: sin configuración nadie entra y solo recibe la frase neutra"
         h.say(10, 7, text);
     }
     const std::vector<std::string> texts = h.outbox.texts_for(10);
-    CHECK(texts == std::vector<std::string>(7, std::string{kAccessDenied}));
+    CHECK(texts == std::vector<std::string>(7, access_denied_text(7)));
+    CHECK(access_denied_text(7).rfind(std::string{kAccessDenied}, 0) == 0);
+    CHECK(access_denied_text(7).find("Tu ID es 7.") != std::string::npos);
     CHECK(h.recorder->count() == 0);
     CHECK(h.outbox.typing().empty());
     CHECK(h.bot->session_count() == 0);
     // La frase no dice qué modelo, quién administra ni cómo se configura.
     for (const char* hint : {"modelo", "administrador", "config", "código", "/start"}) {
-        CHECK(std::string{kAccessDenied}.find(hint) == std::string::npos);
+        CHECK(access_denied_text(7).find(hint) == std::string::npos);
     }
     // Su ID queda en el registro una sola vez, para que lo agreguen.
     std::size_t reported = 0;
@@ -82,7 +85,7 @@ TEST_CASE("acceso: un ID de la lista entra", "[bot][acceso]") {
     h.say(10, 42, "hola");
     CHECK(h.outbox.texts_for(10) == std::vector<std::string>{"eco: hola"});
     h.say(11, 43, "hola");
-    CHECK(h.outbox.texts_for(11) == std::vector<std::string>{std::string{kAccessDenied}});
+    CHECK(h.outbox.texts_for(11) == std::vector<std::string>{access_denied_text(43)});
 }
 
 TEST_CASE("acceso: código correcto, incorrecto y vacío", "[bot][acceso]") {
@@ -95,7 +98,7 @@ TEST_CASE("acceso: código correcto, incorrecto y vacío", "[bot][acceso]") {
     h.say(10, 7, "/start malcodigo");
     h.say(10, 7, "/start");
     h.say(10, 7, "hola");
-    CHECK(h.outbox.texts_for(10) == std::vector<std::string>(3, std::string{kAccessDenied}));
+    CHECK(h.outbox.texts_for(10) == std::vector<std::string>(3, access_denied_text(7)));
     CHECK(h.recorder->count() == 0);
 
     h.outbox.clear();
@@ -108,7 +111,7 @@ TEST_CASE("acceso: código correcto, incorrecto y vacío", "[bot][acceso]") {
 
     // Otro usuario en el mismo chat (un grupo) sigue sin acceso.
     h.say(10, 8, "hola");
-    CHECK(h.outbox.texts_for(10).back() == kAccessDenied);
+    CHECK(h.outbox.texts_for(10).back() == access_denied_text(8));
 
     CHECK(h.log.contains("invitacion_rechazada chat=10 usuario=7"));
     CHECK(h.log.contains("invitacion_aceptada chat=10 usuario=7"));

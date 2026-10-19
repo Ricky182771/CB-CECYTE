@@ -32,7 +32,8 @@ struct ParsedSpans {
 
 /// parse() con los rangos de texto de cada bloque de primer nivel. No lanza
 /// excepciones.
-[[nodiscard]] ParsedSpans parse_with_spans(std::string_view markdown);
+[[nodiscard]] ParsedSpans parse_with_spans(std::string_view markdown,
+                                           const ParseOptions& options = {});
 
 } // namespace chatbot::md::detail
 

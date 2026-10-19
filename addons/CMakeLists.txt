@@ -5,9 +5,10 @@
 # Capa común de los bots (chatbot::bot): se compila con cualquier addon.
 add_subdirectory(common)
 
-# Telegram: el cliente de la Bot API y el ejecutable llegan en el siguiente
-# PR (feat/telegram); por ahora CHATBOT_BUILD_TELEGRAM compila common/ y sus
-# pruebas.
+# Telegram: cliente de la Bot API, mensajes enriquecidos y chatbot-telegram.
+if(CHATBOT_BUILD_TELEGRAM)
+    add_subdirectory(telegram)
+endif()
 
 # Ningún target de los addons depende de cli/ ni de FTXUI. Cada addon agrega
 # los suyos a la propiedad global CHATBOT_ADDON_TARGETS.

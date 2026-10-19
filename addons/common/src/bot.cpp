@@ -25,6 +25,8 @@ constexpr std::size_t kMaxReportedDenied = 1000;
 constexpr unsigned kMaxReportedRejections = 3;
 /// Tope del detalle de un error en el registro.
 constexpr std::size_t kMaxLogDetail = 200;
+/// Los ReplyId vuelven a 1 después de este (cabe en un Integer de Telegram).
+constexpr ReplyId kMaxReplyId = 2147483647;
 
 /// Mismo criterio que split_markdown: una respuesta que no deja ningún
 /// pedazo es una respuesta vacía.
@@ -96,7 +98,9 @@ std::string sources_text(const std::vector<SearchResult>& results) {
 
 Bot::Bot(ValidBotConfig config, BotDependencies dependencies)
     : config_(config.get()), dependencies_(std::move(dependencies)),
-      limit_(dependencies_.outbox.message_limit()), access_(config_),
+      markdown_limit_(dependencies_.outbox.message_limit(TextFormat::Markdown)),
+      plain_limit_(dependencies_.outbox.message_limit(TextFormat::Plain)),
+      access_(config_, dependencies_.invited),
       sessions_(config_.system_prompt, config_.session_idle_timeout),
       counter_(config_.daily_message_limit) {
     workers_.reserve(config_.max_concurrent_responses);
@@ -115,6 +119,7 @@ Bot::Bot(ValidBotConfig config, BotDependencies dependencies)
     log(LogLevel::Info,
         "inicio respuestas_simultaneas=" + std::to_string(workers_.size()) +
             " autorizados=" + std::to_string(config_.allowed_users.size()) +
+            " invitados=" + std::to_string(access_.invited_count()) +
             " codigo=" + (config_.invite_code.empty() ? "no" : "si") +
             " busqueda=" + (dependencies_.make_search ? "si" : "no"));
 }
@@ -123,8 +128,15 @@ Bot::~Bot() {
     shutdown();
 }
 
-std::string Bot::today() const {
-    return local_iso_date(std::chrono::system_clock::to_time_t(dependencies_.clock.now()));
+std::string Bot::day_of(TimePoint when) const {
+    if (dependencies_.day) {
+        try {
+            return dependencies_.day(when);
+        } catch (...) {
+            // Sin fecha de la zona: la del proceso, para no tumbar al bot.
+        }
+    }
+    return local_iso_date(std::chrono::system_clock::to_time_t(when));
 }
 
 void Bot::log(LogLevel level, const std::string& line) {
@@ -135,18 +147,44 @@ void Bot::log(LogLevel level, const std::string& line) {
     }
 }
 
+void Bot::save_invited() {
+    if (!dependencies_.save_invited) {
+        return;
+    }
+    // Una escritura a la vez y siempre con la lista más reciente: dos
+    // invitados seguidos nunca dejan guardada la lista vieja.
+    const std::lock_guard<std::mutex> save_lock(save_mutex_);
+    std::vector<UserId> invited;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        invited = access_.invited();
+    }
+    bool saved = false;
+    try {
+        saved = dependencies_.save_invited(invited);
+    } catch (...) {
+        saved = false;
+    }
+    if (!saved) {
+        log(LogLevel::Error, "invitados_no_guardados n=" + std::to_string(invited.size()));
+    }
+}
+
 void Bot::handle(const IncomingMessage& message) {
     const TimePoint now = dependencies_.clock.now();
-    const std::string day = today();
+    const std::string day = day_of(now);
     const BotCommand command = parse_bot_command(message.text);
     const std::string ids = "chat=" + std::to_string(message.chat) +
                             " usuario=" + std::to_string(message.user);
     const bool search_available = static_cast<bool>(dependencies_.make_search);
+    // Llegó tarde (el bot estaba apagado o sin red): no va al modelo.
+    const bool stale = message.sent_at.has_value() && now - *message.sent_at > config_.stale_after;
 
     // Lo que sale se manda y se anota después de soltar el candado.
     std::vector<std::string> replies;
     std::vector<std::pair<LogLevel, std::string>> lines;
     bool queued = false;
+    bool invited = false;
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         if (stopping_) {
@@ -157,6 +195,11 @@ void Bot::handle(const IncomingMessage& message) {
         }
 
         const auto enqueue = [&](std::string text, std::optional<std::string> query) {
+            if (stale) {
+                replies.emplace_back(kStaleMessage);
+                lines.emplace_back(LogLevel::Info, "mensaje_viejo " + ids);
+                return;
+            }
             Session& session = sessions_.get(message.chat, now);
             if (session.busy) {
                 replies.emplace_back(kWaitPrevious);
@@ -169,7 +212,9 @@ void Bot::handle(const IncomingMessage& message) {
             }
             session.busy = true;
             session.last_activity = now;
-            queue_.push_back(Job{message.chat, message.user, message.platform, day,
+            const ReplyId reply = next_reply_;
+            next_reply_ = next_reply_ >= kMaxReplyId ? 1 : next_reply_ + 1;
+            queue_.push_back(Job{message.chat, message.user, reply, message.platform, day,
                                  std::move(text), std::move(query), session.history()});
             queued = true;
             lines.emplace_back(LogLevel::Info, "en_fila " + ids +
@@ -182,6 +227,7 @@ void Bot::handle(const IncomingMessage& message) {
                 access_.redeem(message.user, command.argument)) {
                 replies.emplace_back(kWelcome);
                 lines.emplace_back(LogLevel::Info, "invitacion_aceptada " + ids);
+                invited = true;
             } else {
                 // Cada usuario se anota una vez, y sus códigos incorrectos
                 // hasta kMaxReportedRejections: un extraño que insiste no
@@ -202,7 +248,8 @@ void Bot::handle(const IncomingMessage& message) {
                                        "invitacion_rechazada " + ids +
                                            " intento=" + std::to_string(found->second));
                 }
-                replies.emplace_back(kAccessDenied);
+                // Con su ID, para que se lo dé a quien administra el bot.
+                replies.push_back(access_denied_text(message.user));
             }
         } else {
             lines.emplace_back(LogLevel::Info,
@@ -247,6 +294,9 @@ void Bot::handle(const IncomingMessage& message) {
     for (const auto& [level, line] : lines) {
         log(level, line);
     }
+    if (invited) {
+        save_invited();
+    }
     for (const std::string& reply : replies) {
         (void)deliver(message.chat, reply, TextFormat::Plain);
     }
@@ -255,6 +305,7 @@ void Bot::handle(const IncomingMessage& message) {
 void Bot::work() {
     while (true) {
         std::optional<Job> job;
+        CancelToken cancel; // Esta respuesta: stop() y shutdown() lo cancelan.
         {
             std::unique_lock<std::mutex> lock(mutex_);
             work_ready_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
@@ -264,42 +315,89 @@ void Bot::work() {
             job = std::move(queue_.front());
             queue_.pop_front();
             ++running_;
+            running_jobs_[job->chat] = Running{job->reply, &cancel};
         }
-        run(*job);
+        run(*job, cancel);
         {
             const std::lock_guard<std::mutex> lock(mutex_);
+            running_jobs_.erase(job->chat);
             --running_;
         }
         idle_.notify_all();
     }
 }
 
-void Bot::run(const Job& job) {
+bool Bot::stop(ChatId chat, ReplyId reply) {
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        const auto found = running_jobs_.find(chat);
+        if (stopping_ || found == running_jobs_.end() || found->second.reply != reply) {
+            return false;
+        }
+        found->second.cancel->cancel();
+    }
+    log(LogLevel::Info, "detener chat=" + std::to_string(chat));
+    return true;
+}
+
+void Bot::run(const Job& job, const CancelToken& cancel) {
     const auto started = std::chrono::steady_clock::now();
     const std::string ids =
         "chat=" + std::to_string(job.chat) + " usuario=" + std::to_string(job.user);
     Outbox& outbox = dependencies_.outbox;
+    Clock& clock = dependencies_.clock;
+
+    std::unique_ptr<Draft> draft;
     try {
-        outbox.set_typing(job.chat, true);
+        draft = outbox.open_draft(job.chat, job.reply);
     } catch (...) {
-        // "Escribiendo…" es opcional.
+        draft = nullptr; // Sin vista previa: la respuesta sale completa al final.
     }
+    bool typing = false;
+    // "Pensando…" en la vista previa o, si no hay o la rechazó,
+    // "escribiendo…".
+    const auto show_status = [&](std::string_view label) {
+        if (draft) {
+            bool shown = false;
+            try {
+                shown = draft->status(label);
+            } catch (...) {
+            }
+            if (shown) {
+                return;
+            }
+        }
+        if (!typing) {
+            try {
+                outbox.set_typing(job.chat, true);
+            } catch (...) {
+                // "Escribiendo…" es opcional.
+            }
+            typing = true;
+        }
+    };
+    show_status(job.query.has_value() ? kSearchingStatus : kThinkingStatus);
 
     std::optional<ChatError> failure;
     ErrorSource source = ErrorSource::Model;
     bool empty_answer = false;
     std::string content = job.text;
-    std::string answer;
+    StreamingReply reply{markdown_limit_};
     std::vector<SearchResult> sources;
     std::string finish_reason;
     std::size_t dropped = 0;
+    std::size_t pieces = 0;          // Mensajes finales que ya salieron.
+    std::size_t drafts = 0;          // Vistas previas con texto que se mandaron.
+    std::size_t drafts_rejected = 0; // Las que la plataforma rechazó.
+    bool delivery_failed = false;
+    TimePoint last_draft = clock.now();
     try {
         if (job.query.has_value()) {
             source = ErrorSource::Search;
             const std::unique_ptr<SearchProvider> provider =
                 dependencies_.make_search ? dependencies_.make_search() : nullptr;
             const Result<SearchResponse> found =
-                provider ? provider->search(*job.query, &cancel_)
+                provider ? provider->search(*job.query, &cancel)
                          : Result<SearchResponse>{ChatError{
                                ErrorKind::Config, 0, "no se pudo crear el proveedor de búsqueda",
                                std::nullopt}};
@@ -312,10 +410,12 @@ void Bot::run(const Job& job) {
                 // Como en la app: los resultados son datos dentro del bloque
                 // con nonce, que reemplaza al texto del comando.
                 const SearchResponse trimmed = trim_search_response(found.value());
-                const std::string date = local_iso_date(
-                    std::chrono::system_clock::to_time_t(dependencies_.clock.now()));
+                const std::string date = day_of(clock.now());
                 content = format_search_context(trimmed, spanish_date(date), generate_search_nonce());
                 sources = trimmed.results;
+            }
+            if (!failure.has_value()) {
+                show_status(kThinkingStatus);
             }
         }
         if (!failure.has_value()) {
@@ -328,17 +428,47 @@ void Bot::run(const Job& job) {
             } else {
                 std::vector<Message> request = job.history;
                 request.push_back(Message{Role::User, content});
-                TrimmedCompletion done = complete_trimmed(
-                    *client, request, config_.history_limit_bytes,
-                    [&answer](std::string_view delta) {
-                        answer += delta;
+                const auto on_delta = [&](std::string_view delta) {
+                    reply.append(delta);
+                    if (!draft) {
                         return true;
-                    },
-                    &cancel_);
+                    }
+                    const TimePoint now = clock.now();
+                    if (now - last_draft < config_.draft_interval) {
+                        return true;
+                    }
+                    last_draft = now;
+                    // Lo que ya no cabe en un mensaje sale como mensaje final.
+                    for (const std::string& piece : reply.take_complete()) {
+                        const std::optional<std::size_t> sent =
+                            deliver(job.chat, piece, TextFormat::Markdown);
+                        if (!sent.has_value()) {
+                            delivery_failed = true;
+                            return false; // Ya no se puede mandar: se corta.
+                        }
+                        pieces += *sent;
+                    }
+                    const std::string pending = reply.pending();
+                    if (is_blank(pending)) {
+                        return true;
+                    }
+                    bool updated = false;
+                    try {
+                        updated = draft->update(pending);
+                    } catch (...) {
+                    }
+                    // Una vista previa rechazada (markdown a medias) no
+                    // tumba la respuesta: se intenta con la siguiente.
+                    ++(updated ? drafts : drafts_rejected);
+                    return true;
+                };
+                TrimmedCompletion done = complete_trimmed(*client, request,
+                                                          config_.history_limit_bytes, on_delta,
+                                                          &cancel);
                 dropped = done.dropped;
                 if (done.result.is_error()) {
                     failure = done.result.error();
-                } else if (is_blank(answer)) {
+                } else if (is_blank(reply.text())) {
                     empty_answer = true;
                 } else {
                     finish_reason = done.result.value().finish_reason;
@@ -349,38 +479,82 @@ void Bot::run(const Job& job) {
         failure = ChatError{ErrorKind::BadResponse, 0, "excepción inesperada al responder",
                             std::nullopt};
     }
-    try {
-        outbox.set_typing(job.chat, false);
-    } catch (...) {
+    if (typing) {
+        try {
+            outbox.set_typing(job.chat, false);
+        } catch (...) {
+        }
     }
 
+    const std::string answer = reply.text();
+    const std::string pending = reply.pending();
+    const std::string drafts_text =
+        " vistas=" + std::to_string(drafts) + " vistas_rechazadas=" + std::to_string(drafts_rejected);
+    const bool cancelled = failure.has_value() && failure->kind == ErrorKind::Cancelled;
     if (failure.has_value() && source == ErrorSource::Search) {
         // El modelo no se llamó: el mensaje no cuenta para el tope diario.
         const std::lock_guard<std::mutex> lock(mutex_);
         counter_.refund(job.user, job.day);
     }
-    if (failure.has_value() && failure->kind == ErrorKind::Cancelled && cancel_.is_cancelled()) {
+    if (cancel_.is_cancelled() && (cancelled || delivery_failed)) {
         // El bot se está apagando: no se manda nada.
         log(LogLevel::Info, "cancelada " + ids + " ms=" + std::to_string(elapsed_ms(started)));
         release(job.chat, std::nullopt, std::nullopt);
         return;
     }
+    if (delivery_failed) {
+        // deliver ya lo anotó: la plataforma no acepta los mensajes.
+        release(job.chat, std::nullopt, std::nullopt);
+        return;
+    }
+    if (cancelled && cancel.is_cancelled()) {
+        // El usuario la detuvo: se manda lo que se alcanzó a generar, pero
+        // el par no entra al historial (como una respuesta cancelada en la
+        // app).
+        std::optional<std::size_t> sent = 0;
+        if (!is_blank(pending)) {
+            sent = deliver(job.chat, pending, TextFormat::Markdown);
+        }
+        if (sent.has_value()) {
+            const bool partial = !is_blank(pending) || reply.has_taken();
+            (void)deliver(job.chat, partial ? kStoppedNote : kStoppedEmpty, TextFormat::Plain);
+        }
+        log(LogLevel::Info, "detenida " + ids + " origen=" +
+                                (source == ErrorSource::Search ? "busqueda" : "modelo") +
+                                " ms=" + std::to_string(elapsed_ms(started)) +
+                                " bytes=" + std::to_string(answer.size()) + drafts_text);
+        release(job.chat, std::nullopt, std::nullopt);
+        return;
+    }
     if (failure.has_value() || empty_answer) {
         if (failure.has_value()) {
+            // El mensaje del servidor puede repetir lo que escribió el
+            // usuario: solo con log_error_details.
+            std::string line = "error " + ids +
+                               " origen=" + (source == ErrorSource::Search ? "busqueda" : "modelo") +
+                               " tipo=\"" + error_kind_label(failure->kind) +
+                               "\" http=" + std::to_string(failure->http_status) +
+                               " ms=" + std::to_string(elapsed_ms(started));
+            if (config_.log_error_details) {
+                line += " detalle=\"" + one_line(failure->message, kMaxLogDetail) + "\"";
+            }
             log(failure->kind == ErrorKind::NoSearchResults ? LogLevel::Info : LogLevel::Error,
-                "error " + ids +
-                    " origen=" + (source == ErrorSource::Search ? "busqueda" : "modelo") +
-                    " tipo=\"" + error_kind_label(failure->kind) +
-                    "\" http=" + std::to_string(failure->http_status) +
-                    " ms=" + std::to_string(elapsed_ms(started)) + " detalle=\"" +
-                    one_line(failure->message, kMaxLogDetail) + "\"");
+                line);
         } else {
             log(LogLevel::Error, "error " + ids + " origen=modelo tipo=\"respuesta vacía\" ms=" +
                                      std::to_string(elapsed_ms(started)));
         }
-        const std::string text = failure.has_value() ? user_error_message(*failure, source)
-                                                     : std::string{kEmptyAnswer};
-        (void)deliver(job.chat, text, TextFormat::Plain);
+        // Lo que el usuario ya vio en la vista previa no desaparece: sale
+        // antes del error.
+        std::optional<std::size_t> sent = 0;
+        if (drafts > 0 && !is_blank(pending)) {
+            sent = deliver(job.chat, pending, TextFormat::Markdown);
+        }
+        if (sent.has_value()) {
+            const std::string text = failure.has_value() ? user_error_message(*failure, source)
+                                                         : std::string{kEmptyAnswer};
+            (void)deliver(job.chat, text, TextFormat::Plain);
+        }
         release(job.chat, std::nullopt, std::nullopt);
         return;
     }
@@ -388,20 +562,24 @@ void Bot::run(const Job& job) {
     // El par entra al historial antes de mandarlo; el chat sigue ocupado
     // hasta mandar todo, para que la siguiente respuesta no se intercale.
     release(job.chat, content, answer);
-    const std::optional<std::size_t> pieces = [&]() -> std::optional<std::size_t> {
-        std::optional<std::size_t> sent = deliver(job.chat, answer, TextFormat::Markdown);
-        if (sent.has_value() && !sources.empty()) {
+    std::optional<std::size_t> sent = 0;
+    if (!is_blank(pending)) {
+        sent = deliver(job.chat, pending, TextFormat::Markdown);
+    }
+    if (sent.has_value()) {
+        pieces += *sent;
+        if (!sources.empty()) {
             (void)deliver(job.chat, sources_text(sources), TextFormat::Plain);
         }
-        if (const std::string note = finish_note(finish_reason); sent.has_value() && !note.empty()) {
+        if (const std::string note = finish_note(finish_reason); !note.empty()) {
             (void)deliver(job.chat, note, TextFormat::Plain);
         }
-        return sent;
-    }();
+    }
+    draft.reset(); // La vista previa termina cuando ya salió la respuesta.
     log(LogLevel::Info, "respuesta " + ids + " ms=" + std::to_string(elapsed_ms(started)) +
                             " bytes=" + std::to_string(answer.size()) +
-                            " pedazos=" + (pieces.has_value() ? std::to_string(*pieces) : "-") +
-                            " recortados=" + std::to_string(dropped) +
+                            " pedazos=" + (sent.has_value() ? std::to_string(pieces) : "-") +
+                            " recortados=" + std::to_string(dropped) + drafts_text +
                             " fin=" + one_line(finish_reason.empty() ? "-" : finish_reason, 32));
     release(job.chat, std::nullopt, std::nullopt);
 }
@@ -423,10 +601,11 @@ void Bot::release(ChatId chat, std::optional<std::string> user_content,
 }
 
 std::optional<std::size_t> Bot::deliver(ChatId chat, std::string_view text, TextFormat format) {
-    const std::vector<std::string> pieces =
-        format == TextFormat::Markdown ? split_markdown(text, limit_) : split_plain(text, limit_);
+    const std::vector<std::string> pieces = format == TextFormat::Markdown
+                                                ? split_markdown(text, markdown_limit_)
+                                                : split_plain(text, plain_limit_);
     Outbox& outbox = dependencies_.outbox;
-    const auto send = [&](const std::string& piece, TextFormat as) {
+    const auto send = [&](std::string_view piece, TextFormat as) {
         try {
             return outbox.send(chat, piece, as);
         } catch (...) {
@@ -444,11 +623,24 @@ std::optional<std::size_t> Bot::deliver(ChatId chat, std::string_view text, Text
         if (send(pieces[i], format)) {
             continue;
         }
-        if (format == TextFormat::Markdown && send(pieces[i], TextFormat::Plain)) {
-            log(LogLevel::Warning, "enviado_como_texto chat=" + std::to_string(chat) +
-                                       " pedazo=" + std::to_string(i + 1) + "/" +
-                                       std::to_string(pieces.size()));
-            continue;
+        if (format == TextFormat::Markdown) {
+            // Respaldo en texto plano, con el tope del texto plano (en
+            // Telegram, más chico que el de un mensaje enriquecido).
+            const std::vector<std::string> plain = split_plain(pieces[i], plain_limit_);
+            bool sent = !plain.empty();
+            for (const std::string& part : plain) {
+                if (cancel_.is_cancelled() || !send(part, TextFormat::Plain)) {
+                    sent = false;
+                    break;
+                }
+            }
+            if (sent) {
+                log(LogLevel::Warning, "enviado_como_texto chat=" + std::to_string(chat) +
+                                           " pedazo=" + std::to_string(i + 1) + "/" +
+                                           std::to_string(pieces.size()) +
+                                           " partes=" + std::to_string(plain.size()));
+                continue;
+            }
         }
         log(LogLevel::Error, "no_enviado chat=" + std::to_string(chat) + " pedazo=" +
                                  std::to_string(i + 1) + "/" + std::to_string(pieces.size()));
@@ -484,6 +676,9 @@ void Bot::shutdown() {
     std::call_once(shutdown_once_, [this] {
         std::size_t discarded = 0;
         std::size_t running = 0;
+        // Primero el token común: así cada respuesta sabe que es un apagado
+        // (no un "Detener") y no manda nada.
+        cancel_.cancel();
         {
             const std::lock_guard<std::mutex> lock(mutex_);
             stopping_ = true;
@@ -495,8 +690,10 @@ void Bot::shutdown() {
             }
             queue_.clear();
             running = running_;
+            for (const auto& [chat, job] : running_jobs_) {
+                job.cancel->cancel();
+            }
         }
-        cancel_.cancel();
         work_ready_.notify_all();
         for (std::thread& worker : workers_) {
             if (worker.joinable()) {

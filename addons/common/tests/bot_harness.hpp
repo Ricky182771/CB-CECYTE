@@ -30,6 +30,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -49,11 +50,83 @@ struct Sent {
     TextFormat format = TextFormat::Plain;
 };
 
+/// Algo que se mostró en una vista previa falsa.
+struct DraftEvent {
+    ChatId chat = 0;
+    chatbot::bot::ReplyId reply = 0;
+    bool status = false; ///< status() (aviso) o update() (texto).
+    std::string text;
+    std::chrono::system_clock::time_point at;
+    bool accepted = true;
+};
+
 class FakeOutbox final : public chatbot::bot::Outbox {
 public:
     explicit FakeOutbox(std::size_t max_size = 4096) : max_size_(max_size) {}
 
-    [[nodiscard]] chatbot::bot::MessageLimit message_limit() const override {
+    /// Vista previa falsa: anota lo que muestra con la hora del reloj.
+    class FakeDraft final : public chatbot::bot::Draft {
+    public:
+        FakeDraft(FakeOutbox& outbox, ChatId chat, chatbot::bot::ReplyId reply)
+            : outbox_(outbox), chat_(chat), reply_(reply) {}
+        ~FakeDraft() override { outbox_.closed_drafts.fetch_add(1); }
+        FakeDraft(const FakeDraft&) = delete;
+        FakeDraft& operator=(const FakeDraft&) = delete;
+
+        bool status(std::string_view label) override { return outbox_.record(chat_, reply_, true, label); }
+        bool update(std::string_view markdown) override {
+            return outbox_.record(chat_, reply_, false, markdown);
+        }
+
+    private:
+        FakeOutbox& outbox_;
+        ChatId chat_;
+        chatbot::bot::ReplyId reply_;
+    };
+
+    std::unique_ptr<chatbot::bot::Draft> open_draft(ChatId chat,
+                                                    chatbot::bot::ReplyId reply) override {
+        if (!drafts_enabled) {
+            return nullptr;
+        }
+        return std::make_unique<FakeDraft>(*this, chat, reply);
+    }
+
+    [[nodiscard]] std::vector<DraftEvent> drafts() const {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        return drafts_;
+    }
+
+    /// Espera la primera vista previa con texto (update) y devuelve su
+    /// ReplyId, o 0.
+    chatbot::bot::ReplyId wait_for_update(
+        std::chrono::milliseconds timeout = chatbot_test::kThreadTimeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        chatbot::bot::ReplyId reply = 0;
+        changed_.wait_for(lock, timeout, [&] {
+            for (const DraftEvent& event : drafts_) {
+                if (!event.status) {
+                    reply = event.reply;
+                    return true;
+                }
+            }
+            return false;
+        });
+        return reply;
+    }
+
+    /// Con vista previa (como Telegram) o sin ella. Se fija antes del Bot.
+    bool drafts_enabled = false;
+    /// true: las vistas previas con texto se rechazan.
+    std::atomic<bool> reject_drafts{false};
+    /// Reloj para anotar la hora de cada vista previa (opcional).
+    const chatbot::bot::Clock* clock = nullptr;
+    std::atomic<std::size_t> closed_drafts{0};
+
+    [[nodiscard]] chatbot::bot::MessageLimit message_limit(TextFormat format) const override {
+        if (format == TextFormat::Markdown && markdown_limit) {
+            return *markdown_limit;
+        }
         return {max_size_, chatbot::bot::utf16_length};
     }
 
@@ -118,15 +191,30 @@ public:
         typing_.clear();
     }
 
+    /// Otro tope para Markdown (como el mensaje enriquecido de Telegram);
+    /// sin él, el mismo que el texto plano. Se fija antes de crear el Bot.
+    std::optional<chatbot::bot::MessageLimit> markdown_limit;
     /// true: los envíos en Markdown fallan (para probar el respaldo).
     std::atomic<bool> reject_markdown{false};
     /// Cuánto tarda cada envío.
     std::atomic<std::chrono::milliseconds> send_delay{std::chrono::milliseconds{0}};
 
 private:
+    bool record(ChatId chat, chatbot::bot::ReplyId reply, bool status, std::string_view text) {
+        const bool accepted = status || !reject_drafts;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        drafts_.push_back(DraftEvent{chat, reply, status, std::string{text},
+                                     clock != nullptr ? clock->now()
+                                                      : std::chrono::system_clock::time_point{},
+                                     accepted});
+        changed_.notify_all();
+        return accepted;
+    }
+
     std::size_t max_size_;
     mutable std::mutex mutex_;
     std::condition_variable changed_;
+    std::vector<DraftEvent> drafts_;
     std::vector<Sent> sent_;
     std::vector<std::pair<ChatId, bool>> typing_;
     std::size_t rejected_ = 0;
@@ -154,6 +242,11 @@ public:
     void advance(std::chrono::system_clock::duration by) {
         const std::lock_guard<std::mutex> lock(mutex_);
         now_ += by;
+    }
+
+    void set(std::chrono::system_clock::time_point when) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        now_ = when;
     }
 
 private:
@@ -403,19 +496,74 @@ public:
     [[nodiscard]] chatbot::HttpResponse send_stream(
         const chatbot::HttpRequest& request, const chatbot::StreamCallback& on_chunk) override {
         const std::vector<chatbot::Message> messages = chatbot_test::sent_messages_of(request);
-        std::vector<std::string> parts{"eco: "};
-        for (std::size_t i = 0; i < pieces_; ++i) {
-            parts.push_back(i == 0 ? messages.back().content : std::string{"."});
-        }
-        const std::string flow = sse_flow(parts);
         chatbot::HttpResponse cancelled;
         cancelled.cancelled = true;
         cancelled.error = "cancelado";
-        // Un evento SSE por trozo.
+        // Un evento SSE por trozo, armado al mandarlo: con muchos trozos, armar
+        // todo el flujo antes tardaría segundos con los sanitizadores (y eso
+        // no se puede cancelar).
+        std::string body;
+        const auto emit = [&](const std::string& event) {
+            if ((request.cancel != nullptr && request.cancel->wait_for(pause_)) ||
+                !on_chunk(event, 200)) {
+                return false;
+            }
+            body += event;
+            return true;
+        };
+        const auto delta = [](const std::string& piece) {
+            const nlohmann::json event = {
+                {"choices", nlohmann::json::array({{{"delta", {{"content", piece}}}}})}};
+            return "data: " + event.dump() + "\n\n";
+        };
+        if (!emit(delta("eco: "))) {
+            return cancelled;
+        }
+        for (std::size_t i = 0; i < pieces_; ++i) {
+            if (!emit(delta(i == 0 ? messages.back().content : std::string{"."}))) {
+                return cancelled;
+            }
+        }
+        const std::string tail = sse_flow({});
+        if (!emit(tail)) {
+            return cancelled;
+        }
+        chatbot::HttpResponse response;
+        response.status = 200;
+        response.body = std::move(body);
+        return response;
+    }
+
+private:
+    std::size_t pieces_;
+    std::chrono::milliseconds pause_;
+};
+
+/// Manda pieces como deltas, un evento SSE por trozo, y llama a
+/// before_chunk antes de cada uno (p. ej. para avanzar el reloj falso). Se
+/// detiene si se cancela, como curl.
+class SteppedTransport final : public chatbot::Transport {
+public:
+    SteppedTransport(std::vector<std::string> pieces, std::function<void()> before_chunk)
+        : pieces_(std::move(pieces)), before_chunk_(std::move(before_chunk)) {}
+
+    [[nodiscard]] chatbot::HttpResponse send(const chatbot::HttpRequest& request) override {
+        return send_stream(request, [](std::string_view, int) { return true; });
+    }
+
+    [[nodiscard]] chatbot::HttpResponse send_stream(
+        const chatbot::HttpRequest& request, const chatbot::StreamCallback& on_chunk) override {
+        const std::string flow = sse_flow(pieces_);
+        chatbot::HttpResponse cancelled;
+        cancelled.cancelled = true;
+        cancelled.error = "cancelado";
         std::size_t pos = 0;
         while (pos < flow.size()) {
             const std::size_t end = flow.find("\n\n", pos) + 2;
-            if ((request.cancel != nullptr && request.cancel->wait_for(pause_)) ||
+            if (before_chunk_) {
+                before_chunk_();
+            }
+            if ((request.cancel != nullptr && request.cancel->is_cancelled()) ||
                 !on_chunk(std::string_view{flow}.substr(pos, end - pos), 200)) {
                 return cancelled;
             }
@@ -428,9 +576,27 @@ public:
     }
 
 private:
-    std::size_t pieces_;
-    std::chrono::milliseconds pause_;
+    std::vector<std::string> pieces_;
+    std::function<void()> before_chunk_;
 };
+
+inline chatbot::bot::ClientFactory stepped_clients(std::vector<std::string> pieces,
+                                                   std::function<void()> before_chunk) {
+    return [pieces = std::move(pieces), before_chunk = std::move(before_chunk)] {
+        return std::make_unique<chatbot::ChatClient>(
+            chatbot_test::test_config(), std::make_unique<SteppedTransport>(pieces, before_chunk),
+            std::make_unique<chatbot_test::FakeSleeper>());
+    };
+}
+
+inline chatbot::bot::ClientFactory slow_clients(std::size_t pieces,
+                                                std::chrono::milliseconds pause) {
+    return [pieces, pause] {
+        return std::make_unique<chatbot::ChatClient>(chatbot_test::test_config(),
+                                                     std::make_unique<SlowTransport>(pieces, pause),
+                                                     std::make_unique<chatbot_test::FakeSleeper>());
+    };
+}
 
 /// Configuración de prueba: usuario 1 autorizado, sin código.
 inline chatbot::bot::BotConfig test_bot_config() {
@@ -463,11 +629,19 @@ struct BotHarness {
 
     void start(chatbot::bot::BotConfig config, chatbot::bot::ClientFactory clients,
                chatbot::bot::SearchFactory search = {}) {
-        bot = std::make_unique<chatbot::bot::Bot>(
-            valid(std::move(config)),
-            chatbot::bot::BotDependencies{std::move(clients), std::move(search), outbox, clock,
-                                          log});
+        chatbot::bot::BotDependencies dependencies{std::move(clients), std::move(search), outbox,
+                                                   clock, log};
+        dependencies.day = day;
+        dependencies.invited = invited;
+        dependencies.save_invited = save_invited;
+        bot = std::make_unique<chatbot::bot::Bot>(valid(std::move(config)),
+                                                  std::move(dependencies));
     }
+
+    /// Para BotDependencies: se fijan antes de start().
+    chatbot::bot::DayFunction day;
+    std::vector<UserId> invited;
+    chatbot::bot::SaveInvited save_invited;
 
     void start(chatbot::bot::BotConfig config = test_bot_config()) {
         start(std::move(config), scripted_clients(recorder));

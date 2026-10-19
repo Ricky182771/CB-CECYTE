@@ -126,7 +126,7 @@ El script toma las DLL que reporta `ldd`, busca con `pacman -Qo` el paquete de c
 
 ### Integración continua
 
-En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`; aparte, compila y prueba los addons con GCC en `dev-telegram`. En Windows (MSYS2 UCRT64 con GCC) compila y prueba `dev` y `release`, sin `CHATBOT_STRICT_PERF` (los tiempos de esas máquinas varían mucho), y en `release` arma el ZIP con `tools/package-windows.sh`, lo descomprime y arranca `chatbot.exe` desde ahí sin MSYS2 en el `PATH` (también con `chatbot.portable`), y lo sube como `chatbot-windows-x64`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
+En cada pull request y en cada push a `main`, GitHub Actions (`.github/workflows/ci.yml`) compila el proyecto en Ubuntu 24.04 y corre las pruebas. Usa GCC con los presets `dev`, `asan`, `tsan` y `release`, y Clang con `dev` y `release`; aparte, compila y prueba los addons con GCC en `dev-telegram` y revisa que `chatbot-telegram` sin configuración o sin token salga con código 1. En Windows (MSYS2 UCRT64 con GCC) compila y prueba `dev` y `release`, sin `CHATBOT_STRICT_PERF` (los tiempos de esas máquinas varían mucho), y en `release` arma el ZIP con `tools/package-windows.sh`, lo descomprime y arranca `chatbot.exe` desde ahí sin MSYS2 en el `PATH` (también con `chatbot.portable`), y lo sube como `chatbot-windows-x64`. En todos, los warnings cuentan como errores. Además, comprueba que el programa, sin `CHAT_API_KEY` y sin terminal, salga con código 1 y el mensaje de error de configuración. La CI nunca usa una API key ni se conecta a ninguna API real: las pruebas usan un transporte falso.
 
 ### Addons
 
@@ -136,7 +136,7 @@ Los addons son programas aparte, como un bot de Telegram, que usan el mismo núc
 cmake --preset dev-telegram && cmake --build --preset dev-telegram && ctest --preset dev-telegram --output-on-failure
 ```
 
-Por ahora solo está la capa común de los bots (`addons/common/`: acceso solo para usuarios autorizados, conversaciones solo en memoria que se borran solas, límites por usuario y respuestas largas partidas), con sus pruebas y sin red. El bot de Telegram llega en el siguiente PR. Solo se prueban en Linux. No hay bot de WhatsApp: sus términos no permiten un asistente de IA de propósito general (los detalles están en `AGENTS.md`, sección 14).
+Hay una capa común de los bots (`addons/common/`: acceso solo para usuarios autorizados, conversaciones solo en memoria que se borran solas, límites por usuario, respuestas con vista previa mientras se generan y respuestas largas partidas) y el bot de Telegram (`addons/telegram/`, ver [Bot de Telegram](#bot-de-telegram)). Solo se prueban en Linux. No hay bot de WhatsApp: sus términos no permiten un asistente de IA de propósito general (los detalles están en `AGENTS.md`, sección 14).
 
 ### Configurar
 
@@ -433,3 +433,124 @@ Para cambiarla, define la variable antes de abrir el chatbot:
 CHAT_DOWNLOAD_DIR=~/proyectos/escuela ./build/release/cli/chatbot
 ```
 
+## Bot de Telegram
+
+`chatbot-telegram` es un bot de Telegram que responde con el mismo modelo y las mismas instrucciones que el chatbot de la terminal. Usa *long polling* (solo hace peticiones HTTPS de salida, sin servidor público ni certificados), responde **solo en chats privados** (en grupos y canales no contesta) y las conversaciones viven **solo en memoria**: se borran tras un rato sin mensajes, con `/nuevo` o al reiniciar el bot. Solo Linux por ahora.
+
+Mientras el modelo escribe, el alumno ve la respuesta crecer en una vista previa con un botón para **detenerla**; al terminar llega como un mensaje con formato (encabezados, listas, tablas, código, fórmulas). Si Telegram no acepta el formato, llega como texto plano. Las respuestas muy largas se parten en varios mensajes.
+
+> **Privacidad y edad.** El bot no guarda conversaciones ni nombres; solo los IDs de quienes entran con el código de invitación. La edad mínima para usarlo, qué se le dice a las familias y quién administra el bot se acuerdan con la escuela antes de dárselo a los alumnos.
+
+### Crear el bot
+
+1. En Telegram, abre [@BotFather](https://t.me/BotFather), manda `/newbot` y sigue los pasos (nombre y usuario terminado en `bot`). Te da el **token**, algo como `123456789:AA...`. Es una contraseña: no lo compartas ni lo subas al repositorio.
+2. Recomendado: en @BotFather, `/setjoingroups` → *Disable*, para que nadie pueda meter al bot en un grupo.
+3. Pide para el bot **su propia key** del proveedor del modelo (no la tuya), con su propio tope diario de gasto: así un mal uso del bot no te deja sin servicio y el gasto queda acotado. Lo mismo con la key de búsqueda (Tavily) si vas a usar `/buscar`.
+
+### Compilar
+
+```bash
+cmake --preset release-telegram && cmake --build --preset release-telegram
+./build/release-telegram/addons/telegram/chatbot-telegram --help
+```
+
+### Configurar
+
+El bot lee un archivo JSON propio (sin secretos), que se pasa con `--config <ruta>` o con la variable `CHAT_TELEGRAM_CONFIG`. Por ejemplo, `~/.config/chatbot-telegram/telegram.json`:
+
+```json
+{
+  "provider": "nvidia",
+  "model": "meta/llama-3.3-70b-instruct",
+  "allowed_users": [123456789],
+  "invite_code": "fisica-3B-2026",
+  "data_dir": "/home/profe/.local/share/chatbot-telegram",
+  "daily_message_limit": 50
+}
+```
+
+| Llave | Qué es | Por defecto |
+|-------|--------|-------------|
+| `model` | Modelo (obligatorio: no hay uno por defecto). | — |
+| `provider` | Proveedor, para buscar su key en `credentials.json` (`nvidia`, `openrouter`…, o `custom`). | `custom` |
+| `base_url` | URL base compatible con OpenAI (`https://`; `http://` solo con `localhost`). | NVIDIA NIM |
+| `system_prompt` | Instrucciones del sistema (`""`: sin instrucciones). | las de la app |
+| `allowed_users` | IDs de Telegram que pueden usar el bot. | ninguno |
+| `invite_code` | Código para entrar con `/start <código>` (de 8 a 64 letras sin acento, números, `_` o `-`). | sin código |
+| `data_dir` | Carpeta (ruta completa) donde se guardan los IDs de los invitados. Obligatoria con `invite_code`. | — |
+| `daily_message_limit` | Mensajes al modelo por alumno por día (1 a 10000). | 50 |
+| `max_concurrent_responses` | Respuestas a la vez en todo el bot (1 a 32); las demás esperan su turno. | 4 |
+| `session_idle_minutes` | Minutos sin mensajes para borrar una conversación (1 a 1440). | 60 |
+| `history_limit` | Bytes del historial que se mandan al modelo (`0`: sin límite). | 32000 |
+| `time_zone` | Zona horaria del cambio de día del tope diario: un nombre de IANA (`America/Tijuana`) o un desfase fijo sin horario de verano (`-06:00`). Si el compilador no tiene la base de zonas de C++20 (por ejemplo Clang con libc++ en Termux; CMake lo dice al configurar), solo sirve el desfase. | `America/Mexico_City` (sin base de zonas, `-06:00`) |
+| `stale_message_minutes` | Un mensaje que llega con más de estos minutos (el bot estuvo apagado) no va al modelo: el bot pide mandarlo otra vez. | 10 |
+| `draft_interval_ms` | Cada cuánto se actualiza la vista previa, como mucho (250 a 10000). | 1000 |
+| `log_error_details` | `true`: el registro guarda el mensaje de error del servidor (puede citar lo que escribió el alumno). Solo para diagnosticar. | `false` |
+
+Una llave desconocida o de otro tipo es un error al arrancar (así se nota un error de dedo).
+
+**Secretos**, nunca en ese archivo: por variables de entorno (`CHAT_TELEGRAM_TOKEN`, `CHAT_API_KEY` y, para `/buscar`, `CHAT_SEARCH_API_KEY`) o en `credentials.json` **junto al archivo de configuración**, con permisos 600 (si el grupo u otros pueden leerlo, el bot no arranca):
+
+```bash
+cd ~/.config/chatbot-telegram
+(umask 077 && cat > credentials.json) <<'FIN'
+{ "version": 1, "keys": { "telegram": "123456789:AA...", "nvidia": "nvapi-...", "search:tavily": "tvly-..." } }
+FIN
+```
+
+La llave de la key del modelo es la de `provider` (con `custom`, `custom:<base_url>`). Las variables de entorno ganan sobre el archivo. El bot no usa las demás variables `CHAT_*` de la app (ni `CHAT_DEBUG_SSE`, que guardaría las conversaciones).
+
+### Autorizar a los alumnos
+
+Sin `allowed_users` ni `invite_code` nadie entra. A quien no tiene acceso, el bot le contesta *"No tienes acceso a este bot."* y **su ID**, para que se lo dé al profe:
+
+- **Lista de IDs:** agrega el ID a `allowed_users` y reinicia el bot.
+- **Código de invitación:** el alumno manda `/start <código>`, o abre el enlace `https://t.me/<usuario_del_bot>?start=<código>`. Su ID se guarda en `<data_dir>/invitados.json` (solo IDs, permisos 600) y sigue entrando después de reiniciar, aunque luego quites el código. Para sacar a alguien, detén el bot y borra su ID de ese archivo. Si el archivo está dañado, el bot no arranca y dice por qué (no lo toca).
+
+Comandos: `/start`, `/ayuda`, `/nuevo` (conversación nueva) y `/buscar <consulta>` (si hay key de búsqueda). El bot solo lee texto: a fotos, stickers, audios y archivos responde que por ahora solo puede leer texto.
+
+### Correr
+
+```bash
+./build/release-telegram/addons/telegram/chatbot-telegram --config ~/.config/chatbot-telegram/telegram.json
+```
+
+Al arrancar revisa el token (si es inválido, sale con un error claro) y pone el menú de comandos. Si no hay red (por ejemplo, después de un apagón el bot arrancó antes que el módem), espera y reintenta cada vez más espaciado, hasta 1 minuto, y lo anota una sola vez; igual si se va la red con el bot corriendo. Con Ctrl+C o `SIGTERM` se apaga en menos de 2 s.
+
+El registro va a la salida de errores, una línea por evento (`2026-10-18 10:30:00 info respuesta chat=… ms=…`): IDs, tiempos, tamaños y tipos de error; **nunca** el texto de los alumnos, las respuestas, el token ni las keys.
+
+### Dejarlo como servicio (systemd de usuario)
+
+`~/.config/systemd/user/chatbot-telegram.service`:
+
+```ini
+[Unit]
+Description=Bot de Telegram del chatbot de CECYTE
+
+[Service]
+ExecStart=%h/CB-CECYTE/build/release-telegram/addons/telegram/chatbot-telegram --config %h/.config/chatbot-telegram/telegram.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now chatbot-telegram
+loginctl enable-linger "$USER"     # que corra aunque no hayas iniciado sesión (y al prender la PC)
+journalctl --user -u chatbot-telegram -f   # ver el registro
+```
+
+`Restart=always` lo vuelve a levantar si se cae; sin red no hace falta, porque el bot espera solo. Después de un apagón, los mensajes que llegaron mientras estaba apagado (Telegram los guarda hasta 24 h) con más de `stale_message_minutes` reciben *"Estuve desconectado y se me pasó tu mensaje; mándalo otra vez."*, sin gastar el tope diario.
+
+### Probar cómo se ven los mensajes
+
+`chatbot-telegram-probe` manda a un chat unos mensajes de prueba (el signo de pesos, fórmulas, escapes, una vista previa con streaming) para revisar en el celular cómo los muestra Telegram. Solo se corre a mano, con el token de un bot de prueba y tu ID (te lo dice el bot si le escribes sin estar autorizado):
+
+```bash
+CHAT_TELEGRAM_TOKEN=123456789:AA... ./build/release-telegram/addons/telegram/chatbot-telegram-probe --chat <tu ID>
+```
+
+Los mensajes con formato llegaron a Telegram en junio de 2026 (Bot API 10.1); en una app desactualizada podrían no verse bien. Falta probarlo con un celular real.
