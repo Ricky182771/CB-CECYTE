@@ -333,3 +333,35 @@ TEST_CASE("markdown: documento de 200 KB", "[markdown][desempeno]") {
         CHECK(elapsed < std::chrono::milliseconds{100});
     }
 }
+
+TEST_CASE("ParseOptions: código crudo y saltos de línea suaves", "[markdown][opciones]") {
+    const std::string source = "uno\ndos `a\tb`\n\n~~~\n\tx\x1b\n~~~\n";
+    // Por defecto, como la interfaz: el salto es un espacio y el código se
+    // filtra para la terminal.
+    const Document plain = parse(source);
+    REQUIRE(plain.blocks.size() == 2);
+    REQUIRE_FALSE(plain.blocks[0].runs.empty());
+    CHECK(plain.blocks[0].runs[0].text == "uno dos ");
+    CHECK(plain.blocks[0].runs[1].text == "a    b");
+    CHECK(plain.blocks[1].code.find('\t') == std::string::npos);
+    CHECK(plain.blocks[1].code.find('\x1b') == std::string::npos);
+
+    md::ParseOptions options;
+    options.raw_code = true;
+    options.keep_soft_breaks = true;
+    const Document raw = parse(source, options);
+    REQUIRE(raw.blocks.size() == 2);
+    REQUIRE(raw.blocks[0].runs.size() >= 2);
+    CHECK(raw.blocks[0].runs[0].text == "uno\ndos ");
+    CHECK(raw.blocks[0].runs[1].kind == Run::Kind::Code);
+    CHECK(raw.blocks[0].runs[1].text == "a\tb");
+    CHECK(raw.blocks[1].code.find('\x1b') != std::string::npos);
+    // El texto fuera del código sigue filtrado.
+    const Document text = parse("hola\x1b mundo", options);
+    REQUIRE(text.blocks.size() == 1);
+    CHECK(text.blocks[0].runs[0].text.find('\x1b') == std::string::npos);
+    // Un salto dentro de un fragmento de código sigue siendo un espacio.
+    const Document span = parse("`a\nb`", options);
+    REQUIRE(span.blocks.size() == 1);
+    CHECK(span.blocks[0].runs[0].text == "a b");
+}

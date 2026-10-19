@@ -94,7 +94,8 @@ class Builder {
 public:
     /// source: el texto que se parsea, para reconocer qué punteros de md4c
     /// caen dentro de él (spans()).
-    explicit Builder(std::string_view source) : source_(source) {
+    Builder(std::string_view source, const ParseOptions& options)
+        : source_(source), options_(options) {
         root_.kind = Block::Kind::Document;
         footnotes_.kind = Block::Kind::Document;
         stack_.push_back(Frame{&root_, false});
@@ -304,7 +305,11 @@ public:
         note(raw.data(), raw.size());
         Block& top = *stack_.back().block;
         if (top.kind == Block::Kind::Code && !stack_.back().implicit) {
-            top.code += type == MD_TEXT_NULLCHAR ? std::string{kReplacement} : sanitize(raw);
+            if (type == MD_TEXT_NULLCHAR) {
+                top.code += kReplacement;
+            } else {
+                top.code += options_.raw_code ? std::string{raw} : sanitize(raw);
+            }
             return;
         }
         if (footnote_ref_ > 0) {
@@ -319,7 +324,7 @@ public:
         std::string content;
         switch (type) {
         case MD_TEXT_SOFTBR:
-            content = " ";
+            content = options_.keep_soft_breaks && code_ == 0 ? "\n" : " ";
             break;
         case MD_TEXT_NULLCHAR:
             content = std::string{kReplacement};
@@ -328,7 +333,7 @@ public:
             content = decode_entity(raw);
             break;
         default: // NORMAL, CODE, LATEXMATH, HTML (literal).
-            content = sanitize(raw);
+            content = code_ > 0 && options_.raw_code ? std::string{raw} : sanitize(raw);
             break;
         }
         Block& block = text_block();
@@ -468,6 +473,7 @@ private:
     }
 
     std::string_view source_;
+    ParseOptions options_;
     std::vector<detail::TextSpan> spans_;
     std::size_t top_ = kNoTop;
     const MD_ATTRIBUTE* pending_attribute_ = nullptr;
@@ -658,12 +664,12 @@ std::string sanitize(std::string_view text) {
 
 namespace detail {
 
-ParsedSpans parse_with_spans(std::string_view markdown) {
+ParsedSpans parse_with_spans(std::string_view markdown, const ParseOptions& options) {
     try {
         if (markdown.size() > std::numeric_limits<MD_SIZE>::max()) {
             return ParsedSpans{plain_document(markdown), {}};
         }
-        Builder builder{markdown};
+        Builder builder{markdown, options};
         MD_PARSER parser{};
         parser.abi_version = 0;
         parser.flags = kParserFlags;
@@ -694,6 +700,10 @@ ParsedSpans parse_with_spans(std::string_view markdown) {
 
 Document parse(std::string_view markdown) {
     return detail::parse_with_spans(markdown).document;
+}
+
+Document parse(std::string_view markdown, const ParseOptions& options) {
+    return detail::parse_with_spans(markdown, options).document;
 }
 
 } // namespace chatbot::md
