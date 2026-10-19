@@ -6,7 +6,10 @@ find_package(nlohmann_json 3.9 REQUIRED)
 find_package(Threads REQUIRED)
 
 add_library(chatbot_telegram STATIC
-    src/rich_markdown.cpp)
+    src/api.cpp
+    src/poller.cpp
+    src/rich_markdown.cpp
+    src/startup.cpp)
 
 add_library(chatbot::telegram ALIAS chatbot_telegram)
 
