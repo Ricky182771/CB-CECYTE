@@ -80,9 +80,11 @@ jobs:
           grep -q "CHAT_API_KEY" errores.txt
 
   # Addons (addons/): con CHATBOT_BUILD_TELEGRAM compila la capa común de
-  # los bots (chatbot::bot) y sus pruebas, además de todo lo demás. Solo
-  # Linux y GCC por ahora. Los trabajos de arriba compilan sin addons y la
-  # configuración falla si un addon depende de cli/ o de FTXUI.
+  # los bots (chatbot::bot), el bot de Telegram y sus pruebas, además de todo
+  # lo demás. Solo Linux y GCC por ahora. Los trabajos de arriba compilan sin
+  # addons y la configuración falla si un addon depende de cli/ o de FTXUI.
+  # tzdata: la base de zonas de C++20 (std::chrono::locate_zone) del tope
+  # diario.
   addons:
     name: addons / gcc / dev-telegram
     runs-on: ubuntu-24.04
@@ -97,7 +99,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ libcurl4-openssl-dev nlohmann-json3-dev catch2
+            cmake ninja-build g++ libcurl4-openssl-dev nlohmann-json3-dev catch2 tzdata
 
       - name: Configurar
         run: cmake --preset dev-telegram
@@ -107,6 +109,26 @@ jobs:
 
       - name: Pruebas
         run: ctest --preset dev-telegram --output-on-failure
+
+      # Sin configuración, o sin token, sale con 1 antes de tocar la red.
+      - name: Arranque sin configuración ni token
+        run: |
+          bot=build/dev-telegram/addons/telegram/chatbot-telegram
+          set +e
+          env -u CHAT_TELEGRAM_CONFIG "$bot" < /dev/null 2> errores.txt
+          code=$?
+          set -e
+          cat errores.txt
+          test "$code" -eq 1
+          grep -q "falta el archivo de configuración" errores.txt
+          echo '{"model": "modelo-de-prueba"}' > telegram.json
+          set +e
+          env -u CHAT_TELEGRAM_TOKEN -u CHAT_API_KEY "$bot" --config telegram.json < /dev/null 2> errores.txt
+          code=$?
+          set -e
+          cat errores.txt
+          test "$code" -eq 1
+          grep -q "CHAT_TELEGRAM_TOKEN" errores.txt
 
   # Windows con MSYS2 UCRT64 y GCC, con los mismos flags y -Werror. Solo dev y
   # release: asan y tsan son de Linux. Sin CHATBOT_STRICT_PERF: los tiempos de
