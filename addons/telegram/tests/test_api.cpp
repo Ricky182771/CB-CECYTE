@@ -11,6 +11,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -171,6 +173,35 @@ TEST_CASE("api: un Detener que no se entiende llega sin stop y con el motivo",
         CHECK(parsed.problem->type == "stopped_message_generation");
         CHECK(parsed.problem->reason == c.reason);
     }
+}
+
+TEST_CASE("api: un update_id igual al máximo de int64_t es inválido, como número y como cadena",
+          "[telegram][api]") {
+    // El offset es update_id + 1: con el máximo desbordaría.
+    constexpr std::int64_t kMax = std::numeric_limits<std::int64_t>::max();
+    ApiHarness h;
+    json as_number = chatbot_telegram_test::text_update(1, 5, 5, "hola");
+    as_number["update_id"] = kMax;
+    json as_text = chatbot_telegram_test::text_update(1, 5, 5, "hola");
+    as_text["update_id"] = std::to_string(kMax);
+    h.server->push_updates(json::array(
+        {as_number, as_text, chatbot_telegram_test::text_update(kMax - 1, 5, 5, "hola")}));
+    const auto result = h.api.get_updates(0, std::chrono::seconds{50});
+    REQUIRE(result.is_ok());
+    const auto& updates = result.value();
+    REQUIRE(updates.size() == 3);
+    for (std::size_t i = 0; i < 2; ++i) {
+        INFO(i);
+        CHECK(updates[i].update_id == 0);
+        CHECK_FALSE(updates[i].message.has_value());
+        REQUIRE(updates[i].problem.has_value());
+        CHECK(updates[i].problem->type == "message");
+        CHECK(updates[i].problem->reason == "update_id_invalido");
+    }
+    // El anterior sí sirve.
+    CHECK(updates[2].update_id == kMax - 1);
+    CHECK_FALSE(updates[2].problem.has_value());
+    CHECK(updates[2].message.has_value());
 }
 
 TEST_CASE("api: los enteros de un mensaje y el update_id pueden llegar como cadena",

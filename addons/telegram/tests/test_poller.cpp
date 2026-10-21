@@ -13,6 +13,8 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -137,6 +139,38 @@ TEST_CASE("poller: Detener con draft_id en cadena llega al bot", "[telegram][pol
     REQUIRE_FALSE(poller.poll_once().has_value());
     CHECK(h.stops.size() == 1);
     CHECK(h.log.contains("chat_no_privado chat=-100123"));
+}
+
+TEST_CASE("poller: un update_id igual al máximo de int64_t no se suma al offset",
+          "[telegram][poller]") {
+    constexpr std::int64_t kMax = std::numeric_limits<std::int64_t>::max();
+    PollerHarness h;
+    Poller poller = h.make();
+    json at_max = chatbot_telegram_test::text_update(1, 5, 5, "en el máximo");
+    at_max["update_id"] = kMax;
+    h.server->push_updates(
+        json::array({at_max, chatbot_telegram_test::text_update(7, 5, 5, "ok")}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    // No llega al bot ni cuenta para el offset: solo el otro.
+    REQUIRE(h.messages.size() == 1);
+    CHECK(h.messages[0].text == "ok");
+    CHECK(poller.offset() == 8);
+    CHECK(h.log.contains("update_invalido id=0 tipo=message motivo=update_id_invalido"));
+    CHECK(h.sleeper.sleeps.empty());
+
+    // Solo, y como cadena: el offset no cambia (ni se vuelve negativo) y
+    // el siguiente getUpdates lo sigue mandando.
+    json at_max_text = at_max;
+    at_max_text["update_id"] = std::to_string(kMax);
+    h.server->push_updates(json::array({at_max_text}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    CHECK(h.messages.size() == 1);
+    CHECK(poller.offset() == 8);
+    CHECK(h.sleeper.sleeps == std::vector<std::chrono::milliseconds>{1s});
+    h.server->push_updates(json::array({chatbot_telegram_test::text_update(8, 5, 5, "otra")}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    CHECK(h.server->calls("getUpdates").back().body["offset"] == 8);
+    CHECK(poller.offset() == 9);
 }
 
 TEST_CASE("poller: un update que no se entiende se anota sin valores ni nombres",

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace chatbot::telegram {
@@ -399,9 +400,11 @@ Result<std::vector<Update>> BotApi::get_updates(std::int64_t offset, std::chrono
             const auto id = item.find("update_id");
             const std::optional<std::int64_t> update_id =
                 id != item.end() ? telegram_integer(*id) : std::nullopt;
-            if (!update_id.has_value() || *update_id <= 0) {
+            if (!update_id.has_value() || *update_id <= 0 ||
+                *update_id == std::numeric_limits<std::int64_t>::max()) {
                 // Sin update_id no se puede confirmar ni atender: solo se
                 // anota (los siguientes lo confirman al subir el offset).
+                // El máximo tampoco: el offset es update_id + 1 y desbordaría.
                 update.problem = UpdateProblem{type, "update_id_invalido"};
                 out.push_back(std::move(update));
                 continue;
