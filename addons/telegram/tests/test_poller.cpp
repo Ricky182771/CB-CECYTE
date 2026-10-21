@@ -116,6 +116,58 @@ TEST_CASE("poller: mensajes privados al bot; grupos, canales y bots no", "[teleg
     CHECK(h.log.contains("chat_no_privado chat=-100999"));
 }
 
+TEST_CASE("poller: Detener con draft_id en cadena llega al bot", "[telegram][poller][detener]") {
+    PollerHarness h;
+    Poller poller = h.make();
+    h.server->push_updates(json::array({json::parse(chatbot_telegram_test::kRealStopUpdate)}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    REQUIRE(h.stops.size() == 1);
+    CHECK(h.stops[0] ==
+          std::pair<chatbot::bot::ChatId, chatbot::bot::ReplyId>{6000000042, 12345});
+    CHECK(poller.offset() == 449973636);
+    CHECK_FALSE(h.log.contains("update_invalido"));
+
+    // De un chat que no es privado (no pasa: ahí no hay vistas previas)
+    // no llega al bot, pero se anota.
+    json in_group = chatbot_telegram_test::real_stop_update(449973636, -100123, 12345);
+    in_group["stopped_message_generation"]["chat"]["type"] = "supergroup";
+    h.server->push_updates(json::array({in_group}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    CHECK(h.stops.size() == 1);
+    CHECK(h.log.contains("chat_no_privado chat=-100123"));
+}
+
+TEST_CASE("poller: un update que no se entiende se anota sin valores ni nombres",
+          "[telegram][poller][detener]") {
+    PollerHarness h;
+    Poller poller = h.make();
+    json bad_stop = json::parse(chatbot_telegram_test::kRealStopUpdate);
+    bad_stop["stopped_message_generation"]["draft_id"] = "0";
+    json bad_message = chatbot_telegram_test::text_update(449973636, 5, 5, "texto del alumno");
+    bad_message["message"]["chat"]["id"] = "cinco";
+    json no_id = chatbot_telegram_test::text_update(1, 5, 5, "sin id");
+    no_id.erase("update_id");
+    h.server->push_updates(json::array(
+        {bad_stop, bad_message, no_id, chatbot_telegram_test::text_update(449973637, 5, 5, "ok")}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    CHECK(h.stops.empty());
+    REQUIRE(h.messages.size() == 1); // Los demás siguen llegando.
+    CHECK(h.messages[0].text == "ok");
+    CHECK(poller.offset() == 449973638);
+    CHECK(h.log.contains(
+        "update_invalido id=449973635 tipo=stopped_message_generation motivo=draft_id_invalido"));
+    CHECK(h.log.contains("update_invalido id=449973636 tipo=message motivo=chat_invalido"));
+    CHECK(h.log.contains("update_invalido id=0 tipo=message motivo=update_id_invalido"));
+    CHECK(h.sleeper.sleeps.empty()); // Los demás movieron el offset: no se espera.
+    for (const std::string& line : h.log.lines()) {
+        INFO(line);
+        for (const char* value : {"Nombre", "usuario\"", "6000000042", "cinco", "alumno", "sin id",
+                                  "12345"}) {
+            CHECK(line.find(value) == std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("poller: sin red espera cada vez más y lo anota solo dos veces",
           "[telegram][poller][red]") {
     PollerHarness h;

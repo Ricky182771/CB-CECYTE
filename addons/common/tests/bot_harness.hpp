@@ -256,9 +256,10 @@ private:
 
 class MemoryLog final : public chatbot::bot::Log {
 public:
-    void write(chatbot::bot::LogLevel /*level*/, std::string_view line) override {
+    void write(chatbot::bot::LogLevel level, std::string_view line) override {
         const std::lock_guard<std::mutex> lock(mutex_);
         lines_.emplace_back(line);
+        levels_.push_back(level);
     }
 
     [[nodiscard]] std::vector<std::string> lines() const {
@@ -277,9 +278,21 @@ public:
         return false;
     }
 
+    /// Nivel de la primera línea que contiene text; nullopt si no hay.
+    [[nodiscard]] std::optional<chatbot::bot::LogLevel> level_of(std::string_view text) const {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        for (std::size_t i = 0; i < lines_.size(); ++i) {
+            if (lines_[i].find(text) != std::string::npos) {
+                return levels_[i];
+            }
+        }
+        return std::nullopt;
+    }
+
 private:
     mutable std::mutex mutex_;
     std::vector<std::string> lines_;
+    std::vector<chatbot::bot::LogLevel> levels_;
 };
 
 /// Flujo SSE con un delta por pedazo y [DONE]; finish_reason en el último

@@ -57,6 +57,8 @@ public:
 
 private:
     void dispatch(const Update& update);
+    /// Anota un chat de grupo o canal (una vez cada uno).
+    void note_ignored_chat(bot::ChatId chat);
     void log(bot::LogLevel level, const std::string& line);
     bool wait(std::chrono::milliseconds duration);
 

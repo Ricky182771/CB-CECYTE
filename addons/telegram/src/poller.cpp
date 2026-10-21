@@ -102,10 +102,25 @@ std::optional<ChatError> Poller::poll_once() {
     return std::nullopt;
 }
 
+void Poller::note_ignored_chat(bot::ChatId chat) {
+    if (ignored_chats_.size() < kMaxIgnoredChats && ignored_chats_.insert(chat).second) {
+        log(bot::LogLevel::Info, "chat_no_privado chat=" + std::to_string(chat));
+    }
+}
+
 void Poller::dispatch(const Update& update) {
+    if (update.problem.has_value()) {
+        // Que nada se pierda en silencio (así pasó con el draft_id en
+        // cadena): solo el id, el tipo y el motivo, nunca valores.
+        log(bot::LogLevel::Warning, "update_invalido id=" + std::to_string(update.update_id) +
+                                        " tipo=" + update.problem->type +
+                                        " motivo=" + update.problem->reason);
+    }
     if (update.stop.has_value()) {
         const GenerationStopped& stop = *update.stop;
-        if (stop.chat_type == "private" && handlers_.stop) {
+        if (stop.chat_type != "private") {
+            note_ignored_chat(stop.chat_id); // Las vistas previas solo existen ahí.
+        } else if (handlers_.stop) {
             handlers_.stop(stop.chat_id, stop.draft_id);
         }
         return;
@@ -116,10 +131,7 @@ void Poller::dispatch(const Update& update) {
     const ChatMessage& message = *update.message;
     if (message.chat_type != "private") {
         // Solo chats privados: en grupos y canales el bot no responde.
-        if (ignored_chats_.size() < kMaxIgnoredChats &&
-            ignored_chats_.insert(message.chat_id).second) {
-            log(bot::LogLevel::Info, "chat_no_privado chat=" + std::to_string(message.chat_id));
-        }
+        note_ignored_chat(message.chat_id);
         return;
     }
     if (message.from_bot || message.from_id <= 0) {

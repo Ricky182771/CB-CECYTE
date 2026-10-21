@@ -96,7 +96,8 @@ public:
     /// stopped_message_generation): se cancela, lo que se alcanzó a generar
     /// se manda con kStoppedNote y el par no entra al historial (como una
     /// respuesta cancelada en la app). false si esa respuesta ya no está en
-    /// curso. Seguro entre hilos.
+    /// curso (lo anota como detener_sin_respuesta, salvo durante el
+    /// apagado). Seguro entre hilos.
     bool stop(ChatId chat, ReplyId reply);
 
     /// Borra las conversaciones inactivas (las ocupadas no). handle() ya lo

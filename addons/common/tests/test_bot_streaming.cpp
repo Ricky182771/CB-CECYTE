@@ -331,6 +331,10 @@ TEST_CASE("bot: Detener cancela en menos de 2 s y manda lo generado con la nota"
     REQUIRE(reply != 0);
     CHECK_FALSE(h.bot->stop(10, reply + 1)); // Otra respuesta: no hace nada.
     CHECK_FALSE(h.bot->stop(11, reply));
+    // Se anota (como info: es normal si la respuesta acaba de terminar).
+    CHECK(h.log.level_of("detener_sin_respuesta chat=10") == chatbot::bot::LogLevel::Info);
+    CHECK(h.log.level_of("detener_sin_respuesta chat=11") == chatbot::bot::LogLevel::Info);
+    CHECK_FALSE(h.log.contains("detener chat="));
     const auto started = std::chrono::steady_clock::now();
     CHECK(h.bot->stop(10, reply));
     REQUIRE(h.bot->wait_idle(chatbot_test::kThreadTimeout));

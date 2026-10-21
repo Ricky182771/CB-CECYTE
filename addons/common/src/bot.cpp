@@ -328,13 +328,22 @@ void Bot::work() {
 }
 
 bool Bot::stop(ChatId chat, ReplyId reply) {
+    bool found_reply = false;
     {
         const std::lock_guard<std::mutex> lock(mutex_);
-        const auto found = running_jobs_.find(chat);
-        if (stopping_ || found == running_jobs_.end() || found->second.reply != reply) {
-            return false;
+        if (stopping_) {
+            return false; // El apagado ya cancela todo.
         }
-        found->second.cancel->cancel();
+        const auto found = running_jobs_.find(chat);
+        if (found != running_jobs_.end() && found->second.reply == reply) {
+            found->second.cancel->cancel();
+            found_reply = true;
+        }
+    }
+    if (!found_reply) {
+        // Normal si se presionó Detener justo cuando la respuesta terminó.
+        log(LogLevel::Info, "detener_sin_respuesta chat=" + std::to_string(chat));
+        return false;
     }
     log(LogLevel::Info, "detener chat=" + std::to_string(chat));
     return true;

@@ -380,6 +380,36 @@ TEST_CASE("telegram: Detener durante \"Pensando…\" manda solo el aviso",
     CHECK(history[1].content == "otra");
 }
 
+TEST_CASE("telegram: Detener cuando la respuesta ya terminó solo se anota",
+          "[telegram][integracion][detener]") {
+    World w;
+    w.start(config_for({5}), answering({"respuesta"}));
+    w.say(1, 5, "hola");
+    REQUIRE(w.idle());
+    const std::int64_t draft_id = wait_for_draft(w, 5, "Pensando");
+    REQUIRE(draft_id != 0);
+    const std::size_t before = w.server->calls().size();
+    REQUIRE(w.messages(5).size() == 1);
+
+    w.server->push_updates(json::array({chatbot_telegram_test::real_stop_update(2, 5, draft_id)}));
+    bool noted = false;
+    for (int i = 0; i < 250 && !noted; ++i) {
+        noted = w.log.contains("detener_sin_respuesta chat=5");
+        std::this_thread::sleep_for(10ms);
+    }
+    REQUIRE(noted);
+    CHECK(w.log.level_of("detener_sin_respuesta chat=5") == chatbot::bot::LogLevel::Info);
+    REQUIRE(w.idle());
+    CHECK(w.messages(5).size() == 1); // Nada más al chat.
+    std::size_t sent_after = 0;
+    const auto calls = w.server->calls();
+    for (std::size_t i = before; i < calls.size(); ++i) {
+        sent_after += calls[i].method != "getUpdates" ? 1 : 0;
+    }
+    CHECK(sent_after == 0);
+    CHECK_FALSE(w.log.contains("detenida"));
+}
+
 TEST_CASE("telegram: otros mensajes, viejos, grupos y no autorizados", "[telegram][integracion]") {
     World w;
     w.start(config_for({5}), answering({"respuesta"}));
