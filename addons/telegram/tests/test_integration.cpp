@@ -21,6 +21,7 @@
 #include <ctime>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -258,25 +259,65 @@ TEST_CASE("telegram: un enriquecido rechazado sale como texto plano partido a 40
     CHECK(w.log.contains("enviado_como_texto chat=5"));
 }
 
-TEST_CASE("telegram: Detener a la mitad cancela en menos de 2 s y manda lo generado",
-          "[telegram][integracion][detener]") {
-    World w;
-    w.start(config_for({5}), chatbot_bot_test::slow_clients(100000, 30ms));
-    w.say(1, 5, "cuéntame algo largo");
-    // Espera a que haya una vista previa con texto.
-    std::int64_t draft_id = 0;
-    for (int i = 0; i < 200 && draft_id == 0; ++i) {
+namespace {
+
+/// El draft_id de la primera vista previa a chat cuyo markdown contiene
+/// text (0 si no llegó en unos segundos).
+std::int64_t wait_for_draft(const World& w, std::int64_t chat, std::string_view text) {
+    for (int i = 0; i < 250; ++i) {
         for (const Call& call : w.server->calls("sendRichMessageDraft")) {
-            if (call.body["rich_message"]["markdown"].get<std::string>().find("eco") !=
-                std::string::npos) {
-                draft_id = call.body["draft_id"].get<std::int64_t>();
+            if (call.body["chat_id"] == chat &&
+                call.body["rich_message"]["markdown"].get<std::string>().find(text) !=
+                    std::string::npos) {
+                return call.body["draft_id"].get<std::int64_t>();
             }
         }
         std::this_thread::sleep_for(20ms);
     }
+    return 0;
+}
+
+/// Lo que se mandó al modelo en la última petición (sistema, historial y
+/// la pregunta).
+std::vector<chatbot::Message> last_request(const chatbot_bot_test::Recorder& recorder) {
+    const auto requests = recorder.requests();
+    REQUIRE_FALSE(requests.empty());
+    return chatbot_test::sent_messages_of(requests.back());
+}
+
+bool has_text(const std::vector<Call>& calls, std::string_view text) {
+    for (const Call& call : calls) {
+        if (World::text_of(call) == text) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+TEST_CASE("telegram: Detener a la mitad (como lo manda Telegram) cancela en menos de 2 s",
+          "[telegram][integracion][detener]") {
+    World w;
+    // La primera respuesta es lenta y larga; las siguientes, inmediatas.
+    auto recorder = std::make_shared<chatbot_bot_test::Recorder>();
+    auto slow = std::make_shared<std::atomic<bool>>(true);
+    w.start(config_for({5}), [slow, recorder]() -> std::unique_ptr<chatbot::ChatClient> {
+        if (slow->exchange(false)) {
+            return std::make_unique<chatbot::ChatClient>(
+                chatbot_test::test_config(),
+                std::make_unique<chatbot_bot_test::SlowTransport>(100000, 30ms),
+                std::make_unique<chatbot_test::FakeSleeper>());
+        }
+        return chatbot_bot_test::scripted_clients(recorder)();
+    });
+    w.say(1, 5, "cuéntame algo largo");
+    const std::int64_t draft_id = wait_for_draft(w, 5, "eco");
     REQUIRE(draft_id != 0);
+
+    // El update real: draft_id como cadena.
     const auto started = std::chrono::steady_clock::now();
-    w.server->push_updates(json::array({chatbot_telegram_test::stop_update(2, 5, draft_id)}));
+    w.server->push_updates(json::array({chatbot_telegram_test::real_stop_update(2, 5, draft_id)}));
     REQUIRE(w.server->wait_for("sendMessage", 1));
     chatbot_test::report_latency("Detener desde Telegram", std::chrono::steady_clock::now() - started);
     REQUIRE(w.idle());
@@ -285,6 +326,58 @@ TEST_CASE("telegram: Detener a la mitad cancela en menos de 2 s y manda lo gener
     CHECK(sent[0].method == "sendRichMessage");
     CHECK(World::text_of(sent[0]).rfind("eco:", 0) == 0);
     CHECK(World::text_of(sent[1]) == chatbot::bot::kStoppedNote);
+    CHECK(w.log.contains("detener chat=5"));
+    CHECK(w.log.contains("detenida chat=5 usuario=5"));
+    CHECK_FALSE(w.log.contains("update_invalido"));
+    CHECK_FALSE(w.log.contains("detener_sin_respuesta"));
+
+    // El siguiente mensaje se responde normal, sin "Espera…", y la
+    // detenida no entró al historial.
+    w.say(3, 5, "segunda");
+    REQUIRE(w.idle());
+    const auto after = w.messages(5);
+    CHECK_FALSE(has_text(after, chatbot::bot::kWaitPrevious));
+    REQUIRE(after.size() == 3);
+    CHECK(World::text_of(after[2]) == "eco: segunda");
+    const std::vector<chatbot::Message> history = last_request(*recorder);
+    REQUIRE(history.size() == 2); // Sistema y la segunda pregunta.
+    CHECK(history[0].role == chatbot::Role::System);
+    CHECK(history[1].content == "segunda");
+}
+
+TEST_CASE("telegram: Detener durante \"Pensando…\" manda solo el aviso",
+          "[telegram][integracion][detener]") {
+    World w;
+    auto gate = std::make_shared<chatbot_bot_test::Gate>();
+    auto recorder = std::make_shared<chatbot_bot_test::Recorder>();
+    w.start(config_for({5}), chatbot_bot_test::gated_clients(gate, recorder));
+    w.say(1, 5, "hola");
+    REQUIRE(gate->wait_inside(1)); // El modelo aún no manda nada.
+    const std::int64_t draft_id = wait_for_draft(w, 5, "Pensando");
+    REQUIRE(draft_id != 0);
+
+    const auto started = std::chrono::steady_clock::now();
+    w.server->push_updates(json::array({chatbot_telegram_test::real_stop_update(2, 5, draft_id)}));
+    REQUIRE(w.server->wait_for("sendMessage", 1));
+    chatbot_test::report_latency("Detener en \"Pensando…\"",
+                                 std::chrono::steady_clock::now() - started);
+    REQUIRE(w.idle());
+    const auto sent = w.messages(5);
+    REQUIRE(sent.size() == 1);
+    CHECK(World::text_of(sent[0]) == chatbot::bot::kStoppedEmpty);
+    CHECK(w.log.contains("detener chat=5"));
+    CHECK(w.log.contains("detenida chat=5 usuario=5"));
+
+    gate->open();
+    w.say(3, 5, "otra");
+    REQUIRE(w.idle());
+    const auto after = w.messages(5);
+    CHECK_FALSE(has_text(after, chatbot::bot::kWaitPrevious));
+    REQUIRE(after.size() == 2);
+    CHECK(World::text_of(after[1]) == "eco: otra");
+    const std::vector<chatbot::Message> history = last_request(*recorder);
+    REQUIRE(history.size() == 2);
+    CHECK(history[1].content == "otra");
 }
 
 TEST_CASE("telegram: otros mensajes, viejos, grupos y no autorizados", "[telegram][integracion]") {

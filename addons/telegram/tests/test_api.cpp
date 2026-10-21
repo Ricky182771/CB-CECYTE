@@ -13,6 +13,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -58,7 +59,7 @@ TEST_CASE("api: getUpdates con varios updates, offset y allowed_updates", "[tele
     const auto result = h.api.get_updates(0, std::chrono::seconds{50});
     REQUIRE(result.is_ok());
     const auto& updates = result.value();
-    REQUIRE(updates.size() == 4);
+    REQUIRE(updates.size() == 5);
     CHECK(updates[0].update_id == 10);
     REQUIRE(updates[0].message.has_value());
     CHECK(updates[0].message->chat_id == 5);
@@ -71,6 +72,11 @@ TEST_CASE("api: getUpdates con varios updates, offset y allowed_updates", "[tele
     REQUIRE(updates[2].stop.has_value());
     CHECK(updates[2].stop->draft_id == 7);
     CHECK_FALSE(updates[3].message.has_value()); // Otro tipo: solo cuenta.
+    CHECK_FALSE(updates[3].problem.has_value());
+    // Sin update_id: se anota, no cuenta para el offset.
+    CHECK(updates[4].update_id == 0);
+    REQUIRE(updates[4].problem.has_value());
+    CHECK(updates[4].problem->reason == "update_id_invalido");
 
     const std::vector<Call> calls = h.server->calls("getUpdates");
     REQUIRE(calls.size() == 1);
@@ -84,6 +90,129 @@ TEST_CASE("api: getUpdates con varios updates, offset y allowed_updates", "[tele
     h.server->push_updates(json::array());
     REQUIRE(h.api.get_updates(14, std::chrono::seconds{50}).is_ok());
     CHECK(h.server->calls("getUpdates").back().body["offset"] == 14);
+}
+
+TEST_CASE("api: Detener tal como lo manda Telegram, con draft_id en cadena",
+          "[telegram][api][detener]") {
+    ApiHarness h;
+    h.server->push_updates(json::array({json::parse(chatbot_telegram_test::kRealStopUpdate)}));
+    const auto result = h.api.get_updates(0, std::chrono::seconds{50});
+    REQUIRE(result.is_ok());
+    REQUIRE(result.value().size() == 1);
+    const chatbot::telegram::Update& update = result.value()[0];
+    CHECK(update.update_id == 449973635);
+    CHECK_FALSE(update.problem.has_value());
+    REQUIRE(update.stop.has_value());
+    CHECK(update.stop->draft_id == 12345);
+    CHECK(update.stop->chat_id == 6000000042);
+    CHECK(update.stop->chat_type == "private");
+}
+
+TEST_CASE("api: Detener con draft_id numérico también sirve", "[telegram][api][detener]") {
+    ApiHarness h;
+    json update = json::parse(chatbot_telegram_test::kRealStopUpdate);
+    update["stopped_message_generation"]["draft_id"] = 12345;
+    h.server->push_updates(json::array({update}));
+    const auto result = h.api.get_updates(0, std::chrono::seconds{50});
+    REQUIRE(result.is_ok());
+    REQUIRE(result.value().size() == 1);
+    REQUIRE(result.value()[0].stop.has_value());
+    CHECK(result.value()[0].stop->draft_id == 12345);
+}
+
+TEST_CASE("api: un Detener que no se entiende llega sin stop y con el motivo",
+          "[telegram][api][detener]") {
+    struct Case {
+        const char* label;
+        json draft;
+        bool remove_draft = false;
+        json chat_id = 6000000042;
+        const char* reason = "draft_id_invalido";
+    };
+    const std::vector<Case> cases{
+        {"cero", "0"},
+        {"cero numérico", 0},
+        {"negativo", "-5"},
+        {"con espacio", " 12345"},
+        {"decimal", "12345.0"},
+        {"hexadecimal", "0x10"},
+        {"fuera de rango", "9223372036854775808"},
+        {"null", nullptr},
+        {"booleano", true},
+        {"objeto", json::object()},
+        {"sin draft_id", "1", true},
+        {"chat en cadena", "12345", false, "6000000042", nullptr},
+        {"chat inválido", "12345", false, "abc", "chat_invalido"},
+        {"chat null", "12345", false, nullptr, "chat_invalido"},
+    };
+    for (const Case& c : cases) {
+        INFO(c.label);
+        ApiHarness h;
+        json update = json::parse(chatbot_telegram_test::kRealStopUpdate);
+        update["stopped_message_generation"]["draft_id"] = c.draft;
+        update["stopped_message_generation"]["chat"]["id"] = c.chat_id;
+        if (c.remove_draft) {
+            update["stopped_message_generation"].erase("draft_id");
+        }
+        h.server->push_updates(json::array({update}));
+        const auto result = h.api.get_updates(0, std::chrono::seconds{50});
+        REQUIRE(result.is_ok());
+        REQUIRE(result.value().size() == 1);
+        const chatbot::telegram::Update& parsed = result.value()[0];
+        CHECK(parsed.update_id == 449973635);
+        if (c.reason == nullptr) {
+            CHECK_FALSE(parsed.problem.has_value());
+            REQUIRE(parsed.stop.has_value());
+            CHECK(parsed.stop->chat_id == 6000000042);
+            continue;
+        }
+        CHECK_FALSE(parsed.stop.has_value());
+        REQUIRE(parsed.problem.has_value());
+        CHECK(parsed.problem->type == "stopped_message_generation");
+        CHECK(parsed.problem->reason == c.reason);
+    }
+}
+
+TEST_CASE("api: los enteros de un mensaje y el update_id pueden llegar como cadena",
+          "[telegram][api]") {
+    ApiHarness h;
+    json as_text = chatbot_telegram_test::text_update(20, 5, 6, "hola", 1700000000);
+    as_text["update_id"] = "20";
+    as_text["message"]["chat"]["id"] = "5";
+    as_text["message"]["from"]["id"] = "6";
+    as_text["message"]["date"] = "1700000000";
+    json bad_chat = chatbot_telegram_test::text_update(21, 5, 6, "hola");
+    bad_chat["message"]["chat"]["id"] = "5 ";
+    json bad_from = chatbot_telegram_test::text_update(22, 5, 6, "hola");
+    bad_from["message"]["from"]["id"] = true;
+    json bad_date = chatbot_telegram_test::text_update(23, 5, 6, "hola");
+    bad_date["message"]["date"] = "ayer";
+    json bad_id = chatbot_telegram_test::text_update(24, 5, 6, "hola");
+    bad_id["update_id"] = "+24";
+    h.server->push_updates(json::array({as_text, bad_chat, bad_from, bad_date, bad_id}));
+    const auto result = h.api.get_updates(0, std::chrono::seconds{50});
+    REQUIRE(result.is_ok());
+    const auto& updates = result.value();
+    REQUIRE(updates.size() == 5);
+
+    CHECK(updates[0].update_id == 20);
+    CHECK_FALSE(updates[0].problem.has_value());
+    REQUIRE(updates[0].message.has_value());
+    CHECK(updates[0].message->chat_id == 5);
+    CHECK(updates[0].message->from_id == 6);
+    CHECK(updates[0].message->date == 1700000000);
+
+    const std::vector<std::string> reasons{"chat_invalido", "from_invalido", "date_invalido",
+                                           "update_id_invalido"};
+    for (std::size_t i = 0; i < reasons.size(); ++i) {
+        INFO(reasons[i]);
+        const chatbot::telegram::Update& update = updates[i + 1];
+        CHECK_FALSE(update.message.has_value());
+        REQUIRE(update.problem.has_value());
+        CHECK(update.problem->type == "message");
+        CHECK(update.problem->reason == reasons[i]);
+    }
+    CHECK(updates[4].update_id == 0);
 }
 
 TEST_CASE("api: los errores de Telegram dan su ErrorKind", "[telegram][api]") {

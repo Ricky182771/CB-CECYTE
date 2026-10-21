@@ -84,7 +84,9 @@ std::optional<ChatError> Poller::poll_once() {
     for (const Update& update : result.value()) {
         // El offset se recalcula con cada update: el siguiente getUpdates
         // confirma los que ya se vieron.
-        offset_ = std::max(offset_, update.update_id + 1);
+        if (update.update_id > 0) {
+            offset_ = std::max(offset_, update.update_id + 1);
+        }
         if (shutdown_.is_cancelled()) {
             break;
         }
