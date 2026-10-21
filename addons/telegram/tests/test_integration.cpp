@@ -74,10 +74,14 @@ struct World {
     World(const World&) = delete;
     World& operator=(const World&) = delete;
 
-    void start(chatbot::bot::BotConfig config, chatbot::bot::ClientFactory clients) {
-        bot = std::make_unique<chatbot::bot::Bot>(
-            chatbot_bot_test::valid(std::move(config)),
-            chatbot::bot::BotDependencies{std::move(clients), {}, *outbox, clock, log});
+    /// first_reply: el primer draft_id (fijo, para que las pruebas sean
+    /// deterministas).
+    void start(chatbot::bot::BotConfig config, chatbot::bot::ClientFactory clients,
+               chatbot::bot::ReplyId first_reply = 1) {
+        chatbot::bot::BotDependencies dependencies{std::move(clients), {}, *outbox, clock, log};
+        dependencies.first_reply = [first_reply] { return first_reply; };
+        bot = std::make_unique<chatbot::bot::Bot>(chatbot_bot_test::valid(std::move(config)),
+                                                  std::move(dependencies));
         poller = std::make_unique<Poller>(
             api,
             PollerHandlers{[this](const chatbot::bot::IncomingMessage& m) { bot->handle(m); },
@@ -378,6 +382,44 @@ TEST_CASE("telegram: Detener durante \"Pensando…\" manda solo el aviso",
     const std::vector<chatbot::Message> history = last_request(*recorder);
     REQUIRE(history.size() == 2);
     CHECK(history[1].content == "otra");
+}
+
+TEST_CASE("telegram: Detener con el draft_id del tope y con el 1 que le sigue",
+          "[telegram][integracion][detener]") {
+    World w;
+    auto gate = std::make_shared<chatbot_bot_test::Gate>();
+    auto recorder = std::make_shared<chatbot_bot_test::Recorder>();
+    w.start(config_for({5}), chatbot_bot_test::gated_clients(gate, recorder),
+            chatbot::bot::kMaxReplyId);
+    std::int64_t update_id = 1;
+    std::size_t stopped = 0;
+    for (const std::int64_t expected : {chatbot::bot::kMaxReplyId, std::int64_t{1}}) {
+        const std::size_t drafts_before = w.server->calls("sendRichMessageDraft").size();
+        w.say(update_id++, 5, "hola");
+        REQUIRE(gate->wait_inside(1));
+        std::int64_t draft_id = 0;
+        for (int i = 0; i < 250 && draft_id == 0; ++i) {
+            const auto drafts = w.server->calls("sendRichMessageDraft");
+            if (drafts.size() > drafts_before) {
+                draft_id = drafts[drafts_before].body["draft_id"].get<std::int64_t>();
+            } else {
+                std::this_thread::sleep_for(20ms);
+            }
+        }
+        CHECK(draft_id == expected);
+        // Como lo manda Telegram: draft_id en cadena ("2147483647", "1").
+        w.server->push_updates(
+            json::array({chatbot_telegram_test::real_stop_update(update_id++, 5, draft_id)}));
+        ++stopped;
+        REQUIRE(w.server->wait_for("sendMessage", stopped));
+        REQUIRE(w.idle());
+    }
+    const auto sent = w.messages(5);
+    REQUIRE(sent.size() == 2);
+    CHECK(World::text_of(sent[0]) == chatbot::bot::kStoppedEmpty);
+    CHECK(World::text_of(sent[1]) == chatbot::bot::kStoppedEmpty);
+    CHECK_FALSE(w.log.contains("update_invalido"));
+    CHECK_FALSE(w.log.contains("detener_sin_respuesta"));
 }
 
 TEST_CASE("telegram: Detener cuando la respuesta ya terminó solo se anota",

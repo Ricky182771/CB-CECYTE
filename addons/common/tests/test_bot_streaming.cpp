@@ -10,8 +10,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <limits>
+#include <stdexcept>
 #include <random>
 #include <string>
 #include <thread>
@@ -393,6 +396,125 @@ TEST_CASE("bot: Detener antes del primer texto manda solo el aviso", "[bot][stre
     REQUIRE(h.bot->stop(10, events.front().reply));
     REQUIRE(h.bot->wait_idle(chatbot_test::kThreadTimeout));
     CHECK(h.outbox.texts_for(10) == std::vector<std::string>{std::string{chatbot::bot::kStoppedEmpty}});
+}
+
+namespace {
+
+/// Los ReplyId de las vistas previas, en el orden en que aparecieron.
+std::vector<chatbot::bot::ReplyId> reply_ids(const std::vector<DraftEvent>& events) {
+    std::vector<chatbot::bot::ReplyId> ids;
+    for (const DraftEvent& event : events) {
+        if (ids.empty() || ids.back() != event.reply) {
+            ids.push_back(event.reply);
+        }
+    }
+    return ids;
+}
+
+/// El ReplyId de la primera respuesta de un Bot nuevo con esta fuente.
+chatbot::bot::ReplyId first_reply_of(chatbot::bot::ReplyIdSource source) {
+    BotHarness h;
+    h.outbox.drafts_enabled = true;
+    h.first_reply = std::move(source);
+    h.start();
+    h.say(10, 1, "hola");
+    const std::vector<chatbot::bot::ReplyId> ids = reply_ids(h.outbox.drafts());
+    REQUIRE(ids.size() == 1);
+    return ids.front();
+}
+
+/// Cuántos valores distintos dan los primeros ReplyId de `count` arranques.
+std::size_t distinct_first_replies(const chatbot::bot::ReplyIdSource& source, int count) {
+    std::vector<chatbot::bot::ReplyId> firsts;
+    for (int i = 0; i < count; ++i) {
+        firsts.push_back(first_reply_of(source));
+        CHECK(firsts.back() >= 1);
+        CHECK(firsts.back() <= chatbot::bot::kMaxReplyId);
+    }
+    std::sort(firsts.begin(), firsts.end());
+    return static_cast<std::size_t>(std::unique(firsts.begin(), firsts.end()) - firsts.begin());
+}
+
+} // namespace
+
+TEST_CASE("bot: un reinicio no repite el primer ReplyId", "[bot][streaming][detener]") {
+    // Telegram ignora en silencio un draft_id que ya se detuvo en ese chat:
+    // si cada arranque empezara en 1, la primera respuesta saldría sin
+    // vista previa ni Detener.
+    // Con 2^31 valores posibles, que 5 arranques den el mismo valor tiene
+    // probabilidad 2^-124: solo pasa con un sorteo roto. Si cada arranque
+    // empezara en 1, darían 1 siempre.
+    CHECK(distinct_first_replies(chatbot::bot::random_reply_id, 5) >= 2);
+    // Sin first_reply, la real.
+    CHECK(distinct_first_replies({}, 5) >= 2);
+}
+
+TEST_CASE("bot: random_reply_id da valores del rango y distintos", "[bot][streaming]") {
+    std::vector<chatbot::bot::ReplyId> values;
+    for (int i = 0; i < 1000; ++i) {
+        values.push_back(chatbot::bot::random_reply_id());
+        CHECK(values.back() >= 1);
+        CHECK(values.back() <= chatbot::bot::kMaxReplyId);
+    }
+    std::sort(values.begin(), values.end());
+    // Con 2^31 valores posibles, la probabilidad de algún par repetido en
+    // 1000 es ~2.3e-4: se piden 990 distintos, no 1000, para que la prueba
+    // no falle sola; un sorteo roto (el reloj, un valor fijo) da muchos menos.
+    CHECK(std::unique(values.begin(), values.end()) - values.begin() >= 990);
+}
+
+TEST_CASE("bot: los ReplyId vuelven a 1 después del tope y nunca dan 0",
+          "[bot][streaming][detener]") {
+    constexpr chatbot::bot::ReplyId kMax = chatbot::bot::kMaxReplyId;
+    BotHarness h;
+    h.outbox.drafts_enabled = true;
+    h.first_reply = [] { return kMax - 1; };
+    h.start();
+    for (int i = 0; i < 4; ++i) {
+        h.say(10, 1, "hola " + std::to_string(i));
+    }
+    CHECK(reply_ids(h.outbox.drafts()) ==
+          std::vector<chatbot::bot::ReplyId>{kMax - 1, kMax, 1, 2});
+
+    // Una fuente fuera del rango se lleva a él.
+    CHECK(first_reply_of([] { return kMax; }) == kMax);
+    CHECK(first_reply_of([] { return chatbot::bot::ReplyId{0}; }) == 1);
+    CHECK(first_reply_of([] { return kMax + 1; }) == 2);
+    for (const chatbot::bot::ReplyId value :
+         {chatbot::bot::ReplyId{-1}, chatbot::bot::ReplyId{-5}, kMax * 3,
+          std::numeric_limits<chatbot::bot::ReplyId>::min(),
+          std::numeric_limits<chatbot::bot::ReplyId>::max()}) {
+        const chatbot::bot::ReplyId reply = first_reply_of([value] { return value; });
+        CHECK(reply >= 1);
+        CHECK(reply <= kMax);
+    }
+    // Una fuente que lanza: la real, sin tumbar al bot.
+    const chatbot::bot::ReplyId fallback =
+        first_reply_of([]() -> chatbot::bot::ReplyId { throw std::runtime_error{"sin fuente"}; });
+    CHECK(fallback >= 1);
+    CHECK(fallback <= kMax);
+}
+
+TEST_CASE("bot: Detener funciona con el ReplyId del tope y con el que le sigue",
+          "[bot][streaming][detener]") {
+    BotHarness h;
+    h.outbox.drafts_enabled = true;
+    h.first_reply = [] { return chatbot::bot::kMaxReplyId; };
+    auto gate = std::make_shared<chatbot_bot_test::Gate>();
+    h.start(chatbot_bot_test::test_bot_config(), chatbot_bot_test::gated_clients(gate, h.recorder));
+    for (const chatbot::bot::ReplyId expected : {chatbot::bot::kMaxReplyId, chatbot::bot::ReplyId{1}}) {
+        const std::size_t seen = h.outbox.drafts().size();
+        h.bot->handle(chatbot_bot_test::message(10, 1, "hola"));
+        REQUIRE(gate->wait_inside(1));
+        const std::vector<DraftEvent> events = h.outbox.drafts();
+        REQUIRE(events.size() == seen + 1);
+        CHECK(events.back().reply == expected);
+        CHECK_FALSE(h.bot->stop(10, expected == 1 ? 2 : expected - 1));
+        REQUIRE(h.bot->stop(10, events.back().reply));
+        REQUIRE(h.bot->wait_idle(chatbot_test::kThreadTimeout));
+    }
+    CHECK(h.outbox.texts_for(10) == std::vector<std::string>{std::string{chatbot::bot::kStoppedEmpty},
+                                                              std::string{chatbot::bot::kStoppedEmpty}});
 }
 
 TEST_CASE("bot: un Markdown rechazado se manda como texto plano partido a su tope",

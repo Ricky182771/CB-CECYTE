@@ -647,6 +647,7 @@ struct BotHarness {
         dependencies.day = day;
         dependencies.invited = invited;
         dependencies.save_invited = save_invited;
+        dependencies.first_reply = first_reply;
         bot = std::make_unique<chatbot::bot::Bot>(valid(std::move(config)),
                                                   std::move(dependencies));
     }
@@ -655,6 +656,9 @@ struct BotHarness {
     chatbot::bot::DayFunction day;
     std::vector<UserId> invited;
     chatbot::bot::SaveInvited save_invited;
+    /// Fija, para que las pruebas sean deterministas (la real es
+    /// chatbot::bot::random_reply_id).
+    chatbot::bot::ReplyIdSource first_reply = [] { return chatbot::bot::ReplyId{1}; };
 
     void start(chatbot::bot::BotConfig config = test_bot_config()) {
         start(std::move(config), scripted_clients(recorder));

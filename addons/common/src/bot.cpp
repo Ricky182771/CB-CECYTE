@@ -25,9 +25,6 @@ constexpr std::size_t kMaxReportedDenied = 1000;
 constexpr unsigned kMaxReportedRejections = 3;
 /// Tope del detalle de un error en el registro.
 constexpr std::size_t kMaxLogDetail = 200;
-/// Los ReplyId vuelven a 1 después de este (cabe en un Integer de Telegram).
-constexpr ReplyId kMaxReplyId = 2147483647;
-
 /// Mismo criterio que split_markdown: una respuesta que no deja ningún
 /// pedazo es una respuesta vacía.
 bool is_blank(std::string_view text) {
@@ -52,6 +49,17 @@ std::string one_line(std::string_view text, std::size_t max_bytes) {
         clean += kEllipsis;
     }
     return clean;
+}
+
+/// El primer ReplyId de un Bot, siempre en [1, kMaxReplyId].
+ReplyId first_reply_id(const ReplyIdSource& source) {
+    if (source) {
+        try {
+            return to_reply_range(source());
+        } catch (...) {
+        }
+    }
+    return random_reply_id();
 }
 
 long long elapsed_ms(std::chrono::steady_clock::time_point since) {
@@ -102,7 +110,8 @@ Bot::Bot(ValidBotConfig config, BotDependencies dependencies)
       plain_limit_(dependencies_.outbox.message_limit(TextFormat::Plain)),
       access_(config_, dependencies_.invited),
       sessions_(config_.system_prompt, config_.session_idle_timeout),
-      counter_(config_.daily_message_limit) {
+      counter_(config_.daily_message_limit),
+      next_reply_(first_reply_id(dependencies_.first_reply)) {
     workers_.reserve(config_.max_concurrent_responses);
     try {
         for (std::size_t i = 0; i < config_.max_concurrent_responses; ++i) {
