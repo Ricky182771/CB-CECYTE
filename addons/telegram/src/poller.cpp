@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <ctime>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -11,6 +12,20 @@ namespace {
 
 /// Chats de grupos o canales que se anotan (una vez cada uno).
 constexpr std::size_t kMaxIgnoredChats = 1000;
+/// UpdateProblem::reason de un update sin update_id válido: no mueve el
+/// offset, así que Telegram lo vuelve a mandar.
+constexpr std::string_view kInvalidUpdateId = "update_id_invalido";
+
+bool has_invalid_id(const Update& update) {
+    return update.update_id <= 0 && update.problem.has_value() &&
+           update.problem->reason == kInvalidUpdateId;
+}
+
+long long seconds_since(std::chrono::steady_clock::time_point since) {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() -
+                                                            since)
+        .count();
+}
 
 } // namespace
 
@@ -29,6 +44,13 @@ void Poller::log(bot::LogLevel level, const std::string& line) {
 bool Poller::wait(std::chrono::milliseconds duration) {
     Sleeper& sleeper = options_.sleeper != nullptr ? *options_.sleeper : real_sleeper_;
     return sleeper.sleep_for(duration, &shutdown_);
+}
+
+bool Poller::back_off(std::size_t times) {
+    const auto exponent = std::min<std::size_t>(times - 1, 16);
+    const std::chrono::seconds backoff =
+        std::min(options_.max_backoff, std::chrono::seconds{std::int64_t{1} << exponent});
+    return wait(backoff);
 }
 
 std::optional<ChatError> Poller::run() {
@@ -67,20 +89,16 @@ std::optional<ChatError> Poller::poll_once() {
                     "\" http=" + std::to_string(error.http_status));
         }
         ++failures_;
-        const auto exponent = std::min<std::size_t>(failures_ - 1, 16);
-        const std::chrono::seconds backoff =
-            std::min(options_.max_backoff, std::chrono::seconds{std::int64_t{1} << exponent});
-        (void)wait(backoff);
+        (void)back_off(failures_);
         return std::nullopt;
     }
     if (failures_ > 0) {
-        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                                 std::chrono::steady_clock::now() - offline_since_)
-                                 .count();
         log(bot::LogLevel::Info, "conexion_recuperada fallos=" + std::to_string(failures_) +
-                                     " segundos=" + std::to_string(seconds));
+                                     " segundos=" + std::to_string(seconds_since(offline_since_)));
         failures_ = 0;
     }
+    const std::int64_t offset_before = offset_;
+    bool invalid_id = false;
     for (const Update& update : result.value()) {
         // El offset se recalcula con cada update: el siguiente getUpdates
         // confirma los que ya se vieron.
@@ -90,14 +108,36 @@ std::optional<ChatError> Poller::poll_once() {
         if (shutdown_.is_cancelled()) {
             break;
         }
+        if (has_invalid_id(update)) {
+            invalid_id = true;
+            if (invalid_id_noted_) {
+                continue; // Es el mismo que volvió: ya se anotó.
+            }
+        }
         try {
             dispatch(update);
         } catch (...) {
             log(bot::LogLevel::Error, "update_fallido id=" + std::to_string(update.update_id));
         }
     }
+    invalid_id_noted_ = invalid_id;
     if (handlers_.idle) {
         handlers_.idle();
+    }
+    // Un update sin update_id que nada confirmó vuelve en el siguiente
+    // getUpdates, y al instante (hay uno pendiente): sin esta espera el
+    // long polling quedaría en un ciclo sin pausa.
+    const bool stuck = invalid_id && offset_ == offset_before;
+    if (stuck && !shutdown_.is_cancelled()) {
+        if (stuck_ == 0) {
+            stuck_since_ = std::chrono::steady_clock::now();
+        }
+        ++stuck_;
+        (void)back_off(stuck_);
+    } else if (!stuck && stuck_ > 0) {
+        log(bot::LogLevel::Info, "update_invalido_superado vueltas=" + std::to_string(stuck_) +
+                                     " segundos=" + std::to_string(seconds_since(stuck_since_)));
+        stuck_ = 0;
     }
     return std::nullopt;
 }

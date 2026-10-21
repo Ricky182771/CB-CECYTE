@@ -40,7 +40,10 @@ struct PollerOptions {
 /// ignoran (cada chat se anota una vez). Sin red (Network, Timeout, Server…)
 /// espera cada vez más, con tope, y anota una línea al perder la conexión y
 /// otra al recuperarla; con 429, espera retry_after. Un token inválido
-/// (Auth) termina con ese error.
+/// (Auth) termina con ese error. Un update sin update_id válido que ningún
+/// otro confirma vuelve en cada getUpdates: se anota una vez, se espera
+/// igual que sin red mientras se repita y se anota otra línea cuando el
+/// offset vuelve a avanzar.
 class Poller {
 public:
     Poller(BotApi& api, PollerHandlers handlers, bot::Log& log, const CancelToken& shutdown,
@@ -61,6 +64,8 @@ private:
     void note_ignored_chat(bot::ChatId chat);
     void log(bot::LogLevel level, const std::string& line);
     bool wait(std::chrono::milliseconds duration);
+    /// La espera de la vez times (desde 1): 1 s, 2 s, 4 s… hasta max_backoff.
+    bool back_off(std::size_t times);
 
     BotApi& api_;
     PollerHandlers handlers_;
@@ -72,6 +77,11 @@ private:
     std::int64_t offset_ = 0;
     std::size_t failures_ = 0; ///< Fallos seguidos (0: conectado).
     std::chrono::steady_clock::time_point offline_since_;
+    /// Vueltas seguidas en que solo volvió un update sin update_id válido.
+    std::size_t stuck_ = 0;
+    std::chrono::steady_clock::time_point stuck_since_;
+    /// La vuelta anterior trajo un update sin update_id válido (ya se anotó).
+    bool invalid_id_noted_ = false;
     std::set<bot::ChatId> ignored_chats_;
 };
 

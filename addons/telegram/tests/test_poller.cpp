@@ -12,9 +12,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -166,6 +168,121 @@ TEST_CASE("poller: un update que no se entiende se anota sin valores ni nombres"
             CHECK(line.find(value) == std::string::npos);
         }
     }
+}
+
+namespace {
+
+/// Un update de mensaje sin update_id: no mueve el offset y Telegram lo
+/// vuelve a mandar en cada getUpdates.
+json without_update_id() {
+    json update = chatbot_telegram_test::text_update(1, 5, 5, "sin id");
+    update.erase("update_id");
+    return update;
+}
+
+std::size_t count_lines(const chatbot_bot_test::MemoryLog& log, std::string_view text) {
+    std::size_t count = 0;
+    for (const std::string& line : log.lines()) {
+        count += line.find(text) != std::string::npos ? 1 : 0;
+    }
+    return count;
+}
+
+/// Anota cada espera y espera de verdad (hasta 60 s), cortada por el token:
+/// si la espera no recibiera el token de apagado, la prueba tardaría 60 s.
+class LongSleeper final : public chatbot::Sleeper {
+public:
+    [[nodiscard]] bool sleep_for(std::chrono::milliseconds duration,
+                                 const chatbot::CancelToken* cancel) override {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            sleeps_.push_back(duration);
+        }
+        changed_.notify_all();
+        chatbot::RealSleeper real;
+        return real.sleep_for(60s, cancel);
+    }
+
+    bool wait_for_sleep() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return changed_.wait_for(lock, chatbot_test::kThreadTimeout,
+                                 [this] { return !sleeps_.empty(); });
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    std::vector<std::chrono::milliseconds> sleeps_;
+};
+
+} // namespace
+
+TEST_CASE("poller: un update sin update_id que se repite no deja un ciclo sin pausa",
+          "[telegram][poller]") {
+    PollerHarness h;
+    Poller poller = h.make();
+    constexpr int kRounds = 10;
+    for (int i = 0; i < kRounds; ++i) {
+        h.server->push_updates(json::array({without_update_id()}));
+    }
+    for (int i = 0; i < kRounds; ++i) {
+        REQUIRE_FALSE(poller.poll_once().has_value());
+    }
+    // Una espera por vuelta, cada vez más larga: 10 getUpdates en 303 s de
+    // reloj falso (sin espera serían 10 en un instante).
+    CHECK(h.sleeper.sleeps == std::vector<std::chrono::milliseconds>{1s, 2s, 4s, 8s, 16s, 32s,
+                                                                      60s, 60s, 60s, 60s});
+    CHECK(h.server->calls("getUpdates").size() == kRounds);
+    CHECK(poller.offset() == 0);
+    CHECK(h.messages.empty());
+    CHECK(count_lines(h.log, "update_invalido") == 1);
+    CHECK(h.log.contains("update_invalido id=0 tipo=message motivo=update_id_invalido"));
+    CHECK_FALSE(h.log.contains("update_invalido_superado"));
+
+    // Llegan updates que sí avanzan: van al bot, sin espera, y se anota que
+    // pasó.
+    h.sleeper.sleeps.clear();
+    h.server->push_updates(json::array({without_update_id(),
+                                        chatbot_telegram_test::text_update(40, 5, 5, "hola")}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    CHECK(h.sleeper.sleeps.empty());
+    REQUIRE(h.messages.size() == 1);
+    CHECK(h.messages[0].text == "hola");
+    CHECK(poller.offset() == 41);
+    CHECK(count_lines(h.log, "update_invalido_superado vueltas=10 segundos=") == 1);
+    CHECK(count_lines(h.log, "update_invalido id=") == 1); // Seguía repitiéndose.
+
+    h.server->push_updates(json::array({chatbot_telegram_test::text_update(41, 5, 5, "otra")}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    CHECK(h.sleeper.sleeps.empty());
+    CHECK(h.messages.size() == 2);
+    CHECK(count_lines(h.log, "update_invalido_superado") == 1);
+
+    // Si vuelve a pasar, se anota otra vez y la espera empieza en 1 s.
+    h.server->push_updates(json::array({without_update_id()}));
+    REQUIRE_FALSE(poller.poll_once().has_value());
+    CHECK(h.sleeper.sleeps == std::vector<std::chrono::milliseconds>{1s});
+    CHECK(count_lines(h.log, "update_invalido id=") == 2);
+}
+
+TEST_CASE("poller: el apagado corta la espera de un update sin update_id en menos de 2 s",
+          "[telegram][poller]") {
+    PollerHarness h;
+    LongSleeper sleeper;
+    PollerOptions options;
+    options.sleeper = &sleeper;
+    Poller poller{h.api, PollerHandlers{}, h.log, h.shutdown, options};
+    for (int i = 0; i < 5; ++i) {
+        h.server->push_updates(json::array({without_update_id()}));
+    }
+    std::thread thread{[&] { (void)poller.run(); }};
+    REQUIRE(sleeper.wait_for_sleep());
+    const auto started = std::chrono::steady_clock::now();
+    h.shutdown.cancel();
+    thread.join();
+    chatbot_test::report_latency("apagado con un update sin update_id",
+                                 std::chrono::steady_clock::now() - started);
+    CHECK(h.server->calls("getUpdates").size() == 1);
 }
 
 TEST_CASE("poller: sin red espera cada vez más y lo anota solo dos veces",
