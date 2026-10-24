@@ -85,6 +85,31 @@ inline nlohmann::json stop_update(std::int64_t id, std::int64_t chat, std::int64
              {{"chat", {{"id", chat}, {"type", "private"}}}, {"draft_id", draft}}}};
 }
 
+/// stopped_message_generation tal como lo mandó Telegram al presionar
+/// Detener (capturado con curl el 2026-10-20, nombres cambiados): draft_id
+/// llega como cadena aunque la documentación diga Integer.
+inline constexpr std::string_view kRealStopUpdate = R"json({
+  "update_id": 449973635,
+  "stopped_message_generation": {
+    "chat": {
+      "id": 6000000042,
+      "first_name": "Nombre",
+      "username": "usuario",
+      "type": "private"
+    },
+    "draft_id": "12345"
+  }
+})json";
+
+/// kRealStopUpdate con otro update_id, chat y draft_id (como cadena).
+inline nlohmann::json real_stop_update(std::int64_t id, std::int64_t chat, std::int64_t draft) {
+    nlohmann::json update = nlohmann::json::parse(kRealStopUpdate);
+    update["update_id"] = id;
+    update["stopped_message_generation"]["chat"]["id"] = chat;
+    update["stopped_message_generation"]["draft_id"] = std::to_string(draft);
+    return update;
+}
+
 /// El "servidor" de Telegram.
 class FakeTelegram {
 public:

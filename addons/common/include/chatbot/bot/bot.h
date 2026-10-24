@@ -57,6 +57,11 @@ struct BotDependencies {
     std::vector<UserId> invited = {};
     /// Vacía: los invitados viven solo en memoria.
     SaveInvited save_invited = {};
+    /// El primer ReplyId; los demás siguen de uno en uno y vuelven a 1
+    /// después de kMaxReplyId. Debe dar otro en cada arranque (Telegram
+    /// ignora en silencio un draft_id que ya se detuvo en ese chat). Las
+    /// pruebas ponen uno fijo. Vacía, o si lanza: random_reply_id.
+    ReplyIdSource first_reply = random_reply_id;
 };
 
 /// La lógica común de los bots, sin red ni plataforma: acceso, comandos,
@@ -96,7 +101,8 @@ public:
     /// stopped_message_generation): se cancela, lo que se alcanzó a generar
     /// se manda con kStoppedNote y el par no entra al historial (como una
     /// respuesta cancelada en la app). false si esa respuesta ya no está en
-    /// curso. Seguro entre hilos.
+    /// curso (lo anota como detener_sin_respuesta, salvo durante el
+    /// apagado). Seguro entre hilos.
     bool stop(ChatId chat, ReplyId reply);
 
     /// Borra las conversaciones inactivas (las ocupadas no). handle() ya lo
@@ -169,7 +175,7 @@ private:
     std::deque<Job> queue_;
     std::size_t running_ = 0;
     std::map<ChatId, Running> running_jobs_;
-    ReplyId next_reply_ = 1;
+    ReplyId next_reply_; ///< El siguiente; empieza en first_reply.
     bool stopping_ = false;
     /// Una sola escritura de invitados a la vez, en orden.
     std::mutex save_mutex_;

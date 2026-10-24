@@ -44,15 +44,26 @@ struct ChatMessage {
 struct GenerationStopped {
     std::int64_t chat_id = 0;
     std::string chat_type;
-    std::int64_t draft_id = 0;
+    std::int64_t draft_id = 0; ///< Siempre > 0 (si no, el update es inválido).
+};
+
+/// Un update que no se pudo interpretar. Solo nombres fijos, nunca valores
+/// del update: el Poller lo anota tal cual.
+struct UpdateProblem {
+    std::string type;   ///< "message", "stopped_message_generation" u "otro".
+    std::string reason; ///< "chat_invalido", "draft_id_invalido", "update_id_invalido"…
 };
 
 /// Un update de getUpdates. Los de otros tipos llegan sin message ni stop
-/// (solo cuentan para el offset).
+/// (solo cuentan para el offset). Un message o un
+/// stopped_message_generation que no se pudo interpretar llega sin él y con
+/// problem; sin update_id válido, con update_id 0 (no cuenta para el
+/// offset). Los enteros pueden llegar como número o como cadena de dígitos.
 struct Update {
     std::int64_t update_id = 0;
     std::optional<ChatMessage> message;
     std::optional<GenerationStopped> stop;
+    std::optional<UpdateProblem> problem;
 };
 
 struct BotIdentity {

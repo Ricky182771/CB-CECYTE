@@ -1,9 +1,12 @@
 #include "chatbot/telegram/api.h"
 
+#include "integer.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace chatbot::telegram {
@@ -90,24 +93,56 @@ std::optional<std::chrono::seconds> retry_after_of(const json& body) {
     return std::chrono::seconds{seconds};
 }
 
-std::optional<ChatMessage> parse_message(const json& message) {
-    if (!message.is_object()) {
+/// El chat de un update: id (número o cadena) y tipo. nullopt si falta o el
+/// id no es un entero.
+std::optional<std::pair<std::int64_t, std::string>> parse_chat(const json& parent) {
+    const auto chat = parent.find("chat");
+    if (chat == parent.end() || !chat->is_object()) {
         return std::nullopt;
     }
-    const auto chat = message.find("chat");
-    if (chat == message.end() || !chat->is_object() || !chat->contains("id") ||
-        !(*chat)["id"].is_number_integer()) {
+    const auto id = chat->find("id");
+    if (id == chat->end()) {
+        return std::nullopt;
+    }
+    const std::optional<std::int64_t> value = telegram_integer(*id);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    std::string type;
+    if (const auto found = chat->find("type"); found != chat->end() && found->is_string()) {
+        type = found->get<std::string>();
+    }
+    return std::pair{*value, std::move(type)};
+}
+
+/// Un Message. Si no se puede interpretar, nullopt y el motivo en reason.
+std::optional<ChatMessage> parse_message(const json& message, std::string& reason) {
+    if (!message.is_object()) {
+        reason = "no_es_objeto";
+        return std::nullopt;
+    }
+    auto chat = parse_chat(message);
+    if (!chat.has_value()) {
+        reason = "chat_invalido";
         return std::nullopt;
     }
     ChatMessage out;
-    out.chat_id = (*chat)["id"].get<std::int64_t>();
-    if (const auto type = chat->find("type"); type != chat->end() && type->is_string()) {
-        out.chat_type = type->get<std::string>();
-    }
-    if (const auto from = message.find("from"); from != message.end() && from->is_object()) {
-        if (const auto id = from->find("id"); id != from->end() && id->is_number_integer()) {
-            out.from_id = id->get<std::int64_t>();
+    out.chat_id = chat->first;
+    out.chat_type = std::move(chat->second);
+    if (const auto from = message.find("from"); from != message.end()) {
+        // Sin from (canales) el mensaje se queda sin remitente; con un from
+        // que no se entiende, no se adivina.
+        std::optional<std::int64_t> value;
+        if (from->is_object()) {
+            if (const auto id = from->find("id"); id != from->end()) {
+                value = telegram_integer(*id);
+            }
         }
+        if (!value.has_value()) {
+            reason = "from_invalido";
+            return std::nullopt;
+        }
+        out.from_id = *value;
         if (const auto bot = from->find("is_bot"); bot != from->end() && bot->is_boolean()) {
             out.from_bot = bot->get<bool>();
         }
@@ -115,28 +150,40 @@ std::optional<ChatMessage> parse_message(const json& message) {
     if (const auto text = message.find("text"); text != message.end() && text->is_string()) {
         out.text = text->get<std::string>();
     }
-    if (const auto date = message.find("date"); date != message.end() && date->is_number_integer()) {
-        out.date = date->get<std::int64_t>();
+    if (const auto date = message.find("date"); date != message.end()) {
+        const std::optional<std::int64_t> value = telegram_integer(*date);
+        if (!value.has_value()) {
+            reason = "date_invalido";
+            return std::nullopt;
+        }
+        out.date = *value;
     }
     return out;
 }
 
-std::optional<GenerationStopped> parse_stop(const json& stop) {
+/// Un MessageGenerationStopped. draft_id llega como cadena (aunque la
+/// documentación diga Integer) y nunca es 0 ni negativo.
+std::optional<GenerationStopped> parse_stop(const json& stop, std::string& reason) {
     if (!stop.is_object()) {
+        reason = "no_es_objeto";
         return std::nullopt;
     }
-    const auto chat = stop.find("chat");
+    auto chat = parse_chat(stop);
+    if (!chat.has_value()) {
+        reason = "chat_invalido";
+        return std::nullopt;
+    }
     const auto draft = stop.find("draft_id");
-    if (chat == stop.end() || !chat->is_object() || !chat->contains("id") ||
-        !(*chat)["id"].is_number_integer() || draft == stop.end() || !draft->is_number_integer()) {
+    const std::optional<std::int64_t> draft_id =
+        draft != stop.end() ? telegram_integer(*draft) : std::nullopt;
+    if (!draft_id.has_value() || *draft_id <= 0) {
+        reason = "draft_id_invalido";
         return std::nullopt;
     }
     GenerationStopped out;
-    out.chat_id = (*chat)["id"].get<std::int64_t>();
-    if (const auto type = chat->find("type"); type != chat->end() && type->is_string()) {
-        out.chat_type = type->get<std::string>();
-    }
-    out.draft_id = draft->get<std::int64_t>();
+    out.chat_id = chat->first;
+    out.chat_type = std::move(chat->second);
+    out.draft_id = *draft_id;
     return out;
 }
 
@@ -339,17 +386,42 @@ Result<std::vector<Update>> BotApi::get_updates(std::int64_t offset, std::chrono
         }
         std::vector<Update> out;
         for (const json& item : updates) {
-            if (!item.is_object() || !item.contains("update_id") ||
-                !item["update_id"].is_number_integer()) {
-                continue; // Sin update_id no se puede confirmar: se ignora.
-            }
             Update update;
-            update.update_id = item["update_id"].get<std::int64_t>();
-            if (const auto message = item.find("message"); message != item.end()) {
-                update.message = parse_message(*message);
+            if (!item.is_object()) {
+                update.problem = UpdateProblem{"otro", "no_es_objeto"};
+                out.push_back(std::move(update));
+                continue;
             }
-            if (const auto stop = item.find("stopped_message_generation"); stop != item.end()) {
-                update.stop = parse_stop(*stop);
+            const auto message = item.find("message");
+            const auto stop = item.find("stopped_message_generation");
+            const char* type = stop != item.end()      ? "stopped_message_generation"
+                               : message != item.end() ? "message"
+                                                       : "otro";
+            const auto id = item.find("update_id");
+            const std::optional<std::int64_t> update_id =
+                id != item.end() ? telegram_integer(*id) : std::nullopt;
+            if (!update_id.has_value() || *update_id <= 0 ||
+                *update_id == std::numeric_limits<std::int64_t>::max()) {
+                // Sin update_id no se puede confirmar ni atender: solo se
+                // anota (los siguientes lo confirman al subir el offset).
+                // El máximo tampoco: el offset es update_id + 1 y desbordaría.
+                update.problem = UpdateProblem{type, "update_id_invalido"};
+                out.push_back(std::move(update));
+                continue;
+            }
+            update.update_id = *update_id;
+            std::string reason;
+            if (message != item.end()) {
+                update.message = parse_message(*message, reason);
+                if (!update.message.has_value()) {
+                    update.problem = UpdateProblem{"message", reason};
+                }
+            }
+            if (stop != item.end()) {
+                update.stop = parse_stop(*stop, reason);
+                if (!update.stop.has_value()) {
+                    update.problem = UpdateProblem{"stopped_message_generation", reason};
+                }
             }
             out.push_back(std::move(update));
         }

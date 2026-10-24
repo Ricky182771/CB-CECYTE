@@ -16,9 +16,27 @@ namespace chatbot::bot {
 using ChatId = std::int64_t;
 /// ID de un usuario de la plataforma (en Telegram, from.id: siempre > 0).
 using UserId = std::int64_t;
-/// Identifica una respuesta en curso (Bot::stop). Bot los da desde 1 y
-/// nunca pasan de 2^31 - 1 (en Telegram es el draft_id, un Integer).
+/// Identifica una respuesta en curso (Bot::stop). Bot los da seguidos desde
+/// el que dé BotDependencies::first_reply, entre 1 y kMaxReplyId (en
+/// Telegram es el draft_id, un Integer).
 using ReplyId = std::int64_t;
+
+/// Después de este, los ReplyId vuelven a 1 (2^31 - 1: cabe en un Integer de
+/// Telegram).
+inline constexpr ReplyId kMaxReplyId = 2147483647;
+
+/// De dónde sale el primer ReplyId de un Bot. Un valor fuera de
+/// [1, kMaxReplyId] se lleva a ese rango.
+using ReplyIdSource = std::function<ReplyId()>;
+
+/// Un ReplyId al azar en [1, kMaxReplyId] (std::random_device; si no hay
+/// fuente de entropía, el reloj). Así un bot que se reinicia no repite los de
+/// antes: Telegram ignora en silencio un draft_id que ya se detuvo en ese
+/// chat.
+[[nodiscard]] ReplyId random_reply_id();
+
+/// value si está en [1, kMaxReplyId]; si no, otro de ese rango (nunca 0).
+[[nodiscard]] ReplyId to_reply_range(ReplyId value);
 
 /// Un mensaje que llegó a la plataforma, ya traducido. El texto y el nombre
 /// nunca van al registro.
