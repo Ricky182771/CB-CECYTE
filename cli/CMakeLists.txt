@@ -66,6 +66,7 @@ add_library(chatbot_cli_lib STATIC
     src/providers.cpp
     src/request_runner.cpp
     src/search_settings.cpp
+    src/service_control.cpp
     src/sidebar.cpp
     src/terminal_reply.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)

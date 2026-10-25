@@ -29,6 +29,7 @@ add_executable(chatbot_tests
     test_addon_launcher.cpp
     test_platform.cpp
     test_child_process.cpp
+    test_service_control.cpp
     test_published_date.cpp
     test_redirect.cpp
     test_response.cpp
