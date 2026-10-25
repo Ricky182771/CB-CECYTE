@@ -25,7 +25,7 @@ target_link_libraries(chatbot_telegram
     PRIVATE chatbot::markdown nlohmann_json::nlohmann_json)
 chatbot_set_warnings(chatbot_telegram)
 
-# El bot. Se instala como un programa más (ver el README para systemd).
+# El bot: "chatbot telegram" lo arranca (README, "Bot de Telegram").
 add_executable(chatbot-telegram src/main.cpp)
 target_link_libraries(chatbot-telegram PRIVATE chatbot::telegram)
 chatbot_set_warnings(chatbot-telegram)
@@ -38,6 +38,10 @@ chatbot_set_warnings(chatbot-telegram-probe)
 
 set_property(GLOBAL APPEND PROPERTY CHATBOT_ADDON_TARGETS
     chatbot_telegram chatbot-telegram chatbot-telegram-probe)
+
+# Junto a chatbot: así "chatbot telegram" lo encuentra en el build.
+set_target_properties(chatbot-telegram chatbot-telegram-probe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:chatbot>)
 
 if(CHATBOT_BUILD_TESTS)
     add_subdirectory(tests)

@@ -66,3 +66,19 @@ function(chatbot_forbid_ui_dependencies target)
         endif()
     endforeach()
 endfunction()
+
+# Falla la configuración si target (cli/, core o chatbot::markdown) depende
+# de un addon: de addons/ solo se puede usar chatbot::addon_settings. Se
+# llama al final, cuando ya existen los targets de CHATBOT_ADDON_TARGETS.
+function(chatbot_forbid_addon_dependencies target)
+    get_property(forbidden GLOBAL PROPERTY CHATBOT_ADDON_TARGETS)
+    chatbot_collect_dependencies(${target} dependencies)
+    list(REMOVE_ITEM dependencies ${target})
+    foreach(dependency IN LISTS dependencies)
+        if(dependency IN_LIST forbidden)
+            message(FATAL_ERROR
+                "${target} depende de ${dependency}: de addons/, cli/ solo puede usar "
+                "chatbot::addon_settings (AGENTS.md, sección \"Addons\").")
+        endif()
+    endforeach()
+endfunction()

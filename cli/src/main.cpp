@@ -5,6 +5,7 @@
 // pantalla o la Conversation se ejecuta en el hilo de la interfaz mediante
 // App::Post.
 
+#include "addon_launcher.h"
 #include "block_actions.h"
 #include "clipboard.h"
 #include "code_blocks.h"
@@ -276,11 +277,17 @@ private:
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     // Windows: la consola en UTF-8 mientras corre el programa, y al salir
     // (también por un error) vuelve a la página de códigos que tenía. Se
     // declara primero para que se destruya al último, después de FTXUI.
     const chatbot::ConsoleUtf8Scope console_utf8;
+    // chatbot --help y chatbot <addon> [argumentos] (este se reemplaza por
+    // el addon): antes de tocar la consola, la configuración o la pantalla.
+    if (const std::optional<int> code =
+            chatbot::cli::run_command_line(std::vector<std::string>(argv + 1, argv + argc))) {
+        return *code;
+    }
     // Windows: sin ENABLE_PROCESSED_INPUT, Ctrl+C llega como tecla y sale por
     // screen.Exit() (ver CatchEvent), en lugar de matar el proceso con
     // SIGINT dentro de Loop(). Se construye antes de Loop() y se destruye

@@ -2,6 +2,7 @@
 #define CHATBOT_TELEGRAM_STARTUP_H
 
 #include "chatbot/telegram/api.h"
+#include "chatbot/telegram/settings.h"
 
 #include "chatbot/bot/types.h"
 
@@ -10,6 +11,8 @@
 #include "chatbot/sleeper.h"
 
 #include <chrono>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace chatbot::telegram {
@@ -27,6 +30,26 @@ namespace chatbot::telegram {
                                                       Sleeper* sleeper = nullptr,
                                                       std::chrono::seconds max_backoff =
                                                           std::chrono::seconds{60});
+
+/// Crea la carpeta de datos del bot (700 si es nueva) y prueba que se pueda
+/// escribir en ella con un archivo que borra enseguida (ahí van
+/// invitados.json y su candado). Error Config con la ruta y la causa.
+[[nodiscard]] std::optional<ChatError> prepare_data_dir(const std::string& dir);
+
+/// De dónde salió el error que detiene el bot.
+enum class FailureSource {
+    Telegram, ///< connect_to_telegram o el Poller.
+    DataDir,  ///< prepare_data_dir.
+    Invited,  ///< load_invited.
+};
+
+/// El código de salida de un error que detiene el bot (settings.h):
+///   Telegram: Auth (no acepta el token, al arrancar o ya corriendo) → 78
+///   DataDir: siempre → 73
+///   Invited: BadResponse (invitados.json dañado) → 65
+///   lo demás → 1, el único con el que systemd reinicia.
+[[nodiscard]] int exit_code_for(const ChatError& error,
+                                FailureSource source = FailureSource::Telegram);
 
 } // namespace chatbot::telegram
 

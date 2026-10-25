@@ -39,11 +39,13 @@ jobs:
 
       # Ubuntu 24.04 trae Catch2 3.4 (find_package(Catch2 3) la acepta).
       # FTXUI y md4c se descargan solos por FetchContent al configurar.
+      # tzdata: la base de zonas de C++20 (std::chrono::locate_zone) del tope
+      # diario del addon de Telegram, que en Linux se compila por defecto.
       - name: Instalar dependencias
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ clang libcurl4-openssl-dev nlohmann-json3-dev catch2
+            cmake ninja-build g++ clang libcurl4-openssl-dev nlohmann-json3-dev catch2 tzdata
 
       # Con vm.mmap_rnd_bits=32 (kernels recientes), TSan falla con
       # "FATAL: ThreadSanitizer: unexpected memory mapping".
@@ -79,14 +81,35 @@ jobs:
           grep -q "error de configuración" errores.txt
           grep -q "CHAT_API_KEY" errores.txt
 
-  # Addons (addons/): con CHATBOT_BUILD_TELEGRAM compila la capa común de
-  # los bots (chatbot::bot), el bot de Telegram y sus pruebas, además de todo
-  # lo demás. Solo Linux y GCC por ahora. Los trabajos de arriba compilan sin
-  # addons y la configuración falla si un addon depende de cli/ o de FTXUI.
-  # tzdata: la base de zonas de C++20 (std::chrono::locate_zone) del tope
-  # diario.
-  addons:
-    name: addons / gcc / dev-telegram
+      # El bot, por "chatbot telegram" (lo busca junto a chatbot), sin red:
+      # --config-version; desactivado (sin sección) sale con 0; activado sin
+      # token, con 78. HOME propio y sin las CHAT_* del bot.
+      - name: Arranque del bot sin configuración ni token
+        run: |
+          chatbot="$PWD/build/${{ matrix.preset }}/cli/chatbot"
+          test "$("$chatbot" telegram --config-version)" = 1
+          export HOME="$PWD/casa"
+          mkdir -p "$HOME"
+          unset XDG_CONFIG_HOME XDG_DATA_HOME CHAT_TELEGRAM_TOKEN CHAT_API_KEY CHAT_SEARCH_API_KEY
+          status=0
+          "$chatbot" telegram < /dev/null 2> errores.txt || status=$?
+          cat errores.txt
+          test "$status" -eq 0
+          grep -q "desactivado" errores.txt
+          mkdir -p "$HOME/.config/chatbot"
+          echo '{"addons": {"telegram": {"version": 1, "enabled": true}}}' \
+            > "$HOME/.config/chatbot/config.json"
+          status=0
+          "$chatbot" telegram < /dev/null 2> errores.txt || status=$?
+          cat errores.txt
+          test "$status" -eq 78
+          grep -q "Falta el token de Telegram" errores.txt
+
+  # Sin addons: con CHATBOT_BUILD_TELEGRAM=OFF la app compila y pasa sus
+  # pruebas sin addons/telegram ni addons/common, y "chatbot telegram" dice
+  # que no está instalado (69).
+  no-addons:
+    name: gcc / dev sin addons
     runs-on: ubuntu-24.04
     env:
       CC: gcc
@@ -99,36 +122,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ libcurl4-openssl-dev nlohmann-json3-dev catch2 tzdata
+            cmake ninja-build g++ libcurl4-openssl-dev nlohmann-json3-dev catch2
 
       - name: Configurar
-        run: cmake --preset dev-telegram
+        run: cmake --preset dev -DCHATBOT_BUILD_TELEGRAM=OFF
 
       - name: Compilar
-        run: cmake --build --preset dev-telegram
+        run: cmake --build --preset dev
 
       - name: Pruebas
-        run: ctest --preset dev-telegram --output-on-failure
+        run: ctest --preset dev --output-on-failure
 
-      # Sin configuración, o sin token, sale con 1 antes de tocar la red.
-      - name: Arranque sin configuración ni token
+      - name: chatbot telegram sin el addon
         run: |
-          bot=build/dev-telegram/addons/telegram/chatbot-telegram
-          set +e
-          env -u CHAT_TELEGRAM_CONFIG "$bot" < /dev/null 2> errores.txt
-          code=$?
-          set -e
+          status=0
+          PATH=/usr/bin:/bin ./build/dev/cli/chatbot telegram 2> errores.txt || status=$?
           cat errores.txt
-          test "$code" -eq 1
-          grep -q "falta el archivo de configuración" errores.txt
-          echo '{"model": "modelo-de-prueba"}' > telegram.json
-          set +e
-          env -u CHAT_TELEGRAM_TOKEN -u CHAT_API_KEY "$bot" --config telegram.json < /dev/null 2> errores.txt
-          code=$?
-          set -e
-          cat errores.txt
-          test "$code" -eq 1
-          grep -q "CHAT_TELEGRAM_TOKEN" errores.txt
+          test "$status" -eq 69
+          grep -q "No encontré chatbot-telegram" errores.txt
 
   # Windows con MSYS2 UCRT64 y GCC, con los mismos flags y -Werror. Solo dev y
   # release: asan y tsan son de Linux. Sin CHATBOT_STRICT_PERF: los tiempos de

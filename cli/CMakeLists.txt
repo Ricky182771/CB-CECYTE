@@ -31,9 +31,10 @@ FetchContent_Declare(
         -P "${PROJECT_SOURCE_DIR}/cmake/apply_patch.cmake")
 FetchContent_MakeAvailable(ftxui)
 
-# Lógica de la conversación y del hilo de trabajo: solo depende del núcleo
-# y de chatbot::markdown,
-# sin FTXUI, para poder probarla sin terminal.
+# Lógica de la conversación y del hilo de trabajo: solo depende del núcleo,
+# de chatbot::markdown y, de addons/, solo de chatbot::addon_settings (las
+# reglas de la configuración de los addons); sin FTXUI, para poder probarla
+# sin terminal.
 find_package(Threads REQUIRED)
 # Portapapeles y programas externos: el lanzador (posix_spawnp) solo en
 # POSIX; la API de Win32 solo en Windows.
@@ -43,6 +44,7 @@ else()
     set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_posix.cpp src/child_process_posix.cpp)
 endif()
 add_library(chatbot_cli_lib STATIC
+    src/addon_launcher.cpp
     src/block_actions.cpp
     src/clipboard.cpp
     ${CHATBOT_CLIPBOARD_SOURCE}
@@ -70,7 +72,7 @@ target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 find_package(nlohmann_json 3.9 REQUIRED)
 target_link_libraries(chatbot_cli_lib
-    PUBLIC chatbot::core chatbot::markdown Threads::Threads
+    PUBLIC chatbot::core chatbot::markdown chatbot::addon_settings Threads::Threads
     PRIVATE nlohmann_json::nlohmann_json)
 chatbot_set_warnings(chatbot_cli_lib)
 # Windows: portapapeles y ventana de solo mensajes (user32). Biblioteca del

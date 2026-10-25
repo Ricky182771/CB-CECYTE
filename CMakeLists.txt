@@ -51,10 +51,19 @@ endfunction()
 
 option(CHATBOT_BUILD_TESTS "Compilar las pruebas (requiere Catch2 v3)" ON)
 
-# Addons (addons/, sección "Addons" de AGENTS.md): cada uno con su opción,
-# apagada. Un build normal no compila ni descarga nada de ellos. Solo se
-# prueban en Linux por ahora.
-option(CHATBOT_BUILD_TELEGRAM "Compilar el addon de Telegram (solo Linux por ahora)" OFF)
+# Addons (addons/, sección "Addons" de AGENTS.md): cada uno con su opción.
+# Telegram, encendido por defecto solo en Linux (Termux dice Android: ahí y
+# en Windows, apagado). Apagado, la app igual ve y configura un
+# chatbot-telegram copiado junto a ella o en el PATH. Como toda opción, se
+# queda en la caché de CMake: para cambiar el valor por defecto en una
+# carpeta ya configurada, bórrala o pasa -DCHATBOT_BUILD_TELEGRAM=ON una vez.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(chatbot_telegram_default ON)
+else()
+    set(chatbot_telegram_default OFF)
+endif()
+option(CHATBOT_BUILD_TELEGRAM "Compilar el addon de Telegram (solo Linux por ahora)"
+       ${chatbot_telegram_default})
 set(CHATBOT_ADDON_OPTIONS CHATBOT_BUILD_TELEGRAM)
 set(CHATBOT_ANY_ADDON OFF)
 foreach(addon_option IN LISTS CHATBOT_ADDON_OPTIONS)
@@ -106,3 +115,9 @@ endif()
 chatbot_forbid_ui_dependencies(chatbot_core)
 chatbot_forbid_ui_dependencies(chatbot_markdown)
 chatbot_forbid_ui_dependencies(chatbot_addon_settings)
+# Y al revés: de addons/, cli/ (y core y chatbot::markdown, nada) solo usa
+# chatbot::addon_settings, nunca chatbot::bot ni un addon.
+foreach(app_target chatbot_core chatbot_markdown chatbot_addon_settings chatbot_cli_lib
+                   chatbot_cli_ui chatbot)
+    chatbot_forbid_addon_dependencies(${app_target})
+endforeach()

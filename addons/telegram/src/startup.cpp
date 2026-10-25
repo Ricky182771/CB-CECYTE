@@ -1,8 +1,12 @@
 #include "chatbot/telegram/startup.h"
 
+#include "chatbot/platform.h"
+
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 namespace chatbot::telegram {
 
@@ -56,6 +60,40 @@ Result<BotIdentity> connect_to_telegram(BotApi& api, bot::Log& log, const Cancel
             return ChatError{ErrorKind::Cancelled, 0, "cancelado", std::nullopt};
         }
     }
+}
+
+std::optional<ChatError> prepare_data_dir(const std::string& dir) {
+    const auto failure = [&dir](const std::string& cause) {
+        return ChatError{ErrorKind::Config, 0,
+                         "No se puede escribir en la carpeta de datos del bot: " + dir + " (" +
+                             cause + ").",
+                         std::nullopt};
+    };
+    if (std::optional<std::string> error =
+            create_private_directory(dir, FolderPrivacy::PrivateIfNew)) {
+        return failure(*error);
+    }
+    // Que exista no basta: puede ser de solo lectura.
+    const std::string probe = dir + "/.prueba-escritura";
+    if (std::optional<std::string> error =
+            write_file_atomic(probe, "", FilePrivacy::Private, FolderPrivacy::PrivateIfNew)) {
+        return failure(*error);
+    }
+    std::error_code ignored;
+    std::filesystem::remove(probe, ignored); // Si se queda, está vacío y no estorba.
+    return std::nullopt;
+}
+
+int exit_code_for(const ChatError& error, FailureSource source) {
+    switch (source) {
+    case FailureSource::Telegram:
+        return error.kind == ErrorKind::Auth ? kExitConfig : kExitFailure;
+    case FailureSource::DataDir:
+        return kExitCantCreate;
+    case FailureSource::Invited:
+        return error.kind == ErrorKind::BadResponse ? kExitDataError : kExitFailure;
+    }
+    return kExitFailure;
 }
 
 } // namespace chatbot::telegram

@@ -4,15 +4,23 @@
 #include "telegram_harness.hpp"
 
 #include "chatbot/telegram/poller.h"
+#include "chatbot/telegram/startup.h"
 
 #include "bot_harness.hpp"
 #include "fake_transport.hpp"
 #include "performance.hpp"
+#include "posix_permissions.hpp"
+#include "temp_dir.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -362,6 +370,56 @@ TEST_CASE("poller: 429 espera retry_after; token inválido termina", "[telegram]
     REQUIRE(fatal.has_value());
     CHECK(fatal->kind == chatbot::ErrorKind::Auth);
     CHECK(h.log.contains("telegram_token_invalido http=401"));
+}
+
+TEST_CASE("poller: un 401 a la mitad del long polling termina con 78", "[telegram][poller]") {
+    PollerHarness h;
+    Poller poller = h.make();
+    h.server->push_updates(json::array({chatbot_telegram_test::text_update(1, 7, 7, "hola")}));
+    h.server->push_updates(chatbot_telegram_test::failure(401, "Unauthorized"));
+    const auto fatal = poller.run();
+    REQUIRE(fatal.has_value());
+    CHECK(h.messages.size() == 1); // El mensaje de antes sí se atendió.
+    CHECK(h.log.contains("telegram_token_invalido http=401"));
+    CHECK(chatbot::telegram::exit_code_for(*fatal) == chatbot::telegram::kExitConfig);
+    CHECK(chatbot::telegram::kExitConfig == 78);
+    CHECK(chatbot::telegram::exit_code_for(chatbot::ChatError{chatbot::ErrorKind::Network, 0, "",
+                                                              std::nullopt}) == 1);
+}
+
+TEST_CASE("códigos de salida: solo lo inesperado da 1", "[telegram][startup]") {
+    using chatbot::ErrorKind;
+    using chatbot::telegram::exit_code_for;
+    using chatbot::telegram::FailureSource;
+    const auto error = [](ErrorKind kind) { return chatbot::ChatError{kind, 0, "", std::nullopt}; };
+    CHECK(exit_code_for(error(ErrorKind::Auth)) == 78);
+    CHECK(exit_code_for(error(ErrorKind::Network)) == 1);
+    CHECK(exit_code_for(error(ErrorKind::Config), FailureSource::DataDir) == 73);
+    CHECK(exit_code_for(error(ErrorKind::BadResponse), FailureSource::Invited) == 65);
+    CHECK(exit_code_for(error(ErrorKind::Config), FailureSource::Invited) == 1);
+    CHECK(chatbot::telegram::kExitDataError == 65);
+    CHECK(chatbot::telegram::kExitCantCreate == 73);
+}
+
+TEST_CASE("carpeta de datos: se crea y se prueba escribiendo", "[telegram][startup]") {
+    const chatbot_test::ScopedTempDir dir;
+    const std::filesystem::path data = dir.path() / "telegram";
+    CHECK_FALSE(chatbot::telegram::prepare_data_dir(data.string()).has_value());
+    CHECK(std::filesystem::is_directory(data));
+    CHECK(std::filesystem::is_empty(data)); // Sin el archivo de prueba.
+#ifndef _WIN32
+    if (::geteuid() == 0) {
+        SKIP("como root se puede escribir en cualquier carpeta");
+    }
+    chatbot_test::set_mode(data, 0500);
+    const auto error = chatbot::telegram::prepare_data_dir(data.string());
+    chatbot_test::set_mode(data, 0700);
+    REQUIRE(error.has_value());
+    CHECK(error->message.find("No se puede escribir en la carpeta de datos del bot: " +
+                              data.string()) == 0);
+    CHECK(chatbot::telegram::exit_code_for(*error, chatbot::telegram::FailureSource::DataDir) ==
+          73);
+#endif
 }
 
 TEST_CASE("poller: el apagado corta el long polling en menos de 2 s", "[telegram][poller]") {

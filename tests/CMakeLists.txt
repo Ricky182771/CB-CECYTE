@@ -26,6 +26,7 @@ add_executable(chatbot_tests
     test_models_loader.cpp
     test_paste.cpp
     test_provider_settings.cpp
+    test_addon_launcher.cpp
     test_platform.cpp
     test_child_process.cpp
     test_published_date.cpp
@@ -133,9 +134,22 @@ if(NOT WIN32)
     set_tests_properties(chatbot_portable_readonly PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
 endif()
 
-# Dirección de las dependencias en los #include: nada fuera de addons/ los
-# incluye, y markdown/ y addons/ no incluyen cli/ ni FTXUI. Corre siempre,
-# también con los addons apagados (include_rules.cmake).
+# chatbot <addon> con el ejecutable real y un addon falso junto a él, en el
+# PATH y en modo portable (addon_launcher.cmake).
+add_test(NAME chatbot_addon_launcher
+    COMMAND ${CMAKE_COMMAND} -DCHATBOT=$<TARGET_FILE:chatbot>
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/addon_launcher
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/addon_launcher.cmake)
+
+# Dirección de las dependencias en los #include: nada fuera de addons/
+# incluye chatbot/bot/ ni chatbot/telegram/ (cli/ solo chatbot/addon_settings/),
+# y markdown/ y addons/ no incluyen cli/ ni FTXUI. Corre siempre, también con
+# los addons apagados (include_rules.cmake). La segunda revisa que la regla
+# falle de verdad con un árbol de mentira (include_rules_check.cmake).
 add_test(NAME chatbot_include_rules
     COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/include_rules.cmake)
+add_test(NAME chatbot_include_rules_check
+    COMMAND ${CMAKE_COMMAND} -DRULES=${CMAKE_CURRENT_SOURCE_DIR}/include_rules.cmake
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/include_rules_check
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/include_rules_check.cmake)
