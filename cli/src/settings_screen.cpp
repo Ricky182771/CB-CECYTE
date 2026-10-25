@@ -2,6 +2,7 @@
 
 #include "input_style.h"
 #include "list_style.h"
+#include "yes_no.h"
 
 #include "chatbot/error.h"
 #include "chatbot/markdown/markdown.h"
@@ -550,28 +551,28 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
     if (!settings_) {
         return false;
     }
-    if (addons_.question()) {
-        // Solo s o n la contestan y Esc la cancela. Nada más: ni el ratón, ni
-        // otra tecla, ni el Event::Custom que llega tras cada post (el mismo
-        // que trae la pregunta del servicio).
-        if (event.is_character() && (event.character() == "s" || event.character() == "S")) {
-            addons_.answer(true);
-        } else if (event.is_character() &&
-                   (event.character() == "n" || event.character() == "N")) {
-            addons_.answer(false);
-        } else if (event == ftxui::Event::Escape) {
-            addons_.cancel_question();
+    if (asking()) {
+        // La regla de yes_no.h: también la del Event::Custom que llega tras
+        // cada post (el mismo que trae la pregunta del servicio o la lista
+        // de modelos).
+        const YesNo reply = yes_no_answer(event == ftxui::Event::Escape,
+                                          event.is_character() ? event.character() : std::string{});
+        if (reply == YesNo::Ignore) {
+            return true;
         }
-        return true;
-    }
-    if (confirm_discard_) {
-        if (event.is_mouse()) {
-            return true; // Primero se contesta la pregunta.
-        }
-        if (event.is_character() && (event.character() == "s" || event.character() == "S")) {
+        if (addons_.question()) {
+            if (reply == YesNo::Cancel) {
+                addons_.cancel_question();
+            } else {
+                addons_.answer(reply == YesNo::Yes);
+            }
+        } else if (reply == YesNo::Yes) {
             close();
         } else {
             confirm_discard_ = false;
+            if (reply == YesNo::Cancel) {
+                status_ = std::string{kDiscardCancelled};
+            }
         }
         return true;
     }

@@ -899,6 +899,10 @@ int main(int argc, char** argv) {
             focus_main();
             return;
         }
+        if (action.type == Type::Cancelled) {
+            flash = std::string{chatbot::cli::ConversationList::kDeleteCancelled};
+            return;
+        }
         if (action.type == Type::Settings) {
             open_settings({});
             return;
@@ -918,6 +922,7 @@ int main(int argc, char** argv) {
         case Type::None:
         case Type::Close:
         case Type::Settings:
+        case Type::Cancelled:
             break;
         case Type::New:
             new_conversation();
@@ -1349,6 +1354,21 @@ int main(int argc, char** argv) {
         }
         if (event == ftxui::Event::Custom) {
             return false; // Solo pide redibujar.
+        }
+        // Con una pregunta (s/n) abierta, todo evento es de ella (yes_no.h):
+        // ni el ratón, ni F2, ni Ctrl+B/O/N la saltan.
+        if (settings.is_open() && settings.asking()) {
+            (void)settings.component()->OnEvent(event);
+            return true;
+        }
+        if (sidebar_visible && sidebar_panel->Focused() && sidebar.confirmation().has_value()) {
+            if (!event.is_mouse()) {
+                flash.clear();
+                apply_sidebar_action(sidebar.handle(
+                    list_key(event), event.is_character() ? event.character() : std::string{},
+                    sidebar_rows_visible()));
+            }
+            return true;
         }
         if (event.is_mouse()) {
             return handle_mouse(std::move(event));

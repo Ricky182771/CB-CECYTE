@@ -24,6 +24,8 @@
 
 namespace chatbot::cli {
 
+inline constexpr std::string_view kDiscardCancelled = "Cancelado: no se descartó nada.";
+
 /// Pantalla de configuración (FTXUI): categorías a la izquierda
 /// ("Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema",
 /// "Búsqueda web" y "Addons", en AddonsPanel) y el formulario de la elegida a la derecha. La lógica del proveedor está en ProviderSettings; la lista de
@@ -79,6 +81,9 @@ public:
     void close();
 
     [[nodiscard]] bool is_open() const { return settings_.has_value(); }
+    /// Hay una pregunta (s/n) abierta (descartar o de Addons): todo evento
+    /// es de ella (yes_no.h).
+    [[nodiscard]] bool asking() const { return confirm_discard_ || addons_.question().has_value(); }
     /// El componente (para Container::Tab).
     [[nodiscard]] ftxui::Component component() const { return root_; }
     /// Da el foco al primer campo.

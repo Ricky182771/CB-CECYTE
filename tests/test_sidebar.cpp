@@ -202,9 +202,14 @@ TEST_CASE("barra: Enter, Supr y Esc", "[barra]") {
     CHECK(remove.type == ListAction::Type::Delete);
     CHECK(remove.id == "hoy");
 
-    // Esc con confirmación la cancela; sin ella, devuelve el foco.
+    // Esc con confirmación la cancela; sin ella, devuelve el foco. Otra
+    // tecla no la contesta.
     (void)sidebar.handle(ListKey::Delete, {}, 5);
-    CHECK(sidebar.handle(ListKey::Escape, {}, 5).type == ListAction::Type::None);
+    CHECK(sidebar.handle(ListKey::Down, {}, 5).type == ListAction::Type::None);
+    CHECK(sidebar.handle(ListKey::Enter, {}, 5).type == ListAction::Type::None);
+    REQUIRE(sidebar.confirmation().has_value());
+    CHECK(*sidebar.confirmation() == "¿Borrar «Título hoy»? (s/n)");
+    CHECK(sidebar.handle(ListKey::Escape, {}, 5).type == ListAction::Type::Cancelled);
     CHECK_FALSE(sidebar.confirmation().has_value());
     CHECK(sidebar.handle(ListKey::Escape, {}, 5).type == ListAction::Type::Close);
 

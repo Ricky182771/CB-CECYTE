@@ -1,5 +1,7 @@
 #include "conversation_list.h"
 
+#include "yes_no.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -60,9 +62,16 @@ std::optional<std::string> ConversationList::confirmation() const {
 ListAction ConversationList::handle(ListKey key, std::string_view character,
                                     std::size_t page_size) {
     if (confirming_delete_) {
-        // Solo 's' borra; cualquier otra tecla cancela y no hace nada más.
+        // La regla de yes_no.h: s borra, n no y Esc cancela; lo demás se ignora.
+        const YesNo reply = yes_no_answer(key == ListKey::Escape, character);
+        if (reply == YesNo::Ignore) {
+            return {};
+        }
         confirming_delete_ = false;
-        if (key == ListKey::Other && character == "s" && can_open(selected_)) {
+        if (reply == YesNo::Cancel) {
+            return ListAction{ListAction::Type::Cancelled, {}};
+        }
+        if (reply == YesNo::Yes && can_open(selected_)) {
             return ListAction{ListAction::Type::Delete, items_[selected_].id};
         }
         return {};

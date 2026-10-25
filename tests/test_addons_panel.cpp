@@ -216,7 +216,13 @@ struct Harness {
         }
         chatbot::cli::AddonsEnvironment environment;
         environment.os = os;
-        environment.post = [this](std::function<void()> task) { queue.post(std::move(task)); };
+        // Como main.cpp: la tarea y después un Event::Custom para redibujar.
+        environment.post = [this](std::function<void()> task) {
+            queue.post([this, task = std::move(task)] {
+                task();
+                (void)settings.component()->OnEvent(ftxui::Event::Custom);
+            });
+        };
         environment.run = system.runner();
         environment.locate = [this](const settings::AddonInfo&) {
             return installed ? std::optional<std::string>{kExecutable} : std::nullopt;

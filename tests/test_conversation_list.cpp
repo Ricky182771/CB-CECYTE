@@ -79,7 +79,7 @@ TEST_CASE("ConversationList: Enter abre solo las legibles y Esc cierra", "[lista
     CHECK(list.handle(ListKey::Escape, {}, 1).type == ListAction::Type::Close);
 }
 
-TEST_CASE("ConversationList: Supr pide confirmación y solo 's' borra", "[lista]") {
+TEST_CASE("ConversationList: Supr pide confirmación y solo s/n la contestan", "[lista]") {
     ConversationList list;
     list.open(five(), "");
     CHECK_FALSE(list.confirmation().has_value());
@@ -87,27 +87,38 @@ TEST_CASE("ConversationList: Supr pide confirmación y solo 's' borra", "[lista]
     CHECK(list.handle(ListKey::Delete, {}, 1).type == ListAction::Type::None);
     REQUIRE(list.confirmation().has_value());
     CHECK(*list.confirmation() == "¿Borrar «Uno»? (s/n)");
-    (void)list.handle(ListKey::Other, "x", 1); // Cancela.
 
-    // Cualquier otra tecla cancela (incluidas 'S', 'n', Esc y las flechas).
+    // Lo demás se ignora y la pregunta sigue abierta (yes_no.h).
     for (const auto& [key, character] :
-         std::vector<std::pair<ListKey, std::string>>{{ListKey::Other, "S"},
-                                                      {ListKey::Other, "n"},
-                                                      {ListKey::Escape, ""},
+         std::vector<std::pair<ListKey, std::string>>{{ListKey::Other, "x"},
+                                                      {ListKey::Other, " "},
+                                                      {ListKey::Other, ""},
                                                       {ListKey::Down, ""},
-                                                      {ListKey::Enter, ""}}) {
-        (void)list.handle(ListKey::Delete, {}, 1);
-        REQUIRE(list.confirmation().has_value());
+                                                      {ListKey::Enter, ""},
+                                                      {ListKey::Delete, ""},
+                                                      {ListKey::Tab, ""}}) {
         CHECK(list.handle(key, character, 1).type == ListAction::Type::None);
-        CHECK_FALSE(list.confirmation().has_value());
-        CHECK(list.selected() == 0); // La tecla que cancela no hace nada más.
+        CHECK(list.confirmation().has_value());
+        CHECK(list.selected() == 0);
     }
 
-    (void)list.handle(ListKey::Delete, {}, 1);
-    const ListAction action = list.handle(ListKey::Other, "s", 1);
-    CHECK(action.type == ListAction::Type::Delete);
-    CHECK(action.id == "a");
+    // n y N contestan que no; Esc cancela (la interfaz lo dice).
+    for (const char* no : {"n", "N"}) {
+        CHECK(list.handle(ListKey::Other, no, 1).type == ListAction::Type::None);
+        CHECK_FALSE(list.confirmation().has_value());
+        (void)list.handle(ListKey::Delete, {}, 1);
+    }
+    CHECK(list.handle(ListKey::Escape, {}, 1).type == ListAction::Type::Cancelled);
     CHECK_FALSE(list.confirmation().has_value());
+    CHECK(list.selected() == 0);
+
+    for (const char* yes : {"s", "S"}) {
+        (void)list.handle(ListKey::Delete, {}, 1);
+        const ListAction action = list.handle(ListKey::Other, yes, 1);
+        CHECK(action.type == ListAction::Type::Delete);
+        CHECK(action.id == "a");
+        CHECK_FALSE(list.confirmation().has_value());
+    }
 }
 
 TEST_CASE("ConversationList: no se puede borrar una ilegible", "[lista]") {

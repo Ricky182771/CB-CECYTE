@@ -80,8 +80,9 @@ public:
     /// se mueven saltando encabezados (Home y End van a la primera y a la
     /// última conversación; sin conversaciones, End va a "⚙ Configuración").
     /// Enter abre (Open), pide una nueva (New) o la configuración
-    /// (Settings); Supr pide confirmación y 's' borra (Delete); Esc devuelve
-    /// el foco (Close). page_size: filas visibles.
+    /// (Settings); Supr pide confirmación, que se contesta como dice
+    /// yes_no.h ('s' o 'S' borra: Delete; Esc: Cancelled); Esc sin ella
+    /// devuelve el foco (Close). page_size: filas visibles.
     [[nodiscard]] ListAction handle(ListKey key, std::string_view character, std::size_t page_size);
 
     /// Primera fila visible.

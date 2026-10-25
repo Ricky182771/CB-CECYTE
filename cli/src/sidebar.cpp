@@ -144,8 +144,8 @@ void Sidebar::pick_conversation(std::size_t index) {
 }
 
 ListAction Sidebar::handle(ListKey key, std::string_view character, std::size_t page_size) {
-    // Con una confirmación pendiente, la lista decide ('s' borra; lo demás
-    // cancela). Esc sin confirmación devuelve el foco.
+    // Con una confirmación pendiente, la lista decide (yes_no.h). Esc sin
+    // confirmación devuelve el foco.
     if (list_.confirmation().has_value() || key == ListKey::Escape) {
         return list_.handle(key, character, page_size);
     }
