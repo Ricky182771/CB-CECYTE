@@ -28,6 +28,7 @@ add_executable(chatbot_tests
     test_provider_settings.cpp
     test_addon_launcher.cpp
     test_platform.cpp
+    test_addon_form.cpp
     test_child_process.cpp
     test_service_control.cpp
     test_published_date.cpp
@@ -81,9 +82,11 @@ add_test(NAME chatbot_markdown_tests COMMAND chatbot_markdown_tests)
 # Pruebas de la vista de markdown: dibujan con ftxui::Screen (sin terminal).
 # Van aparte para que chatbot_tests no enlace FTXUI.
 add_executable(chatbot_ui_tests
+    ${PROJECT_SOURCE_DIR}/cli/src/addons_panel.cpp
     ${PROJECT_SOURCE_DIR}/cli/src/settings_screen.cpp
     ${PROJECT_SOURCE_DIR}/cli/src/text_area.cpp
     test_settings_screen.cpp
+    test_addons_panel.cpp
     test_command_menu_view.cpp
     test_history_view.cpp
     test_input_box.cpp
@@ -97,7 +100,8 @@ add_executable(chatbot_ui_tests
     test_theme.cpp
     test_title_bar.cpp)
 target_compile_features(chatbot_ui_tests PRIVATE cxx_std_20)
-target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui ftxui::component Catch2::Catch2WithMain)
+target_link_libraries(chatbot_ui_tests PRIVATE
+    chatbot_cli_ui ftxui::component Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 # Archivos de tests/data (solo lectura).
 target_compile_definitions(chatbot_ui_tests PRIVATE
     CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")

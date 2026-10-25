@@ -44,6 +44,7 @@ else()
     set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_posix.cpp src/child_process_posix.cpp)
 endif()
 add_library(chatbot_cli_lib STATIC
+    src/addon_form.cpp
     src/addon_launcher.cpp
     src/block_actions.cpp
     src/clipboard.cpp
@@ -101,7 +102,7 @@ target_link_libraries(chatbot_cli_ui PUBLIC chatbot_cli_lib ftxui::dom ftxui::sc
 chatbot_set_warnings(chatbot_cli_ui)
 
 # Ejecutable de la interfaz: el único que usa ftxui::component.
-add_executable(chatbot src/main.cpp src/settings_screen.cpp src/text_area.cpp)
+add_executable(chatbot src/main.cpp src/addons_panel.cpp src/settings_screen.cpp src/text_area.cpp)
 target_link_libraries(chatbot PRIVATE chatbot_cli_lib chatbot_cli_ui ftxui::component)
 chatbot_set_warnings(chatbot)
 chatbot_windows_manifest(chatbot)

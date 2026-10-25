@@ -6,6 +6,8 @@
 // App::Post.
 
 #include "addon_launcher.h"
+#include "addons_panel.h"
+#include "child_process.h"
 #include "block_actions.h"
 #include "clipboard.h"
 #include "code_blocks.h"
@@ -35,6 +37,9 @@
 #include "theme.h"
 #include "title_bar.h"
 
+#include "chatbot/addon_settings/paths.h"
+#include "chatbot/addon_settings/registry.h"
+#include "chatbot/addon_settings/secrets.h"
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
 #include "chatbot/credentials.h"
@@ -99,6 +104,40 @@ std::optional<std::string> env_non_empty(const char* name) {
 std::string_view process_env(std::string_view name) {
     const char* value = std::getenv(std::string{name}.c_str());
     return value != nullptr ? std::string_view{value} : std::string_view{};
+}
+
+/// El sistema real para F2 → Addons.
+chatbot::cli::AddonsEnvironment addons_environment(chatbot::cli::ServiceWorker::Post post) {
+    namespace settings = chatbot::addon_settings;
+    const auto absolute = [](const char* name) {
+        std::optional<std::string> value = env_value(name);
+        return value.has_value() && value->starts_with('/') ? value : std::nullopt;
+    };
+    chatbot::cli::AddonsEnvironment environment;
+    environment.post = std::move(post);
+    environment.run = [](const std::vector<std::string>& argv,
+                         const chatbot::cli::ProcessOptions& options) {
+        return chatbot::cli::run_process(argv, options);
+    };
+    environment.locate = chatbot::cli::locate_addon;
+    environment.portable = chatbot::process_portable_data_dir().has_value();
+    environment.config_path = chatbot::default_config_path().value_or("");
+    environment.credentials_path = chatbot::default_credentials_path().value_or("");
+    const settings::AddonInfo& telegram = *settings::find_addon("telegram");
+    environment.data_dir = settings::default_addon_data_dir(telegram.name);
+    environment.unit_path = settings::default_unit_path(telegram.unit);
+    environment.uid = chatbot::cli::current_user_id();
+    environment.chatbot_path = chatbot::executable_path().value_or("");
+    environment.xdg_config_home = absolute("XDG_CONFIG_HOME");
+    environment.xdg_data_home = absolute("XDG_DATA_HOME");
+    for (const std::string_view name :
+         {settings::kTokenEnv, settings::kApiKeyEnv, settings::kSearchKeyEnv}) {
+        if (env_non_empty(std::string{name}.c_str()).has_value()) {
+            environment.env_defined.push_back(name);
+        }
+    }
+    environment.home = env_value("HOME").value_or("");
+    return environment;
 }
 
 /// Proveedor de /buscar con la key vigente (CHAT_SEARCH_API_KEY o
@@ -796,6 +835,7 @@ int main(int argc, char** argv) {
         });
 
     settings.set_portable_dir(portable_dir);
+    settings.set_addons_environment(addons_environment(post));
 
     // El foco del lado derecho: la configuración si está abierta; si no, la caja.
     const auto focus_main = [&] {
