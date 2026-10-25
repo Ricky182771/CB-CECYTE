@@ -3,6 +3,7 @@
 #include "conversation_export.h"
 #include "conversation_store.h"
 #include "downloads.h"
+#include "child_process.h"
 
 #include <optional>
 #include <utility>
@@ -51,7 +52,10 @@ std::string short_prefix(const CodeBlock& block, Symbols symbols) {
 ClipboardAccess real_clipboard() {
     const std::optional<std::string> tmux = environment_value("TMUX");
     return ClipboardAccess{
-        clipboard_methods(environment_value, find_in_path, current_os()),
+        clipboard_methods(
+            environment_value,
+            [](std::string_view program) { return find_in_path(program).has_value(); },
+            current_os()),
         tmux.has_value() && !tmux->empty(),
         [](const std::vector<std::string>& argv, std::string_view text) {
             return run_with_input(argv, text);

@@ -35,12 +35,12 @@ FetchContent_MakeAvailable(ftxui)
 # y de chatbot::markdown,
 # sin FTXUI, para poder probarla sin terminal.
 find_package(Threads REQUIRED)
-# Portapapeles: el lanzador de programas (posix_spawnp) solo en POSIX; la API
-# de Win32 solo en Windows.
+# Portapapeles y programas externos: el lanzador (posix_spawnp) solo en
+# POSIX; la API de Win32 solo en Windows.
 if(WIN32)
-    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_windows.cpp)
+    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_windows.cpp src/child_process_windows.cpp)
 else()
-    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_posix.cpp)
+    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_posix.cpp src/child_process_posix.cpp)
 endif()
 add_library(chatbot_cli_lib STATIC
     src/block_actions.cpp

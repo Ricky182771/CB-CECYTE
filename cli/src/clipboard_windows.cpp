@@ -107,15 +107,6 @@ private:
 
 } // namespace
 
-bool find_in_path(std::string_view /*program*/) {
-    return false; // En Windows no se lanzan programas de portapapeles.
-}
-
-bool run_with_input(const std::vector<std::string>& /*argv*/, std::string_view /*input*/,
-                    std::chrono::milliseconds /*timeout*/) {
-    return false; // Solo POSIX: clipboard_methods nunca propone programas en Windows.
-}
-
 bool copy_to_native_clipboard(std::string_view text) {
     const std::wstring wide = chatbot::utf8_to_utf16(to_crlf(text));
     if (wide.empty() && !text.empty()) {

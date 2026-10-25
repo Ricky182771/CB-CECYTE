@@ -1,5 +1,7 @@
 #include "clipboard.h"
 
+#include "child_process.h"
+
 #include <cstdlib>
 #include <iostream>
 #include <utility>
@@ -167,6 +169,16 @@ std::string to_crlf(std::string_view text) {
         out += text[i];
     }
     return out;
+}
+
+bool run_with_input(const std::vector<std::string>& argv, std::string_view input,
+                    std::chrono::milliseconds timeout) {
+    ProcessOptions options;
+    options.input = input;
+    options.timeout = timeout;
+    options.capture_output = false;
+    const ProcessResult result = run_process(argv, options);
+    return result.ok() && result.input_written;
 }
 
 std::optional<std::string> environment_value(std::string_view name) {
