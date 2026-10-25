@@ -10,6 +10,7 @@ add_executable(chatbot_bot_tests
     test_bot_concurrency.cpp
     test_bot_config.cpp
     test_bot_limits.cpp
+    test_bot_reload.cpp
     test_bot_replies.cpp
     test_bot_search.cpp
     test_bot_sessions.cpp

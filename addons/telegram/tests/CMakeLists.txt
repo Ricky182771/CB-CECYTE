@@ -1,13 +1,14 @@
 # Pruebas del addon de Telegram, sin red: FakeTransport con respuestas
 # pregrabadas de la Bot API y reloj falso. Usan los helpers de tests/ y el
 # arnés de addons/common/tests, nunca cli/; de src/, los headers internos
-# (integer.h).
+# (integer.h, signal_watcher.h).
 add_executable(chatbot_telegram_tests
     test_api.cpp
     test_integer.cpp
     test_integration.cpp
     test_outbox.cpp
     test_poller.cpp
+    test_reload.cpp
     test_rich_markdown.cpp
     test_settings.cpp)
 target_compile_features(chatbot_telegram_tests PRIVATE cxx_std_20)

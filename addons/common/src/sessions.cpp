@@ -69,6 +69,21 @@ std::size_t SessionStore::expire(TimePoint now) {
     return removed;
 }
 
+std::size_t SessionStore::revoke(const std::function<bool(UserId)>& allowed) {
+    std::size_t removed = 0;
+    for (auto it = sessions_.begin(); it != sessions_.end();) {
+        Session& session = it->second;
+        session.revoked = !allowed(session.user);
+        if (session.revoked && !session.busy) {
+            it = sessions_.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
+
 bool DailyCounter::try_count(UserId user, std::string_view day) {
     if (day != day_) {
         day_ = std::string{day};

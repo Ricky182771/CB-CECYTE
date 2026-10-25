@@ -11,6 +11,8 @@
 #include "chatbot/telegram/settings.h"
 #include "chatbot/telegram/startup.h"
 
+#include "signal_watcher.h"
+
 #include "chatbot/bot/bot.h"
 #include "chatbot/bot/config.h"
 
@@ -20,23 +22,17 @@
 #include "chatbot/addon_settings/time_zone.h"
 
 #include "chatbot/cancel_token.h"
-#include "chatbot/chat_client.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/platform.h"
-#include "chatbot/tavily_search.h"
 
-#include <pthread.h>
 #include <signal.h>
 
-#include <atomic>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -66,65 +62,6 @@ int fail(std::string_view message, int code = kExitFailure) {
     return code;
 }
 
-/// SIGINT y SIGTERM llegan solo a un hilo (sigwait), que cancela todo: el
-/// long polling, los envíos y las respuestas en curso.
-class SignalWatcher {
-public:
-    SignalWatcher(CancelToken& shutdown, bot::Log& log) : shutdown_(shutdown), log_(log) {
-        sigemptyset(&signals_);
-        sigaddset(&signals_, SIGINT);
-        sigaddset(&signals_, SIGTERM);
-        // Antes de crear cualquier hilo, para que todos las tengan bloqueadas.
-        pthread_sigmask(SIG_BLOCK, &signals_, nullptr);
-        thread_ = std::thread{[this] {
-            int signal = 0;
-            sigwait(&signals_, &signal);
-            if (!finished_) {
-                log_.write(bot::LogLevel::Info, std::string{"apagando senal="} +
-                                                    (signal == SIGINT ? "SIGINT" : "SIGTERM"));
-            }
-            shutdown_.cancel();
-            // En paralelo con el corte del long polling: así el apagado
-            // completo tarda lo que tarde el más lento, no la suma.
-            const std::lock_guard<std::mutex> lock(mutex_);
-            if (bot_ != nullptr) {
-                bot_->shutdown();
-            }
-            done_ = true;
-        }};
-    }
-
-    ~SignalWatcher() {
-        finished_ = true;
-        if (thread_.joinable()) {
-            if (!done_) {
-                pthread_kill(thread_.native_handle(), SIGTERM); // Sigue en sigwait.
-            }
-            thread_.join();
-        }
-    }
-
-    SignalWatcher(const SignalWatcher&) = delete;
-    SignalWatcher& operator=(const SignalWatcher&) = delete;
-
-    /// El bot que se apaga con la señal. watch(nullptr) espera a que termine
-    /// un apagado que la señal ya empezó: después se puede destruir el bot.
-    void watch(bot::Bot* bot) {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        bot_ = bot;
-    }
-
-private:
-    CancelToken& shutdown_;
-    bot::Log& log_;
-    sigset_t signals_{};
-    std::atomic<bool> finished_{false};
-    std::atomic<bool> done_{false};
-    std::mutex mutex_;
-    bot::Bot* bot_ = nullptr;
-    std::thread thread_;
-};
-
 int run() {
     StreamLog log{std::cerr};
     CancelToken shutdown;
@@ -138,7 +75,7 @@ int run() {
     if (loaded.is_error()) {
         return fail(loaded.error().message, kExitConfig);
     }
-    const TelegramSettings& settings = loaded.value();
+    TelegramSettings settings = loaded.value();
     if (!settings.enabled) {
         std::cerr << kDisabled << '\n';
         return 0;
@@ -166,7 +103,8 @@ int run() {
                     exit_code_for(invited.error(), FailureSource::Invited));
     }
 
-    BotApi api{settings.token, [] { return std::make_unique<CurlTransport>(); }};
+    const TransportFactory make_transport = [] { return std::make_unique<CurlTransport>(); };
+    BotApi api{settings.token, make_transport};
     Result<BotIdentity> identity = connect_to_telegram(api, log, shutdown);
     if (identity.is_error()) {
         const ChatError& error = identity.error();
@@ -191,16 +129,9 @@ int run() {
                           OutboxOptions{settings.bot.log_error_details}};
     outbox.start();
     bot::SystemClock clock;
-    bot::BotDependencies dependencies{
-        [model = settings.model] {
-            return std::make_unique<ChatClient>(model, std::make_unique<CurlTransport>());
-        },
-        search ? bot::SearchFactory{[key = settings.search_api_key] {
-            return std::unique_ptr<SearchProvider>{
-                std::make_unique<TavilySearch>(key, std::make_unique<CurlTransport>())};
-        }}
-               : bot::SearchFactory{},
-        outbox, clock, log};
+    bot::BotDependencies dependencies{model_factory(settings, make_transport),
+                                      search_factory(settings, make_transport), outbox, clock,
+                                      log};
     dependencies.day = day.value();
     dependencies.invited = invited.value();
     dependencies.add_invited =
@@ -213,7 +144,11 @@ int run() {
         return saved.value();
     };
     bot::Bot bot{config.value(), std::move(dependencies)};
-    signals.watch(&bot);
+    signals.watch(&bot, [&] {
+        return reload_settings(paths.value(), real_env, settings,
+                               ReloadTargets{bot, outbox, api, shutdown, make_transport},
+                               log) != ReloadResult::Disable;
+    });
 
     Poller poller{api,
                   PollerHandlers{[&bot](const bot::IncomingMessage& message) { bot.handle(message); },
@@ -223,7 +158,7 @@ int run() {
                                  [&bot] { bot.expire_idle(); }},
                   log, shutdown};
     const std::optional<ChatError> fatal = poller.run();
-    signals.watch(nullptr);
+    signals.watch(nullptr, {});
     shutdown.cancel();
     bot.shutdown();
     outbox.stop();

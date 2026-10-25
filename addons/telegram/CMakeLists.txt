@@ -13,6 +13,7 @@ add_library(chatbot_telegram STATIC
     src/poller.cpp
     src/rich_markdown.cpp
     src/settings.cpp
+    src/signal_watcher.cpp
     src/startup.cpp)
 
 add_library(chatbot::telegram ALIAS chatbot_telegram)

@@ -53,7 +53,8 @@ struct BotDependencies {
     Clock& clock;
     Log& log;
     /// Fecha local para el tope diario y /buscar (day_in_zone). Vacía: la
-    /// zona del proceso (local_iso_date).
+    /// zona del proceso (local_iso_date). make_client, make_search y day
+    /// pasan al Runtime inicial.
     addon_settings::DayFunction day = {};
     /// Los que ya se habían autorizado con el código (los guardó la
     /// plataforma).
@@ -65,6 +66,15 @@ struct BotDependencies {
     /// ignora en silencio un draft_id que ya se detuvo en ese chat). Las
     /// pruebas ponen uno fijo. Vacía, o si lanza: random_reply_id.
     ReplyIdSource first_reply = random_reply_id;
+};
+
+/// Lo que Bot::reconfigure cambia en caliente. Cada respuesta copia el
+/// vigente al salir de la fila y termina con él.
+struct Runtime {
+    BotConfig config; ///< Ya validada.
+    ClientFactory make_client;
+    SearchFactory make_search;
+    addon_settings::DayFunction day;
 };
 
 /// La lógica común de los bots, sin red ni plataforma: acceso, comandos,
@@ -108,6 +118,17 @@ public:
     /// apagado). Seguro entre hilos.
     bool stop(ChatId chat, ReplyId reply);
 
+    /// La recarga de la plataforma (en Telegram, SIGHUP): la configuración,
+    /// las fábricas, la función del día y los invitados guardados. Las
+    /// conversaciones se conservan; las respuestas en curso terminan con lo
+    /// de antes. Quien pierde el acceso pierde sus conversaciones (la que
+    /// tiene en curso termina y se borra al liberarse, sin guardar ese par)
+    /// y su pregunta en la fila, si tenía, se descarta. max_concurrent_responses
+    /// necesita reiniciar: se anota (requiere_reinicio) y se ignora. Seguro
+    /// entre hilos; después de shutdown() no hace nada.
+    void reconfigure(ValidBotConfig config, ClientFactory make_client, SearchFactory make_search,
+                     addon_settings::DayFunction day, std::vector<UserId> invited);
+
     /// Borra las conversaciones inactivas (las ocupadas no). handle() ya lo
     /// hace con cada mensaje; la plataforma lo llama de vez en cuando para
     /// que se borren aunque nadie escriba.
@@ -147,7 +168,7 @@ private:
     };
 
     void work();
-    void run(const Job& job, const CancelToken& cancel);
+    void run(const Job& job, const CancelToken& cancel, const Runtime& runtime);
     /// Manda un texto partido (split_markdown o split_plain). Devuelve
     /// cuántos pedazos mandó, o nullopt si la plataforma rechazó uno (los
     /// que seguían ya no se mandan).
@@ -157,17 +178,19 @@ private:
     void release(ChatId chat, std::optional<std::string> user_content,
                  std::optional<std::string> answer);
     void log(LogLevel level, const std::string& line);
-    /// La fecha local de when (BotDependencies::day).
-    [[nodiscard]] std::string day_of(TimePoint when) const;
+    /// El Runtime vigente.
+    [[nodiscard]] std::shared_ptr<const Runtime> runtime() const;
     /// Guarda a user después de que canjeó el código.
     void save_invited(UserId user);
 
-    const BotConfig config_;
     BotDependencies dependencies_;
+    /// Los hilos de trabajo, creados en el constructor.
+    const std::size_t max_concurrent_;
     const MessageLimit markdown_limit_;
     const MessageLimit plain_limit_;
 
     mutable std::mutex mutex_;
+    std::shared_ptr<const Runtime> runtime_; ///< Se reemplaza entero (reconfigure).
     std::condition_variable work_ready_;
     std::condition_variable idle_;
     AccessControl access_;
