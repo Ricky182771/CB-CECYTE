@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <utility>
@@ -580,4 +581,89 @@ TEST_CASE("history_limit: valor inválido en el archivo es error Config", "[conf
         CHECK(config.error().kind == chatbot::ErrorKind::Config);
         CHECK_THAT(config.error().message, Catch::Matchers::ContainsSubstring("history_limit"));
     }
+}
+
+namespace {
+
+std::string read_whole(const std::filesystem::path& path) {
+    std::ifstream file{path, std::ios::binary};
+    return std::string{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+}
+
+void write_whole(const std::filesystem::path& path, const std::string& content) {
+    std::ofstream file{path, std::ios::binary};
+    file << content;
+}
+
+} // namespace
+
+TEST_CASE("load_config_section: la sección como texto, en el orden del archivo",
+          "[config][seccion]") {
+    const chatbot_test::ScopedTempDir temp;
+    const std::string path = (temp.path() / "config.json").string();
+
+    // Sin archivo: no hay sección, y no es un error.
+    const auto missing = chatbot::load_config_section(path, "addons");
+    REQUIRE(missing.is_ok());
+    CHECK_FALSE(missing.value().has_value());
+
+    write_whole(path, R"({"model": "m", "addons": {"zeta": 1, "alfa": {"b": 2, "a": 1}}})");
+    const auto section = chatbot::load_config_section(path, "addons");
+    REQUIRE(section.is_ok());
+    REQUIRE(section.value().has_value());
+    CHECK(*section.value() == R"({"zeta":1,"alfa":{"b":2,"a":1}})");
+    const auto absent = chatbot::load_config_section(path, "otra");
+    REQUIRE(absent.is_ok());
+    CHECK_FALSE(absent.value().has_value());
+
+    write_whole(path, "[1, 2]");
+    const auto invalid = chatbot::load_config_section(path, "addons");
+    REQUIRE(invalid.is_error());
+    CHECK(invalid.error().kind == chatbot::ErrorKind::Config);
+}
+
+TEST_CASE("save_config_section: escribe y borra la sección sin tocar lo demás",
+          "[config][seccion]") {
+    const chatbot_test::ScopedTempDir temp;
+    const std::string path = (temp.path() / "config.json").string();
+    write_whole(path, R"({"provider": "nvidia", "zeta": true, "model": "m"})");
+
+    REQUIRE_FALSE(chatbot::save_config_section(path, "addons", R"({"telegram": {"version": 1}})"));
+    CHECK(read_whole(path) == "{\n"
+                              "    \"provider\": \"nvidia\",\n"
+                              "    \"zeta\": true,\n"
+                              "    \"model\": \"m\",\n"
+                              "    \"addons\": {\n"
+                              "        \"telegram\": {\n"
+                              "            \"version\": 1\n"
+                              "        }\n"
+                              "    }\n"
+                              "}\n");
+
+    // Reemplazar la sección no la mueve de lugar.
+    REQUIRE_FALSE(chatbot::save_config_section(path, "zeta", "false"));
+    CHECK(read_whole(path).find("\"zeta\": false,\n    \"model\"") != std::string::npos);
+
+    REQUIRE_FALSE(chatbot::save_config_section(path, "addons", std::nullopt));
+    CHECK(read_whole(path) == "{\n"
+                              "    \"provider\": \"nvidia\",\n"
+                              "    \"zeta\": false,\n"
+                              "    \"model\": \"m\"\n"
+                              "}\n");
+}
+
+TEST_CASE("save_config_section: con JSON inválido no toca el archivo", "[config][seccion]") {
+    const chatbot_test::ScopedTempDir temp;
+    const std::string path = (temp.path() / "config.json").string();
+    const std::string original = R"({"model": "m"})";
+    write_whole(path, original);
+    const auto bad_value = chatbot::save_config_section(path, "addons", "{sin cerrar");
+    REQUIRE(bad_value.has_value());
+    CHECK(bad_value->kind == chatbot::ErrorKind::Config);
+    CHECK(read_whole(path) == original);
+
+    write_whole(path, "no es json");
+    const auto bad_file = chatbot::save_config_section(path, "addons", "{}");
+    REQUIRE(bad_file.has_value());
+    CHECK(read_whole(path) == "no es json");
 }

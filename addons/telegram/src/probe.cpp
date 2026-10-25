@@ -12,6 +12,8 @@
 #include "chatbot/telegram/api.h"
 #include "chatbot/telegram/rich_markdown.h"
 
+#include "chatbot/addon_settings/token.h"
+
 #include "chatbot/curl_transport.h"
 
 #include <chrono>
@@ -127,7 +129,7 @@ int main(int argc, char** argv) {
         }
     }
     const char* token = std::getenv("CHAT_TELEGRAM_TOKEN");
-    if (chat_id == 0 || token == nullptr || !plausible_token(token)) {
+    if (chat_id == 0 || token == nullptr || !chatbot::addon_settings::plausible_token(token)) {
         std::cerr << "Uso: CHAT_TELEGRAM_TOKEN=<token> chatbot-telegram-probe --chat <tu ID>\n";
         return 1;
     }

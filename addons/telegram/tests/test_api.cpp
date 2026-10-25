@@ -40,16 +40,6 @@ bool has_token(std::string_view text) {
 
 } // namespace
 
-TEST_CASE("api: el token tiene que tener la forma de uno de @BotFather", "[telegram][api]") {
-    CHECK(chatbot::telegram::plausible_token(kToken));
-    for (const char* bad : {"", "123456", ":AAAAAAAAAAAAAAAAAAAAAAAA", "abc:AAAAAAAAAAAAAAAAAAAAAAAA",
-                            "123:corto", "123:AAAAAAAAAAAAAAAAAAAAAAAA/getMe?x=",
-                            "123:AAAAAAAAAAAAAAAAAAAA AAAA", "123:AAAAAAAAAAAAAAAAAAAAAAA#"}) {
-        INFO(bad);
-        CHECK_FALSE(chatbot::telegram::plausible_token(bad));
-    }
-}
-
 TEST_CASE("api: getUpdates con varios updates, offset y allowed_updates", "[telegram][api]") {
     ApiHarness h;
     h.server->push_updates(json::array(

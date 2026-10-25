@@ -6,8 +6,9 @@
 #include "chatbot/bot/outbox.h"
 #include "chatbot/bot/sessions.h"
 #include "chatbot/bot/split.h"
-#include "chatbot/bot/time_zone.h"
 #include "chatbot/bot/types.h"
+
+#include "chatbot/addon_settings/time_zone.h"
 
 #include "chatbot/cancel_token.h"
 #include "chatbot/chat_client.h"
@@ -36,10 +37,12 @@ using ClientFactory = std::function<std::unique_ptr<ChatClient>()>;
 /// Crea el proveedor de búsqueda para un /buscar (igual que ClientFactory).
 using SearchFactory = std::function<std::unique_ptr<SearchProvider>()>;
 
-/// Guarda la lista completa de invitados (en orden) cuando alguien canjea
-/// el código. false si no se pudo (Bot lo anota; el invitado entra igual,
-/// pero solo hasta que el bot se reinicie).
-using SaveInvited = std::function<bool(const std::vector<UserId>&)>;
+/// Guarda al que acaba de canjear el código (en Telegram, add_invited sobre
+/// invitados.json) y devuelve la lista completa que quedó guardada, con la
+/// que Bot reemplaza la suya: así no vuelve a escribir a alguien que otro
+/// proceso quitó del archivo. nullopt si no se pudo (Bot lo anota; el
+/// invitado entra igual, pero solo hasta que el bot se reinicie).
+using AddInvited = std::function<std::optional<std::vector<UserId>>(UserId)>;
 
 /// Lo que el bot necesita de afuera. outbox, clock y log deben vivir más
 /// que el Bot.
@@ -51,12 +54,12 @@ struct BotDependencies {
     Log& log;
     /// Fecha local para el tope diario y /buscar (day_in_zone). Vacía: la
     /// zona del proceso (local_iso_date).
-    DayFunction day = {};
+    addon_settings::DayFunction day = {};
     /// Los que ya se habían autorizado con el código (los guardó la
     /// plataforma).
     std::vector<UserId> invited = {};
     /// Vacía: los invitados viven solo en memoria.
-    SaveInvited save_invited = {};
+    AddInvited add_invited = {};
     /// El primer ReplyId; los demás siguen de uno en uno y vuelven a 1
     /// después de kMaxReplyId. Debe dar otro en cada arranque (Telegram
     /// ignora en silencio un draft_id que ya se detuvo en ese chat). Las
@@ -156,8 +159,8 @@ private:
     void log(LogLevel level, const std::string& line);
     /// La fecha local de when (BotDependencies::day).
     [[nodiscard]] std::string day_of(TimePoint when) const;
-    /// Guarda los invitados después de que alguien canjeó el código.
-    void save_invited();
+    /// Guarda a user después de que canjeó el código.
+    void save_invited(UserId user);
 
     const BotConfig config_;
     BotDependencies dependencies_;

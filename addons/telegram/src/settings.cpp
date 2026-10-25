@@ -2,7 +2,8 @@
 
 #include "chatbot/telegram/api.h"
 
-#include "chatbot/bot/time_zone.h"
+#include "chatbot/addon_settings/time_zone.h"
+#include "chatbot/addon_settings/token.h"
 
 #include "chatbot/credentials.h"
 #include "chatbot/platform.h"
@@ -220,7 +221,7 @@ Result<TelegramSettings> load_telegram_settings(const std::string& config_path,
         read(stale, count("stale_message_minutes", config.stale_after.count()));
         read(draft, count("draft_interval_ms", config.draft_interval.count()));
         read(config.log_error_details, values.flag("log_error_details", false));
-        read(settings.time_zone, values.text("time_zone", std::string{bot::default_time_zone()}));
+        read(settings.time_zone, values.text("time_zone", std::string{addon_settings::default_time_zone()}));
         if (error.has_value()) {
             return *error;
         }
@@ -270,7 +271,7 @@ Result<TelegramSettings> load_telegram_settings(const std::string& config_path,
                                 " o en " + settings.credentials_path + " con la llave \"" +
                                 std::string{kTokenCredentialsKey} + "\".");
         }
-        if (!plausible_token(token.value())) {
+        if (!addon_settings::plausible_token(token.value())) {
             return config_error("El token de Telegram no tiene la forma de uno de @BotFather "
                                 "(números, ':' y letras, sin espacios).");
         }
@@ -301,66 +302,6 @@ Result<TelegramSettings> load_telegram_settings(const std::string& config_path,
         return settings;
     } catch (const std::exception&) {
         return config_error("No se pudo leer la configuración del bot (" + config_path + ").");
-    }
-}
-
-Result<std::vector<bot::UserId>> load_invited(const std::string& path) {
-    const auto damaged = [&path](const std::string& why) {
-        return config_error(path + " está dañado (" + why +
-                            "). No se tocó: arréglalo o quítalo de ahí (los invitados tendrán que "
-                            "volver a usar el código).");
-    };
-    try {
-        std::error_code error;
-        if (!std::filesystem::exists(path, error)) {
-            if (error) {
-                return config_error("No se pudo revisar " + path + ": " + error.message() + ".");
-            }
-            return std::vector<bot::UserId>{};
-        }
-        std::ifstream file{path, std::ios::binary};
-        if (!file) {
-            return config_error("No se pudo leer " + path + ".");
-        }
-        std::ostringstream content;
-        content << file.rdbuf();
-        json document;
-        try {
-            document = json::parse(content.str());
-        } catch (const json::exception&) {
-            return damaged("no es JSON válido");
-        }
-        if (!document.is_object() || document.value("version", 0) != 1) {
-            return damaged("no es la versión 1");
-        }
-        const auto users = document.find("users");
-        if (users == document.end() || !users->is_array()) {
-            return damaged("falta la lista \"users\"");
-        }
-        std::vector<bot::UserId> out;
-        for (const json& user : *users) {
-            if (!user.is_number_integer() || user.get<std::int64_t>() <= 0) {
-                return damaged("un ID no es un número mayor que 0");
-            }
-            out.push_back(user.get<std::int64_t>());
-        }
-        return out;
-    } catch (const std::exception&) {
-        return damaged("no se pudo interpretar");
-    }
-}
-
-std::optional<std::string> save_invited(const std::string& path,
-                                        const std::vector<bot::UserId>& users) {
-    try {
-        const json document{{"version", 1}, {"users", users}};
-        if (std::optional<std::string> error = write_file_atomic(
-                path, document.dump(2) + "\n", FilePrivacy::Private, FolderPrivacy::PrivateIfNew)) {
-            return "No se pudieron guardar los invitados en " + path + ": " + *error;
-        }
-        return std::nullopt;
-    } catch (const std::exception&) {
-        return "No se pudieron guardar los invitados en " + path + ".";
     }
 }
 

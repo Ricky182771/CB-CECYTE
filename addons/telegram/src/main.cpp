@@ -12,7 +12,10 @@
 
 #include "chatbot/bot/bot.h"
 #include "chatbot/bot/config.h"
-#include "chatbot/bot/time_zone.h"
+
+#include "chatbot/addon_settings/invited.h"
+#include "chatbot/addon_settings/paths.h"
+#include "chatbot/addon_settings/time_zone.h"
 
 #include "chatbot/cancel_token.h"
 #include "chatbot/chat_client.h"
@@ -128,7 +131,7 @@ int run(const std::string& config_path) {
         return fail(loaded.error().message);
     }
     const TelegramSettings& settings = loaded.value();
-    Result<bot::DayFunction> day = bot::day_in_zone(settings.time_zone);
+    Result<addon_settings::DayFunction> day = addon_settings::day_in_zone(settings.time_zone);
     if (day.is_error()) {
         return fail(day.error().message);
     }
@@ -140,8 +143,8 @@ int run(const std::string& config_path) {
                 create_private_directory(*settings.data_dir, FolderPrivacy::PrivateIfNew)) {
             return fail("No se pudo preparar data_dir (" + *settings.data_dir + "): " + *error);
         }
-        invited_path = (std::filesystem::path{*settings.data_dir} / kInvitedFileName).string();
-        Result<std::vector<bot::UserId>> saved = load_invited(invited_path);
+        invited_path = addon_settings::invited_file_path(*settings.data_dir);
+        Result<std::vector<bot::UserId>> saved = addon_settings::load_invited(invited_path);
         if (saved.is_error()) {
             return fail(saved.error().message);
         }
@@ -182,12 +185,14 @@ int run(const std::string& config_path) {
     dependencies.day = day.value();
     dependencies.invited = invited;
     if (!invited_path.empty()) {
-        dependencies.save_invited = [invited_path, &log](const std::vector<bot::UserId>& users) {
-            if (std::optional<std::string> error = save_invited(invited_path, users)) {
-                log.write(bot::LogLevel::Error, "invitados_error " + *error);
-                return false;
+        dependencies.add_invited =
+            [invited_path, &log](bot::UserId user) -> std::optional<std::vector<bot::UserId>> {
+            Result<std::vector<bot::UserId>> saved = addon_settings::add_invited(invited_path, user);
+            if (saved.is_error()) {
+                log.write(bot::LogLevel::Error, "invitados_error " + saved.error().message);
+                return std::nullopt;
             }
-            return true;
+            return saved.value();
         };
     }
     bot::Bot bot{config.value(), std::move(dependencies)};

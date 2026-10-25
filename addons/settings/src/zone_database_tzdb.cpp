@@ -8,7 +8,7 @@
 #include <optional>
 #include <string>
 
-namespace chatbot::bot::detail {
+namespace chatbot::addon_settings::detail {
 
 bool zone_database_available() {
     return true;
@@ -39,4 +39,4 @@ Result<DayFunction> named_zone_day(std::string_view name) {
     }};
 }
 
-} // namespace chatbot::bot::detail
+} // namespace chatbot::addon_settings::detail

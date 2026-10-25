@@ -1,4 +1,4 @@
-#include "chatbot/bot/time_zone.h"
+#include "chatbot/addon_settings/time_zone.h"
 
 #include "zone_database.h"
 
@@ -8,7 +8,7 @@
 #include <optional>
 #include <string>
 
-namespace chatbot::bot {
+namespace chatbot::addon_settings {
 namespace {
 
 /// Desfases de UTC que existen: de -12:00 a +14:00.
@@ -94,4 +94,4 @@ Result<DayFunction> day_in_zone(std::string_view name) {
     return named;
 }
 
-} // namespace chatbot::bot
+} // namespace chatbot::addon_settings

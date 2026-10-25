@@ -23,8 +23,6 @@ inline constexpr std::string_view kSearchKeyEnv = "CHAT_SEARCH_API_KEY";
 inline constexpr std::string_view kConfigEnv = "CHAT_TELEGRAM_CONFIG";
 /// Llave del token en credentials.json.
 inline constexpr std::string_view kTokenCredentialsKey = "telegram";
-/// Archivo de los invitados por código, en data_dir.
-inline constexpr std::string_view kInvitedFileName = "invitados.json";
 
 /// Todo lo que el bot necesita, ya leído y revisado.
 struct TelegramSettings {
@@ -49,17 +47,6 @@ struct TelegramSettings {
 /// la ruta y la llave; nunca con un secreto.
 [[nodiscard]] Result<TelegramSettings> load_telegram_settings(const std::string& config_path,
                                                               const EnvLookup& env);
-
-/// Los invitados guardados en path ({"version": 1, "users": [IDs]}). Que el
-/// archivo no exista no es un error (lista vacía). Si no se entiende, error
-/// Config con la ruta y el motivo: el archivo no se toca (nunca se pierde
-/// lo que tenía).
-[[nodiscard]] Result<std::vector<bot::UserId>> load_invited(const std::string& path);
-
-/// Escribe la lista de forma atómica (write_file_atomic) con permisos 600;
-/// la carpeta, 700 si se crea. El error en español, o nullopt.
-[[nodiscard]] std::optional<std::string> save_invited(const std::string& path,
-                                                      const std::vector<bot::UserId>& users);
 
 } // namespace chatbot::telegram
 

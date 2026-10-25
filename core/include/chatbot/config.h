@@ -191,6 +191,22 @@ struct AppearanceValues {
 [[nodiscard]] std::optional<ChatError> save_system_prompt(
     const std::string& path, const std::optional<std::string>& prompt);
 
+/// La llave de primer nivel name de config.json (una sección, como
+/// "addons") como texto JSON, con sus llaves en el orden del archivo, para
+/// quien la interpreta. Nullopt si falta la llave; que el archivo no exista
+/// no es un error. Si no es un objeto JSON válido, error Config.
+[[nodiscard]] Result<std::optional<std::string>> load_config_section(const std::string& path,
+                                                                     std::string_view name);
+
+/// Escribe la sección name de config.json de forma atómica, conservando las
+/// demás llaves y su orden (el mismo escritor de save_appearance y
+/// save_system_prompt). value es el texto JSON de la sección (cualquier
+/// valor JSON); con nullopt se borra la llave. Si value no es JSON válido, o
+/// si el archivo existe pero no es un objeto JSON válido, no se toca nada y
+/// devuelve el error Config.
+[[nodiscard]] std::optional<ChatError> save_config_section(
+    const std::string& path, std::string_view name, const std::optional<std::string>& value);
+
 } // namespace chatbot
 
 #endif // CHATBOT_CONFIG_H

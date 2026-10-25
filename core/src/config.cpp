@@ -665,6 +665,56 @@ std::optional<ChatError> save_system_prompt(const std::string& path,
     });
 }
 
+Result<std::optional<std::string>> load_config_section(const std::string& path,
+                                                       std::string_view name) {
+    if (!file_exists(path)) {
+        return std::optional<std::string>{};
+    }
+    ordered document;
+    try {
+        const std::optional<std::string> content = read_file(path);
+        if (!content.has_value()) {
+            throw std::runtime_error("no se pudo leer");
+        }
+        document = ordered::parse(*content);
+        if (!document.is_object()) {
+            throw std::runtime_error("no es un objeto JSON");
+        }
+    } catch (const std::exception&) {
+        return ChatError{ErrorKind::Config, 0,
+                         "Archivo de configuración inválido (" + path + "): no es un objeto "
+                         "JSON válido.", std::nullopt};
+    }
+    const auto section = document.find(std::string{name});
+    if (section == document.end()) {
+        return std::optional<std::string>{};
+    }
+    return std::optional<std::string>{
+        section->dump(-1, ' ', false, ordered::error_handler_t::replace)};
+}
+
+std::optional<ChatError> save_config_section(const std::string& path, std::string_view name,
+                                             const std::optional<std::string>& value) {
+    std::optional<ordered> parsed;
+    if (value.has_value()) {
+        try {
+            parsed = ordered::parse(*value);
+        } catch (const std::exception&) {
+            return ChatError{ErrorKind::Config, 0,
+                             "No se guardó la configuración: la sección \"" + std::string{name} +
+                                 "\" no es JSON válido.",
+                             std::nullopt};
+        }
+    }
+    return update_config_file(path, [&name, &parsed](ordered& document) {
+        if (parsed.has_value()) {
+            document[std::string{name}] = std::move(*parsed);
+        } else {
+            document.erase(std::string{name});
+        }
+    });
+}
+
 Result<std::string> load_search_api_key(const EnvLookup& env,
                                         const std::string& credentials_path) {
     // Primero revisa la variable de entorno.

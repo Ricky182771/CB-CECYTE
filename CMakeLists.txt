@@ -84,6 +84,10 @@ endif()
 
 add_subdirectory(core)
 add_subdirectory(markdown)
+# Reglas de la configuración de los addons (chatbot::addon_settings): siempre,
+# también con los addons apagados y en Windows, porque la usa la pantalla de
+# configuración de cli/. Antes de cli/.
+add_subdirectory(addons/settings)
 add_subdirectory(cli)
 add_subdirectory(tools)
 
@@ -97,6 +101,8 @@ if(CHATBOT_ANY_ADDON)
     add_subdirectory(addons)
 endif()
 
-# core y chatbot::markdown nunca dependen de cli/ ni de FTXUI (sección 5).
+# core, chatbot::markdown y chatbot::addon_settings nunca dependen de cli/ ni
+# de FTXUI (sección 5).
 chatbot_forbid_ui_dependencies(chatbot_core)
 chatbot_forbid_ui_dependencies(chatbot_markdown)
+chatbot_forbid_ui_dependencies(chatbot_addon_settings)

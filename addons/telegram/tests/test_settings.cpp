@@ -2,7 +2,7 @@
 
 #include "chatbot/telegram/settings.h"
 
-#include "chatbot/bot/time_zone.h"
+#include "chatbot/addon_settings/time_zone.h"
 
 #include "fake_transport.hpp"
 #include "posix_permissions.hpp"
@@ -24,9 +24,7 @@
 
 namespace {
 
-using chatbot::telegram::load_invited;
 using chatbot::telegram::load_telegram_settings;
-using chatbot::telegram::save_invited;
 using nlohmann::json;
 
 constexpr const char* kToken = "123456789:AAFakeTokenForTestsOnly_abcdefghijk";
@@ -69,7 +67,7 @@ TEST_CASE("configuración: lo mínimo y los valores por defecto", "[telegram][co
     CHECK(settings.model.api_key == kKey);
     CHECK(settings.token == kToken);
     CHECK(settings.search_api_key.empty());
-    CHECK(settings.time_zone == chatbot::bot::default_time_zone());
+    CHECK(settings.time_zone == chatbot::addon_settings::default_time_zone());
     CHECK_FALSE(settings.data_dir.has_value());
     CHECK(settings.bot.system_prompt == chatbot::kDefaultSystemPrompt);
     CHECK(settings.bot.allowed_users.empty());
@@ -211,45 +209,3 @@ TEST_CASE("configuración: un token mal copiado se rechaza sin mostrarlo", "[tel
     CHECK(result.error().message.find("corto") == std::string::npos);
 }
 
-TEST_CASE("invitados: se guardan con 600 de forma atómica y se leen", "[telegram][invitados]") {
-    chatbot_test::ScopedTempDir dir;
-    const std::filesystem::path path = dir.path() / "datos" / "invitados.json";
-    const auto empty = load_invited(path.string());
-    REQUIRE(empty.is_ok());
-    CHECK(empty.value().empty());
-
-    REQUIRE_FALSE(save_invited(path.string(), {5, 7, 9}).has_value());
-    const auto loaded = load_invited(path.string());
-    REQUIRE(loaded.is_ok());
-    CHECK(loaded.value() == std::vector<chatbot::bot::UserId>{5, 7, 9});
-    // Solo IDs: nada de nombres ni mensajes.
-    std::ifstream file{path};
-    const json document = json::parse(file);
-    CHECK(document == json{{"version", 1}, {"users", {5, 7, 9}}});
-    CHECK_FALSE(std::filesystem::exists(path.string() + ".tmp"));
-#ifndef _WIN32
-    struct stat info {};
-    REQUIRE(::stat(path.c_str(), &info) == 0);
-    CHECK((info.st_mode & 0777) == 0600);
-    REQUIRE(::stat(path.parent_path().c_str(), &info) == 0);
-    CHECK((info.st_mode & 0777) == 0700);
-#endif
-}
-
-TEST_CASE("invitados: un archivo dañado es un error claro y no se toca", "[telegram][invitados]") {
-    for (const char* content : {"{ roto", "[1, 2]", "{\"version\": 2, \"users\": []}",
-                                "{\"version\": 1}", "{\"version\": 1, \"users\": [\"5\"]}",
-                                "{\"version\": 1, \"users\": [0]}"}) {
-        chatbot_test::ScopedTempDir dir;
-        const std::filesystem::path path = dir.path() / "invitados.json";
-        write(path, content);
-        const auto result = load_invited(path.string());
-        INFO(content);
-        REQUIRE(result.is_error());
-        CHECK(result.error().message.find(path.string()) != std::string::npos);
-        CHECK(result.error().message.find("dañado") != std::string::npos);
-        std::ifstream file{path};
-        const std::string after{std::istreambuf_iterator<char>{file}, {}};
-        CHECK(after == content);
-    }
-}

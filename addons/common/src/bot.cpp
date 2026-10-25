@@ -156,27 +156,30 @@ void Bot::log(LogLevel level, const std::string& line) {
     }
 }
 
-void Bot::save_invited() {
-    if (!dependencies_.save_invited) {
+void Bot::save_invited(UserId user) {
+    if (!dependencies_.add_invited) {
         return;
     }
-    // Una escritura a la vez y siempre con la lista más reciente: dos
-    // invitados seguidos nunca dejan guardada la lista vieja.
+    // Una escritura a la vez: la lista que devuelve la última es la más
+    // reciente del archivo.
     const std::lock_guard<std::mutex> save_lock(save_mutex_);
-    std::vector<UserId> invited;
-    {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        invited = access_.invited();
-    }
-    bool saved = false;
+    std::optional<std::vector<UserId>> saved;
     try {
-        saved = dependencies_.save_invited(invited);
+        saved = dependencies_.add_invited(user);
     } catch (...) {
-        saved = false;
+        saved.reset();
     }
-    if (!saved) {
-        log(LogLevel::Error, "invitados_no_guardados n=" + std::to_string(invited.size()));
+    if (!saved.has_value()) {
+        std::size_t count = 0;
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            count = access_.invited_count();
+        }
+        log(LogLevel::Error, "invitados_no_guardados n=" + std::to_string(count));
+        return;
     }
+    const std::lock_guard<std::mutex> lock(mutex_);
+    access_.set_invited(*saved);
 }
 
 void Bot::handle(const IncomingMessage& message) {
@@ -304,7 +307,7 @@ void Bot::handle(const IncomingMessage& message) {
         log(level, line);
     }
     if (invited) {
-        save_invited();
+        save_invited(message.user);
     }
     for (const std::string& reply : replies) {
         (void)deliver(message.chat, reply, TextFormat::Plain);
