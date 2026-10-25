@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -122,6 +123,10 @@ public:
 
     /// Un id nuevo que no existe todavía en el directorio.
     [[nodiscard]] std::string new_id() const;
+
+    /// Lo mismo, con los 6 hex de next_random (para las pruebas): si
+    /// <id>.json ya existe, pide otro valor.
+    [[nodiscard]] std::string new_id(const std::function<std::uint32_t()>& next_random) const;
 
     /// Un resumen por cada *.json, el más reciente primero. Los ilegibles
     /// (corruptos, de una versión desconocida o con mensajes que no alternan)

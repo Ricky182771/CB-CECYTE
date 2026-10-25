@@ -12,6 +12,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <cstddef>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -25,6 +27,7 @@ namespace {
 using chatbot::Role;
 using chatbot::cli::ConversationStore;
 using chatbot::cli::ConversationSummary;
+using chatbot::cli::format_conversation_id;
 using chatbot::cli::LoadResult;
 using chatbot::cli::StoredConversation;
 using chatbot::cli::StoredMessage;
@@ -347,16 +350,47 @@ TEST_CASE("ConversationStore: ids con ruta o caracteres raros se rechazan", "[al
     CHECK_FALSE(fs::exists(temp.path().parent_path() / "fuera.json"));
 }
 
-TEST_CASE("ConversationStore: new_id genera ids únicos y con formato", "[almacen]") {
+TEST_CASE("ConversationStore: new_id genera ids con formato y al azar", "[almacen]") {
     const ScopedTempDir temp;
     const ConversationStore store{temp.string()};
+    const auto has_format = [](const std::string& id) {
+        if (id.size() != 22 || id[8] != '-' || id[15] != '-') {
+            return false;
+        }
+        for (std::size_t i = 0; i < id.size(); ++i) {
+            const char c = id[i];
+            const bool ok = i == 8 || i == 15 || (c >= '0' && c <= '9') ||
+                            (i > 15 && c >= 'a' && c <= 'f');
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    };
     std::set<std::string> ids;
     for (int i = 0; i < 200; ++i) {
         const std::string id = store.new_id();
-        CHECK(id.size() == 22);
+        CHECK(has_format(id));
         ids.insert(id);
     }
-    CHECK(ids.size() == 200);
+    // 24 bits al azar: 200 en el mismo segundo repiten alguno en ~0.12 % de
+    // las corridas (exigir 200 fallaba a veces); 6 repetidos, ~4e-21.
+    CHECK(ids.size() >= 195);
+}
+
+TEST_CASE("ConversationStore: new_id pide otro sufijo si el archivo ya existe", "[almacen]") {
+    const ScopedTempDir temp;
+    const ConversationStore store{temp.string()};
+    // Ocupa el sufijo 000005 en este segundo y los dos siguientes, por si el
+    // reloj avanza antes de llamar a new_id.
+    const std::time_t now = std::time(nullptr);
+    for (std::time_t t = now; t < now + 3; ++t) {
+        std::ofstream{temp.path() / (format_conversation_id(t, 5) + ".json")} << "{}";
+    }
+    int calls = 0;
+    const std::string id = store.new_id([&] { return ++calls == 1 ? 5U : 7U; });
+    CHECK(calls == 2);
+    CHECK_THAT(id, Catch::Matchers::EndsWith("-000007"));
 }
 
 TEST_CASE("ConversationStore: sin directorio todas las operaciones fallan con mensaje",

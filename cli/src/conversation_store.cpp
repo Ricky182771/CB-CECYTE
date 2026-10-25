@@ -401,18 +401,24 @@ std::string ConversationStore::new_id() const {
     try {
         std::random_device device;
         std::uniform_int_distribution<std::uint32_t> distribution(0, 0xFFFFFFU);
-        for (;;) {
-            std::string id = format_conversation_id(std::time(nullptr), distribution(device));
-            std::error_code error;
-            if (dir_.empty() || !fs::exists(path_for(id), error)) {
-                return id;
-            }
-        }
+        return new_id([&] { return distribution(device); });
     } catch (...) {
         // random_device puede lanzar si no hay fuente de entropía: se usa el
         // reloj de alta resolución como respaldo.
-        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-        return format_conversation_id(std::time(nullptr), static_cast<std::uint32_t>(ticks));
+        return new_id([] {
+            return static_cast<std::uint32_t>(
+                std::chrono::steady_clock::now().time_since_epoch().count());
+        });
+    }
+}
+
+std::string ConversationStore::new_id(const std::function<std::uint32_t()>& next_random) const {
+    for (;;) {
+        std::string id = format_conversation_id(std::time(nullptr), next_random());
+        std::error_code error;
+        if (dir_.empty() || !fs::exists(path_for(id), error)) {
+            return id;
+        }
     }
 }
 
