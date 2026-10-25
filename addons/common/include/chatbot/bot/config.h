@@ -3,6 +3,8 @@
 
 #include "chatbot/bot/types.h"
 
+#include "chatbot/addon_settings/limits.h"
+
 #include "chatbot/result.h"
 #include "chatbot/system_prompt.h"
 
@@ -13,23 +15,6 @@
 #include <vector>
 
 namespace chatbot::bot {
-
-// Rangos válidos de BotConfig (validate_bot_config).
-inline constexpr std::chrono::minutes kMinIdleTimeout{1};
-inline constexpr std::chrono::minutes kMaxIdleTimeout{24 * 60};
-inline constexpr std::size_t kMaxDailyMessages = 10000;
-inline constexpr std::size_t kMaxConcurrentResponses = 32;
-inline constexpr std::chrono::minutes kMinStaleAfter{1};
-inline constexpr std::chrono::minutes kMaxStaleAfter{24 * 60};
-/// Telegram pide no mandar más de un mensaje por segundo por chat; los
-/// borradores no tienen tope publicado, así que no se baja de 1/4 s.
-inline constexpr std::chrono::milliseconds kMinDraftInterval{250};
-inline constexpr std::chrono::milliseconds kMaxDraftInterval{10000};
-/// Largo del código de invitación: el de /start <código> y el de los enlaces
-/// t.me/<bot>?start=<código>, que Telegram limita a 64 caracteres A-Z, a-z,
-/// 0-9, '_' y '-'. Al menos 8, para que no se adivine probando.
-inline constexpr std::size_t kMinInviteCodeLength = 8;
-inline constexpr std::size_t kMaxInviteCodeLength = 64;
 
 /// Todo lo que decide el comportamiento del bot. Los valores predeterminados
 /// dejan el acceso cerrado: sin allowed_users ni invite_code nadie entra.
@@ -78,12 +63,8 @@ private:
     BotConfig config_;
 };
 
-/// Revisa los rangos: IDs > 0; código vacío o de kMinInviteCodeLength a
-/// kMaxInviteCodeLength caracteres A-Z, a-z, 0-9, '_' o '-';
-/// session_idle_timeout de kMinIdleTimeout a kMaxIdleTimeout;
-/// daily_message_limit de 1 a kMaxDailyMessages; max_concurrent_responses de
-/// 1 a kMaxConcurrentResponses; stale_after de kMinStaleAfter a
-/// kMaxStaleAfter; draft_interval de kMinDraftInterval a kMaxDraftInterval;
+/// Revisa cada campo con los validadores de chatbot/addon_settings/limits.h
+/// (los mismos que usa la pantalla de configuración de la app) y
 /// system_prompt con validate_system_prompt.
 /// Fuera de rango: error Config con el motivo en español (nunca el código).
 [[nodiscard]] Result<ValidBotConfig> validate_bot_config(BotConfig config);

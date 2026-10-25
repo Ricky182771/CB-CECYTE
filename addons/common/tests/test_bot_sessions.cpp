@@ -133,7 +133,7 @@ TEST_CASE("sesiones: el system prompt nunca se pierde ni se duplica", "[bot][ses
         auto config = chatbot_bot_test::test_bot_config();
         config.allowed_users = {1, 2, 3};
         config.system_prompt = prompt;
-        config.daily_message_limit = chatbot::bot::kMaxDailyMessages;
+        config.daily_message_limit = chatbot::addon_settings::kMaxDailyMessages;
         h.start(config, chatbot_bot_test::scripted_clients(
                             h.recorder, [](const std::vector<Message>& messages) {
                                 const std::string& last = messages.back().content;

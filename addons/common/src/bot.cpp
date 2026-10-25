@@ -102,19 +102,36 @@ std::string sources_text(const std::vector<SearchResult>& results) {
     return text;
 }
 
+/// La fecha local de when (Runtime::day; sin ella o si lanza, la zona del
+/// proceso, para no tumbar al bot).
+std::string day_of(const Runtime& runtime, TimePoint when) {
+    if (runtime.day) {
+        try {
+            return runtime.day(when);
+        } catch (...) {
+        }
+    }
+    return local_iso_date(std::chrono::system_clock::to_time_t(when));
+}
+
 } // namespace
 
 Bot::Bot(ValidBotConfig config, BotDependencies dependencies)
-    : config_(config.get()), dependencies_(std::move(dependencies)),
+    : dependencies_(std::move(dependencies)),
+      max_concurrent_(config.get().max_concurrent_responses),
       markdown_limit_(dependencies_.outbox.message_limit(TextFormat::Markdown)),
       plain_limit_(dependencies_.outbox.message_limit(TextFormat::Plain)),
-      access_(config_, dependencies_.invited),
-      sessions_(config_.system_prompt, config_.session_idle_timeout),
-      counter_(config_.daily_message_limit),
+      runtime_(std::make_shared<const Runtime>(Runtime{
+          config.get(), std::move(dependencies_.make_client),
+          std::move(dependencies_.make_search), std::move(dependencies_.day)})),
+      access_(runtime_->config, dependencies_.invited),
+      sessions_(runtime_->config.system_prompt, runtime_->config.session_idle_timeout),
+      counter_(runtime_->config.daily_message_limit),
       next_reply_(first_reply_id(dependencies_.first_reply)) {
-    workers_.reserve(config_.max_concurrent_responses);
+    const BotConfig& initial = runtime_->config;
+    workers_.reserve(max_concurrent_);
     try {
-        for (std::size_t i = 0; i < config_.max_concurrent_responses; ++i) {
+        for (std::size_t i = 0; i < max_concurrent_; ++i) {
             workers_.emplace_back([this] { work(); });
         }
     } catch (const std::system_error&) {
@@ -127,25 +144,19 @@ Bot::Bot(ValidBotConfig config, BotDependencies dependencies)
     }
     log(LogLevel::Info,
         "inicio respuestas_simultaneas=" + std::to_string(workers_.size()) +
-            " autorizados=" + std::to_string(config_.allowed_users.size()) +
+            " autorizados=" + std::to_string(initial.allowed_users.size()) +
             " invitados=" + std::to_string(access_.invited_count()) +
-            " codigo=" + (config_.invite_code.empty() ? "no" : "si") +
-            " busqueda=" + (dependencies_.make_search ? "si" : "no"));
+            " codigo=" + (initial.invite_code.empty() ? "no" : "si") +
+            " busqueda=" + (runtime_->make_search ? "si" : "no"));
 }
 
 Bot::~Bot() {
     shutdown();
 }
 
-std::string Bot::day_of(TimePoint when) const {
-    if (dependencies_.day) {
-        try {
-            return dependencies_.day(when);
-        } catch (...) {
-            // Sin fecha de la zona: la del proceso, para no tumbar al bot.
-        }
-    }
-    return local_iso_date(std::chrono::system_clock::to_time_t(when));
+std::shared_ptr<const Runtime> Bot::runtime() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return runtime_;
 }
 
 void Bot::log(LogLevel level, const std::string& line) {
@@ -156,38 +167,43 @@ void Bot::log(LogLevel level, const std::string& line) {
     }
 }
 
-void Bot::save_invited() {
-    if (!dependencies_.save_invited) {
+void Bot::save_invited(UserId user) {
+    if (!dependencies_.add_invited) {
         return;
     }
-    // Una escritura a la vez y siempre con la lista más reciente: dos
-    // invitados seguidos nunca dejan guardada la lista vieja.
+    // Una escritura a la vez: la lista que devuelve la última es la más
+    // reciente del archivo.
     const std::lock_guard<std::mutex> save_lock(save_mutex_);
-    std::vector<UserId> invited;
-    {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        invited = access_.invited();
-    }
-    bool saved = false;
+    std::optional<std::vector<UserId>> saved;
     try {
-        saved = dependencies_.save_invited(invited);
+        saved = dependencies_.add_invited(user);
     } catch (...) {
-        saved = false;
+        saved.reset();
     }
-    if (!saved) {
-        log(LogLevel::Error, "invitados_no_guardados n=" + std::to_string(invited.size()));
+    if (!saved.has_value()) {
+        std::size_t count = 0;
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            count = access_.invited_count();
+        }
+        log(LogLevel::Error, "invitados_no_guardados n=" + std::to_string(count));
+        return;
     }
+    const std::lock_guard<std::mutex> lock(mutex_);
+    access_.set_invited(*saved);
 }
 
 void Bot::handle(const IncomingMessage& message) {
+    const std::shared_ptr<const Runtime> runtime = this->runtime();
+    const BotConfig& config = runtime->config;
     const TimePoint now = dependencies_.clock.now();
-    const std::string day = day_of(now);
+    const std::string day = day_of(*runtime, now);
     const BotCommand command = parse_bot_command(message.text);
     const std::string ids = "chat=" + std::to_string(message.chat) +
                             " usuario=" + std::to_string(message.user);
-    const bool search_available = static_cast<bool>(dependencies_.make_search);
+    const bool search_available = static_cast<bool>(runtime->make_search);
     // Llegó tarde (el bot estaba apagado o sin red): no va al modelo.
-    const bool stale = message.sent_at.has_value() && now - *message.sent_at > config_.stale_after;
+    const bool stale = message.sent_at.has_value() && now - *message.sent_at > config.stale_after;
 
     // Lo que sale se manda y se anota después de soltar el candado.
     std::vector<std::string> replies;
@@ -221,6 +237,7 @@ void Bot::handle(const IncomingMessage& message) {
             }
             session.busy = true;
             session.last_activity = now;
+            session.user = message.user;
             const ReplyId reply = next_reply_;
             next_reply_ = next_reply_ >= kMaxReplyId ? 1 : next_reply_ + 1;
             queue_.push_back(Job{message.chat, message.user, reply, message.platform, day,
@@ -270,8 +287,8 @@ void Bot::handle(const IncomingMessage& message) {
                 replies.emplace_back(kWelcome);
                 break;
             case BotCommand::Type::Help:
-                replies.push_back(help_text(search_available, config_.daily_message_limit,
-                                            config_.session_idle_timeout));
+                replies.push_back(help_text(search_available, config.daily_message_limit,
+                                            config.session_idle_timeout));
                 break;
             case BotCommand::Type::New:
                 replies.emplace_back(sessions_.reset(message.chat) ? kNewConversation
@@ -304,7 +321,7 @@ void Bot::handle(const IncomingMessage& message) {
         log(level, line);
     }
     if (invited) {
-        save_invited();
+        save_invited(message.user);
     }
     for (const std::string& reply : replies) {
         (void)deliver(message.chat, reply, TextFormat::Plain);
@@ -314,6 +331,7 @@ void Bot::handle(const IncomingMessage& message) {
 void Bot::work() {
     while (true) {
         std::optional<Job> job;
+        std::shared_ptr<const Runtime> runtime;
         CancelToken cancel; // Esta respuesta: stop() y shutdown() lo cancelan.
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -323,10 +341,11 @@ void Bot::work() {
             }
             job = std::move(queue_.front());
             queue_.pop_front();
+            runtime = runtime_; // Termina con este aunque haya una recarga.
             ++running_;
             running_jobs_[job->chat] = Running{job->reply, &cancel};
         }
-        run(*job, cancel);
+        run(*job, cancel, *runtime);
         {
             const std::lock_guard<std::mutex> lock(mutex_);
             running_jobs_.erase(job->chat);
@@ -358,7 +377,8 @@ bool Bot::stop(ChatId chat, ReplyId reply) {
     return true;
 }
 
-void Bot::run(const Job& job, const CancelToken& cancel) {
+void Bot::run(const Job& job, const CancelToken& cancel, const Runtime& runtime) {
+    const BotConfig& config = runtime.config;
     const auto started = std::chrono::steady_clock::now();
     const std::string ids =
         "chat=" + std::to_string(job.chat) + " usuario=" + std::to_string(job.user);
@@ -413,7 +433,7 @@ void Bot::run(const Job& job, const CancelToken& cancel) {
         if (job.query.has_value()) {
             source = ErrorSource::Search;
             const std::unique_ptr<SearchProvider> provider =
-                dependencies_.make_search ? dependencies_.make_search() : nullptr;
+                runtime.make_search ? runtime.make_search() : nullptr;
             const Result<SearchResponse> found =
                 provider ? provider->search(*job.query, &cancel)
                          : Result<SearchResponse>{ChatError{
@@ -428,7 +448,7 @@ void Bot::run(const Job& job, const CancelToken& cancel) {
                 // Como en la app: los resultados son datos dentro del bloque
                 // con nonce, que reemplaza al texto del comando.
                 const SearchResponse trimmed = trim_search_response(found.value());
-                const std::string date = day_of(clock.now());
+                const std::string date = day_of(runtime, clock.now());
                 content = format_search_context(trimmed, spanish_date(date), generate_search_nonce());
                 sources = trimmed.results;
             }
@@ -439,7 +459,7 @@ void Bot::run(const Job& job, const CancelToken& cancel) {
         if (!failure.has_value()) {
             source = ErrorSource::Model;
             const std::unique_ptr<ChatClient> client =
-                dependencies_.make_client ? dependencies_.make_client() : nullptr;
+                runtime.make_client ? runtime.make_client() : nullptr;
             if (!client) {
                 failure = ChatError{ErrorKind::Config, 0, "no se pudo crear el cliente del modelo",
                                     std::nullopt};
@@ -452,7 +472,7 @@ void Bot::run(const Job& job, const CancelToken& cancel) {
                         return true;
                     }
                     const TimePoint now = clock.now();
-                    if (now - last_draft < config_.draft_interval) {
+                    if (now - last_draft < config.draft_interval) {
                         return true;
                     }
                     last_draft = now;
@@ -481,7 +501,7 @@ void Bot::run(const Job& job, const CancelToken& cancel) {
                     return true;
                 };
                 TrimmedCompletion done = complete_trimmed(*client, request,
-                                                          config_.history_limit_bytes, on_delta,
+                                                          config.history_limit_bytes, on_delta,
                                                           &cancel);
                 dropped = done.dropped;
                 if (done.result.is_error()) {
@@ -553,7 +573,7 @@ void Bot::run(const Job& job, const CancelToken& cancel) {
                                " tipo=\"" + error_kind_label(failure->kind) +
                                "\" http=" + std::to_string(failure->http_status) +
                                " ms=" + std::to_string(elapsed_ms(started));
-            if (config_.log_error_details) {
+            if (config.log_error_details) {
                 line += " detalle=\"" + one_line(failure->message, kMaxLogDetail) + "\"";
             }
             log(failure->kind == ErrorKind::NoSearchResults ? LogLevel::Info : LogLevel::Error,
@@ -608,6 +628,10 @@ void Bot::release(ChatId chat, std::optional<std::string> user_content,
     const std::lock_guard<std::mutex> lock(mutex_);
     Session* session = sessions_.find(chat);
     if (session == nullptr) {
+        return;
+    }
+    if (session->revoked) {
+        sessions_.erase(chat); // Perdió el acceso: el par no se guarda.
         return;
     }
     if (user_content.has_value() && answer.has_value()) {
@@ -665,6 +689,46 @@ std::optional<std::size_t> Bot::deliver(ChatId chat, std::string_view text, Text
         return std::nullopt;
     }
     return pieces.size();
+}
+
+void Bot::reconfigure(ValidBotConfig config, ClientFactory make_client, SearchFactory make_search,
+                      addon_settings::DayFunction day, std::vector<UserId> invited) {
+    const BotConfig& next = config.get();
+    std::size_t removed = 0;
+    std::size_t discarded = 0;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_) {
+            return;
+        }
+        access_ = AccessControl{next, invited};
+        // Las preguntas en la fila de quien perdió el acceso no llegan al
+        // modelo (ni cuentan para el tope).
+        std::erase_if(queue_, [&](const Job& job) {
+            if (access_.is_allowed(job.user)) {
+                return false;
+            }
+            counter_.refund(job.user, job.day);
+            if (Session* session = sessions_.find(job.chat)) {
+                session->busy = false;
+            }
+            ++discarded;
+            return true;
+        });
+        removed = sessions_.revoke([this](UserId user) { return access_.is_allowed(user); });
+        counter_.set_limit(next.daily_message_limit);
+        sessions_.set_idle_timeout(next.session_idle_timeout);
+        sessions_.set_system_prompt(next.system_prompt);
+        runtime_ = std::make_shared<const Runtime>(
+            Runtime{next, std::move(make_client), std::move(make_search), std::move(day)});
+    }
+    if (next.max_concurrent_responses != max_concurrent_) {
+        log(LogLevel::Warning, "requiere_reinicio campo=max_concurrent_responses");
+    }
+    if (removed > 0 || discarded > 0) {
+        log(LogLevel::Info, "acceso_retirado sesiones=" + std::to_string(removed) +
+                                " descartadas=" + std::to_string(discarded));
+    }
 }
 
 void Bot::expire_idle() {

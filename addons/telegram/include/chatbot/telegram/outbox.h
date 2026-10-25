@@ -9,6 +9,7 @@
 #include "chatbot/cancel_token.h"
 #include "chatbot/sleeper.h"
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -72,6 +73,9 @@ public:
     /// hilo).
     void tick(std::chrono::steady_clock::time_point now);
 
+    /// La recarga (SIGHUP): OutboxOptions::log_error_details, desde ya.
+    void set_log_error_details(bool enabled) { log_error_details_ = enabled; }
+
 private:
     struct DraftState {
         std::mutex mutex; ///< Un envío de esta vista previa a la vez.
@@ -99,6 +103,7 @@ private:
     bot::Log& log_;
     const CancelToken& shutdown_;
     OutboxOptions options_;
+    std::atomic<bool> log_error_details_;
     RealSleeper real_sleeper_;
 
     std::mutex mutex_;

@@ -3,7 +3,10 @@
 # configurar; esta revisa el código fuente, también con los addons apagados:
 #   cmake -DSOURCE_DIR=<raíz del proyecto> -P include_rules.cmake
 # - core/, markdown/, cli/, tools/ y tests/ nunca incluyen nada de addons/
-#   (chatbot/bot/... ni rutas con addons/).
+#   (chatbot/bot/..., chatbot/telegram/... ni rutas con addons/), salvo
+#   chatbot/addon_settings/... en cli/, tools/ y tests/.
+# - core/ y markdown/ tampoco incluyen chatbot/addon_settings/ (está encima).
+# - addons/settings/ no incluye chatbot/bot/ ni chatbot/telegram/ (está debajo).
 # - markdown/ y addons/ nunca incluyen FTXUI ni headers de cli/src.
 # Imprime cada violación con archivo y línea, y falla si hay alguna.
 
@@ -58,14 +61,30 @@ foreach(directory core markdown cli tools tests)
             string(REPLACE "|" ";" parts "${include}")
             list(GET parts 0 number)
             list(GET parts 1 path)
-            if(path MATCHES "^chatbot/bot/" OR path MATCHES "(^|/)addons/")
+            if(path MATCHES "^chatbot/(bot|telegram)/" OR path MATCHES "(^|/)addons/")
                 add_violation("${file}" ${number} "incluye ${path}, que es de addons/")
+            elseif(path MATCHES "^chatbot/addon_settings/" AND directory MATCHES "^(core|markdown)$")
+                add_violation("${file}" ${number} "incluye ${path}, que está encima de ${directory}/")
             endif()
         endforeach()
     endforeach()
 endforeach()
 
-# 2. markdown/ y addons/ no incluyen FTXUI ni headers de cli/src.
+# 2. addons/settings/ no incluye la capa de los bots ni a Telegram.
+sources_under(addons/settings files)
+foreach(file IN LISTS files)
+    read_includes("${file}" includes)
+    foreach(include IN LISTS includes)
+        string(REPLACE "|" ";" parts "${include}")
+        list(GET parts 0 number)
+        list(GET parts 1 path)
+        if(path MATCHES "^chatbot/(bot|telegram)/")
+            add_violation("${file}" ${number} "incluye ${path}: addons/settings está debajo")
+        endif()
+    endforeach()
+endforeach()
+
+# 3. markdown/ y addons/ no incluyen FTXUI ni headers de cli/src.
 foreach(directory markdown addons)
     if(NOT IS_DIRECTORY "${SOURCE_DIR}/${directory}")
         continue()

@@ -23,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -134,6 +135,9 @@ public:
         if (call.method == "getUpdates") {
             return next_updates(request);
         }
+        if (blocked(call.method)) {
+            return wait_cancel(request);
+        }
         std::function<chatbot::HttpResponse(const Call&)> answer;
         {
             const std::lock_guard<std::mutex> lock(mutex_);
@@ -150,6 +154,13 @@ public:
     }
 
     void push_updates(const nlohmann::json& updates) { push_updates(ok(updates)); }
+
+    /// Ese método no contesta hasta que se cancele la petición (como un
+    /// Telegram colgado con curl revisando el token).
+    void block(std::string method) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        blocked_ = std::move(method);
+    }
 
     void set_respond(std::function<chatbot::HttpResponse(const Call&)> answer) {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -191,6 +202,26 @@ public:
     }
 
 private:
+    bool blocked(const std::string& method) const {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        return method == blocked_;
+    }
+
+    chatbot::HttpResponse wait_cancel(const chatbot::HttpRequest& request) {
+        // Tope de seguridad: una prueba rota falla en lugar de colgarse.
+        const auto deadline = std::chrono::steady_clock::now() + 2 * chatbot_test::kThreadTimeout;
+        while (request.cancel == nullptr || !request.cancel->is_cancelled()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return no_network("tope de seguridad del Telegram falso");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        }
+        chatbot::HttpResponse cancelled;
+        cancelled.cancelled = true;
+        cancelled.error = "cancelado";
+        return cancelled;
+    }
+
     chatbot::HttpResponse next_updates(const chatbot::HttpRequest& request) {
         std::unique_lock<std::mutex> lock(mutex_);
         while (updates_.empty()) {
@@ -211,6 +242,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     std::function<chatbot::HttpResponse(const Call&)> respond_;
+    std::string blocked_;
     std::vector<Call> calls_;
     std::deque<chatbot::HttpResponse> updates_;
 };

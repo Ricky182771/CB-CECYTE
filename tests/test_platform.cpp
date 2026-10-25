@@ -235,3 +235,19 @@ TEST_CASE("windows_build: el build real en Windows; nada en POSIX", "[plataforma
         CHECK_FALSE(build.has_value());
     }
 }
+
+TEST_CASE("executable_path: la ruta completa del ejecutable de las pruebas", "[plataforma]") {
+    const std::optional<std::string> path = chatbot::executable_path();
+    const std::optional<std::string> dir = chatbot::executable_dir();
+    REQUIRE(path.has_value());
+    REQUIRE(dir.has_value());
+    const std::filesystem::path file{*path};
+    CHECK(file.is_absolute());
+    CHECK(file.stem().string() == "chatbot_tests");
+    CHECK(file.parent_path() == std::filesystem::path{*dir});
+    CHECK(std::filesystem::is_regular_file(file));
+    if (chatbot::current_os() == chatbot::Os::Posix) {
+        // /proc/self/exe ya trae la ruta real: sin enlaces simbólicos.
+        CHECK(std::filesystem::canonical(file) == file);
+    }
+}

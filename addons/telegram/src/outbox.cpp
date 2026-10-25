@@ -56,7 +56,8 @@ private:
 
 TelegramOutbox::TelegramOutbox(BotApi& api, bot::Log& log, const CancelToken& shutdown,
                                OutboxOptions options)
-    : api_(api), log_(log), shutdown_(shutdown), options_(options) {}
+    : api_(api), log_(log), shutdown_(shutdown), options_(options),
+      log_error_details_(options.log_error_details) {}
 
 TelegramOutbox::~TelegramOutbox() {
     stop();
@@ -77,7 +78,7 @@ void TelegramOutbox::log_failure(bot::LogLevel level, bot::ChatId chat, std::str
                        " chat=" + std::to_string(chat) + " http=" +
                        std::to_string(error.http_status) + " tipo=\"" +
                        error_kind_label(error.kind) + "\"";
-    if (options_.log_error_details) {
+    if (log_error_details_) {
         // Ya sin el token (BotApi::redact) y en una línea.
         std::string detail = error.message;
         for (char& c : detail) {

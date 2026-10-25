@@ -97,15 +97,11 @@ struct CopyResult {
 /// El entorno del proceso.
 [[nodiscard]] std::optional<std::string> environment_value(std::string_view name);
 
-/// Busca un archivo ejecutable con ese nombre en cada carpeta de PATH. En
-/// Windows, siempre false: ahí no se lanzan programas (clipboard_methods no
-/// los propone).
-[[nodiscard]] bool find_in_path(std::string_view program);
-
-/// Lanza argv con posix_spawnp (nunca un shell), con input por un pipe a su
-/// stdin y stdout y stderr a /dev/null. Espera a lo más timeout; si se
-/// pasa, lo mata. true si salió con código 0 y recibió todo el texto. Solo
-/// POSIX (clipboard_posix.cpp); en Windows, siempre false.
+/// Lanza argv con run_process (child_process.h: posix_spawnp, nunca un shell),
+/// con input por un pipe a su stdin y stdout y stderr a /dev/null (wl-copy
+/// deja un hijo con la salida abierta). Espera a lo más timeout; si se
+/// pasa, lo mata. true si salió con código 0 y recibió todo el texto. En
+/// Windows, siempre false (clipboard_methods nunca propone programas ahí).
 [[nodiscard]] bool run_with_input(const std::vector<std::string>& argv, std::string_view input,
                                   std::chrono::milliseconds timeout = kClipboardTimeout);
 

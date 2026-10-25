@@ -14,9 +14,11 @@
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -55,6 +57,7 @@ struct Harness {
     int search_key_saves = 0;
     std::string saved_search_key; ///< Lo que recibió el último guardado de la key de búsqueda.
     int closes = 0;
+    bool wait_models = true; ///< open() espera la lista de modelos.
     std::string base_url = "http://localhost:8080/v1"; ///< La de open(), en "custom".
     chatbot::cli::ModelsLoader loader{
         [] {
@@ -72,7 +75,14 @@ struct Harness {
             transport->responses.push_back(std::move(response));
             return transport;
         },
-        [this](auto task) { queue.post(std::move(task)); }};
+        // Como main.cpp: la tarea y después un Event::Custom para redibujar.
+        // Sin auto: Clang 18 truena con la captura task = std::move(task).
+        [this](std::function<void()> task) {
+            queue.post([this, task = std::move(task)] {
+                task();
+                (void)settings.component()->OnEvent(ftxui::Event::Custom);
+            });
+        }};
     chatbot::cli::SettingsScreen settings{
         loader, palette,
         [this](const chatbot::cli::ProviderSettings& provider) -> std::optional<std::string> {
@@ -110,7 +120,9 @@ struct Harness {
         settings.open(std::move(provider), config,
                       chatbot::cli::resolve_appearance("catppuccin-mocha", "theme"),
                       std::move(system_prompt), std::move(search));
-        REQUIRE(queue.run_until([this] { return !loader.busy(); }));
+        if (wait_models) {
+            REQUIRE(queue.run_until([this] { return !loader.busy(); }));
+        }
     }
 
     ftxui::Screen draw(int width = 120, int height = 24) {
@@ -599,6 +611,59 @@ TEST_CASE("configuración: key de búsqueda incompleta no se guarda", "[ajustes]
     const auto screen = h.draw();
     CHECK(find(screen, "key de búsqueda incompleta").x >= 0);
     CHECK(find(screen, "$TAVILY_KEY").x < 0);
+}
+
+TEST_CASE("configuración: solo s o n contestan si se descartan los cambios",
+          "[ajustes][sistema]") {
+    const chatbot_test::NoColorGuard environment(nullptr);
+    constexpr std::string_view question = "¿Descartar los cambios? (s/n)";
+    Harness h;
+    h.wait_models = false;
+    h.open("modelo-0", {}, "Original");
+    h.go_to_prompt();
+    REQUIRE(h.key(ftxui::Event::Character("x")));
+    REQUIRE(h.key(ftxui::Event::Escape));
+    REQUIRE(find(h.draw(), std::string{question}).x >= 0);
+
+    // La lista de modelos llega con la pregunta abierta: la tarea y su
+    // Event::Custom, como en main.cpp. Antes contestaba "no".
+    REQUIRE(h.loader.busy());
+    REQUIRE(h.queue.run_until([&] { return !h.loader.busy(); }));
+    CHECK(find(h.draw(), std::string{question}).x >= 0);
+
+    // Ni otra tecla, ni Enter, ni el ratón (tampoco sobre [ Guardar ]).
+    for (const ftxui::Event& event :
+         {ftxui::Event::Custom, ftxui::Event::Return, ftxui::Event::Tab, ftxui::Event::Delete,
+          ftxui::Event::ArrowDown, ftxui::Event::Character("x"), ftxui::Event::Character(" ")}) {
+        CHECK(h.key(event));
+        CHECK(find(h.draw(), std::string{question}).x >= 0);
+    }
+    const Position save = find(h.draw(), "[ Guardar ]");
+    REQUIRE(save.x >= 0);
+    CHECK(h.mouse(save, ftxui::Mouse::Left));
+    CHECK(h.mouse(save, ftxui::Mouse::Left, ftxui::Mouse::Released));
+    CHECK(find(h.draw(), std::string{question}).x >= 0);
+    CHECK(h.prompt_saves == 0);
+    CHECK(h.closes == 0);
+
+    // Esc cancela y lo dice; n y N contestan que no; el cambio sigue.
+    REQUIRE(h.key(ftxui::Event::Escape));
+    CHECK(find(h.draw(), std::string{question}).x < 0);
+    CHECK(find(h.draw(), std::string{chatbot::cli::kDiscardCancelled}).x >= 0);
+    for (const char* no : {"n", "N"}) {
+        REQUIRE(h.key(ftxui::Event::Escape));
+        REQUIRE(find(h.draw(), std::string{question}).x >= 0);
+        REQUIRE(h.key(ftxui::Event::Character(no)));
+        CHECK(find(h.draw(), std::string{question}).x < 0);
+        CHECK(h.settings.is_open());
+    }
+    CHECK(find(h.draw(), "xOriginal").x >= 0);
+
+    REQUIRE(h.key(ftxui::Event::Escape));
+    REQUIRE(h.key(ftxui::Event::Character("S")));
+    CHECK_FALSE(h.settings.is_open());
+    CHECK(h.prompt_saves == 0);
+    CHECK(h.closes == 1);
 }
 
 TEST_CASE("configuración: descartar una key de búsqueda escrita pregunta",

@@ -1,6 +1,7 @@
 #ifndef CHATBOT_CLI_SETTINGS_SCREEN_H
 #define CHATBOT_CLI_SETTINGS_SCREEN_H
 
+#include "addons_panel.h"
 #include "models_loader.h"
 #include "paste.h"
 #include "provider_settings.h"
@@ -23,9 +24,11 @@
 
 namespace chatbot::cli {
 
+inline constexpr std::string_view kDiscardCancelled = "Cancelado: no se descartó nada.";
+
 /// Pantalla de configuración (FTXUI): categorías a la izquierda
-/// ("Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema" y
-/// "Búsqueda web") y el formulario de la elegida a la derecha. La lógica del proveedor está en ProviderSettings; la lista de
+/// ("Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema",
+/// "Búsqueda web" y "Addons", en AddonsPanel) y el formulario de la elegida a la derecha. La lógica del proveedor está en ProviderSettings; la lista de
 /// modelos se pide con ModelsLoader, en su hilo. Se dibuja con la paleta
 /// vigente (la de main.cpp, que cambia al guardar). Se usa solo desde el
 /// hilo de la interfaz.
@@ -66,6 +69,11 @@ public:
     /// que se muestra atenuada al pie de "Proveedor de IA". nullopt (por
     /// defecto): sin modo portable, no se muestra nada.
     void set_portable_dir(std::optional<std::string> dir) { portable_dir_ = std::move(dir); }
+    /// El sistema para "Addons" (una vez, al arrancar); sin llamarla, la
+    /// categoría dice que no están disponibles.
+    void set_addons_environment(AddonsEnvironment environment) {
+        addons_.set_environment(std::move(environment));
+    }
     /// Esc, Cancelar o F2: cierra si no hay cambios; si los hay, pregunta
     /// "¿Descartar los cambios? (s/n)". Devuelve true si se cerró.
     bool request_close();
@@ -73,6 +81,9 @@ public:
     void close();
 
     [[nodiscard]] bool is_open() const { return settings_.has_value(); }
+    /// Hay una pregunta (s/n) abierta (descartar o de Addons): todo evento
+    /// es de ella (yes_no.h).
+    [[nodiscard]] bool asking() const { return confirm_discard_ || addons_.question().has_value(); }
     /// El componente (para Container::Tab).
     [[nodiscard]] ftxui::Component component() const { return root_; }
     /// Da el foco al primer campo.
@@ -90,7 +101,13 @@ public:
 
 private:
     /// Categorías del menú de la izquierda.
-    enum Category : int { kProvider = 0, kAppearance = 1, kSystemPrompt = 2, kSearch = 3 };
+    enum Category : int {
+        kProvider = 0,
+        kAppearance = 1,
+        kSystemPrompt = 2,
+        kSearch = 3,
+        kAddons = 4,
+    };
 
     void request_models();
     void save();
@@ -132,6 +149,7 @@ private:
     bool confirm_discard_ = false; ///< Se preguntó "¿Descartar los cambios?".
     bool no_color_ = false;
     std::optional<std::string> portable_dir_; ///< set_portable_dir.
+    AddonsPanel addons_;
 
     // Lo que editan los componentes.
     std::vector<std::string> category_names_;

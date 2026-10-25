@@ -76,11 +76,6 @@ struct BotCommandInfo {
     std::string description; ///< 1-256 caracteres.
 };
 
-/// true si el token tiene la forma de uno de @BotFather: dígitos, ':' y de
-/// 20 a 100 caracteres A-Z, a-z, 0-9, '_' o '-'. Así nunca se arma una URL
-/// con algo que no sea un token (/, ?, #, espacios).
-[[nodiscard]] bool plausible_token(std::string_view token);
-
 /// Cliente de la Bot API sobre el Transport del núcleo: POST JSON a
 /// https://api.telegram.org/bot<token>/<método>. El token va en la ruta, así
 /// que ningún error, aviso ni registro lo incluye: los mensajes del

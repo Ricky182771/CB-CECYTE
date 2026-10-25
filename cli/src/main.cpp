@@ -5,6 +5,9 @@
 // pantalla o la Conversation se ejecuta en el hilo de la interfaz mediante
 // App::Post.
 
+#include "addon_launcher.h"
+#include "addons_panel.h"
+#include "child_process.h"
 #include "block_actions.h"
 #include "clipboard.h"
 #include "code_blocks.h"
@@ -34,6 +37,9 @@
 #include "theme.h"
 #include "title_bar.h"
 
+#include "chatbot/addon_settings/paths.h"
+#include "chatbot/addon_settings/registry.h"
+#include "chatbot/addon_settings/secrets.h"
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
 #include "chatbot/credentials.h"
@@ -98,6 +104,40 @@ std::optional<std::string> env_non_empty(const char* name) {
 std::string_view process_env(std::string_view name) {
     const char* value = std::getenv(std::string{name}.c_str());
     return value != nullptr ? std::string_view{value} : std::string_view{};
+}
+
+/// El sistema real para F2 → Addons.
+chatbot::cli::AddonsEnvironment addons_environment(chatbot::cli::ServiceWorker::Post post) {
+    namespace settings = chatbot::addon_settings;
+    const auto absolute = [](const char* name) {
+        std::optional<std::string> value = env_value(name);
+        return value.has_value() && value->starts_with('/') ? value : std::nullopt;
+    };
+    chatbot::cli::AddonsEnvironment environment;
+    environment.post = std::move(post);
+    environment.run = [](const std::vector<std::string>& argv,
+                         const chatbot::cli::ProcessOptions& options) {
+        return chatbot::cli::run_process(argv, options);
+    };
+    environment.locate = chatbot::cli::locate_addon;
+    environment.portable = chatbot::process_portable_data_dir().has_value();
+    environment.config_path = chatbot::default_config_path().value_or("");
+    environment.credentials_path = chatbot::default_credentials_path().value_or("");
+    const settings::AddonInfo& telegram = *settings::find_addon("telegram");
+    environment.data_dir = settings::default_addon_data_dir(telegram.name);
+    environment.unit_path = settings::default_unit_path(telegram.unit);
+    environment.uid = chatbot::cli::current_user_id();
+    environment.chatbot_path = chatbot::executable_path().value_or("");
+    environment.xdg_config_home = absolute("XDG_CONFIG_HOME");
+    environment.xdg_data_home = absolute("XDG_DATA_HOME");
+    for (const std::string_view name :
+         {settings::kTokenEnv, settings::kApiKeyEnv, settings::kSearchKeyEnv}) {
+        if (env_non_empty(std::string{name}.c_str()).has_value()) {
+            environment.env_defined.push_back(name);
+        }
+    }
+    environment.home = env_value("HOME").value_or("");
+    return environment;
 }
 
 /// Proveedor de /buscar con la key vigente (CHAT_SEARCH_API_KEY o
@@ -276,11 +316,17 @@ private:
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     // Windows: la consola en UTF-8 mientras corre el programa, y al salir
     // (también por un error) vuelve a la página de códigos que tenía. Se
     // declara primero para que se destruya al último, después de FTXUI.
     const chatbot::ConsoleUtf8Scope console_utf8;
+    // chatbot --help y chatbot <addon> [argumentos] (este se reemplaza por
+    // el addon): antes de tocar la consola, la configuración o la pantalla.
+    if (const std::optional<int> code =
+            chatbot::cli::run_command_line(std::vector<std::string>(argv + 1, argv + argc))) {
+        return *code;
+    }
     // Windows: sin ENABLE_PROCESSED_INPUT, Ctrl+C llega como tecla y sale por
     // screen.Exit() (ver CatchEvent), en lugar de matar el proceso con
     // SIGINT dentro de Loop(). Se construye antes de Loop() y se destruye
@@ -789,6 +835,7 @@ int main() {
         });
 
     settings.set_portable_dir(portable_dir);
+    settings.set_addons_environment(addons_environment(post));
 
     // El foco del lado derecho: la configuración si está abierta; si no, la caja.
     const auto focus_main = [&] {
@@ -852,6 +899,10 @@ int main() {
             focus_main();
             return;
         }
+        if (action.type == Type::Cancelled) {
+            flash = std::string{chatbot::cli::ConversationList::kDeleteCancelled};
+            return;
+        }
         if (action.type == Type::Settings) {
             open_settings({});
             return;
@@ -871,6 +922,7 @@ int main() {
         case Type::None:
         case Type::Close:
         case Type::Settings:
+        case Type::Cancelled:
             break;
         case Type::New:
             new_conversation();
@@ -1302,6 +1354,21 @@ int main() {
         }
         if (event == ftxui::Event::Custom) {
             return false; // Solo pide redibujar.
+        }
+        // Con una pregunta (s/n) abierta, todo evento es de ella (yes_no.h):
+        // ni el ratón, ni F2, ni Ctrl+B/O/N la saltan.
+        if (settings.is_open() && settings.asking()) {
+            (void)settings.component()->OnEvent(event);
+            return true;
+        }
+        if (sidebar_visible && sidebar_panel->Focused() && sidebar.confirmation().has_value()) {
+            if (!event.is_mouse()) {
+                flash.clear();
+                apply_sidebar_action(sidebar.handle(
+                    list_key(event), event.is_character() ? event.character() : std::string{},
+                    sidebar_rows_visible()));
+            }
+            return true;
         }
         if (event.is_mouse()) {
             return handle_mouse(std::move(event));

@@ -196,26 +196,6 @@ std::optional<ChatError> as_status(const Result<std::string>& result) {
 
 } // namespace
 
-bool plausible_token(std::string_view token) {
-    const std::size_t colon = token.find(':');
-    if (colon == 0 || colon == std::string_view::npos || colon > 20) {
-        return false;
-    }
-    for (std::size_t i = 0; i < colon; ++i) {
-        if (token[i] < '0' || token[i] > '9') {
-            return false;
-        }
-    }
-    const std::string_view secret = token.substr(colon + 1);
-    if (secret.size() < 20 || secret.size() > 100) {
-        return false;
-    }
-    return std::all_of(secret.begin(), secret.end(), [](char c) {
-        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-               c == '_' || c == '-';
-    });
-}
-
 BotApi::BotApi(std::string token, TransportFactory transports, std::string base)
     : token_(std::move(token)), transports_(std::move(transports)), base_(std::move(base)) {}
 

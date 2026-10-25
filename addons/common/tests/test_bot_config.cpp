@@ -77,14 +77,14 @@ TEST_CASE("bot config: tiempos y topes fuera de rango", "[bot][config]") {
 
     config.daily_message_limit = 0;
     CHECK(problem(config).find("por día") != std::string::npos);
-    config.daily_message_limit = chatbot::bot::kMaxDailyMessages + 1;
+    config.daily_message_limit = chatbot::addon_settings::kMaxDailyMessages + 1;
     CHECK_FALSE(problem(config).empty());
     config.daily_message_limit = 1;
     CHECK(problem(config).empty());
 
     config.max_concurrent_responses = 0;
     CHECK(problem(config).find("simultáneas") != std::string::npos);
-    config.max_concurrent_responses = chatbot::bot::kMaxConcurrentResponses + 1;
+    config.max_concurrent_responses = chatbot::addon_settings::kMaxConcurrentResponses + 1;
     CHECK_FALSE(problem(config).empty());
 }
 

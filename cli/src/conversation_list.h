@@ -16,8 +16,9 @@ enum class ListKey { Up, Down, PageUp, PageDown, Home, End, Enter, Escape, Delet
 
 /// Lo que la interfaz debe hacer después de una tecla.
 struct ListAction {
-    /// New: conversación nueva; Settings: abrir la configuración (barra lateral).
-    enum class Type { None, Open, Close, Delete, New, Settings };
+    /// New: conversación nueva; Settings: abrir la configuración (barra lateral);
+    /// Cancelled: Esc canceló el borrado (la interfaz dice kDeleteCancelled).
+    enum class Type { None, Open, Close, Delete, New, Settings, Cancelled };
     Type type = Type::None;
     std::string id; ///< Para Open y Delete.
 };
@@ -28,6 +29,7 @@ struct ListAction {
 class ConversationList {
 public:
     static constexpr std::string_view kEmptyMessage = "No hay conversaciones guardadas.";
+    static constexpr std::string_view kDeleteCancelled = "Cancelado: no se borró nada.";
 
     /// Al abrir la lista: elementos (ya ordenados por el almacén) y la
     /// conversación actual, que queda seleccionada si está.

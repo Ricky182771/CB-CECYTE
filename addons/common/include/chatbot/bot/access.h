@@ -32,7 +32,13 @@ public:
     /// Usuarios autorizados con el código (no cuenta los de la lista).
     [[nodiscard]] std::size_t invited_count() const { return invited_.size(); }
 
-    /// Los autorizados con el código, en orden, para guardarlos.
+    /// Reemplaza los autorizados con el código por los guardados (la lista
+    /// del archivo, que otro proceso pudo cambiar).
+    void set_invited(const std::vector<UserId>& invited) {
+        invited_ = {invited.begin(), invited.end()};
+    }
+
+    /// Los autorizados con el código, en orden.
     [[nodiscard]] std::vector<UserId> invited() const {
         return {invited_.begin(), invited_.end()};
     }

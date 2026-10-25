@@ -1,5 +1,5 @@
-#ifndef CHATBOT_BOT_TIME_ZONE_H
-#define CHATBOT_BOT_TIME_ZONE_H
+#ifndef CHATBOT_ADDON_SETTINGS_TIME_ZONE_H
+#define CHATBOT_ADDON_SETTINGS_TIME_ZONE_H
 
 #include "chatbot/result.h"
 
@@ -8,13 +8,13 @@
 #include <string>
 #include <string_view>
 
-namespace chatbot::bot {
+namespace chatbot::addon_settings {
 
 /// La fecha "AAAA-MM-DD" de un instante en alguna zona horaria: con ella
 /// cambia de día el tope diario y se fecha /buscar.
 using DayFunction = std::function<std::string(std::chrono::system_clock::time_point)>;
 
-/// Zona horaria predeterminada de los bots: la de la escuela.
+/// Zona horaria predeterminada de los addons: la de la escuela.
 inline constexpr std::string_view kDefaultTimeZone = "America/Mexico_City";
 /// Su desfase fijo, para las compilaciones sin base de zonas: la Ciudad de
 /// México no tiene horario de verano desde 2022, así que es lo mismo.
@@ -46,6 +46,6 @@ inline constexpr std::string_view kDefaultUtcOffset = "-06:00";
 /// hilos.
 [[nodiscard]] Result<DayFunction> day_in_zone(std::string_view name);
 
-} // namespace chatbot::bot
+} // namespace chatbot::addon_settings
 
-#endif // CHATBOT_BOT_TIME_ZONE_H
+#endif // CHATBOT_ADDON_SETTINGS_TIME_ZONE_H

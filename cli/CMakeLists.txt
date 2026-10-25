@@ -31,18 +31,21 @@ FetchContent_Declare(
         -P "${PROJECT_SOURCE_DIR}/cmake/apply_patch.cmake")
 FetchContent_MakeAvailable(ftxui)
 
-# Lógica de la conversación y del hilo de trabajo: solo depende del núcleo
-# y de chatbot::markdown,
-# sin FTXUI, para poder probarla sin terminal.
+# Lógica de la conversación y del hilo de trabajo: solo depende del núcleo,
+# de chatbot::markdown y, de addons/, solo de chatbot::addon_settings (las
+# reglas de la configuración de los addons); sin FTXUI, para poder probarla
+# sin terminal.
 find_package(Threads REQUIRED)
-# Portapapeles: el lanzador de programas (posix_spawnp) solo en POSIX; la API
-# de Win32 solo en Windows.
+# Portapapeles y programas externos: el lanzador (posix_spawnp) solo en
+# POSIX; la API de Win32 solo en Windows.
 if(WIN32)
-    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_windows.cpp)
+    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_windows.cpp src/child_process_windows.cpp)
 else()
-    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_posix.cpp)
+    set(CHATBOT_CLIPBOARD_SOURCE src/clipboard_posix.cpp src/child_process_posix.cpp)
 endif()
 add_library(chatbot_cli_lib STATIC
+    src/addon_form.cpp
+    src/addon_launcher.cpp
     src/block_actions.cpp
     src/clipboard.cpp
     ${CHATBOT_CLIPBOARD_SOURCE}
@@ -64,13 +67,14 @@ add_library(chatbot_cli_lib STATIC
     src/providers.cpp
     src/request_runner.cpp
     src/search_settings.cpp
+    src/service_control.cpp
     src/sidebar.cpp
     src/terminal_reply.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 find_package(nlohmann_json 3.9 REQUIRED)
 target_link_libraries(chatbot_cli_lib
-    PUBLIC chatbot::core chatbot::markdown Threads::Threads
+    PUBLIC chatbot::core chatbot::markdown chatbot::addon_settings Threads::Threads
     PRIVATE nlohmann_json::nlohmann_json)
 chatbot_set_warnings(chatbot_cli_lib)
 # Windows: portapapeles y ventana de solo mensajes (user32). Biblioteca del
@@ -98,7 +102,7 @@ target_link_libraries(chatbot_cli_ui PUBLIC chatbot_cli_lib ftxui::dom ftxui::sc
 chatbot_set_warnings(chatbot_cli_ui)
 
 # Ejecutable de la interfaz: el único que usa ftxui::component.
-add_executable(chatbot src/main.cpp src/settings_screen.cpp src/text_area.cpp)
+add_executable(chatbot src/main.cpp src/addons_panel.cpp src/settings_screen.cpp src/text_area.cpp)
 target_link_libraries(chatbot PRIVATE chatbot_cli_lib chatbot_cli_ui ftxui::component)
 chatbot_set_warnings(chatbot)
 chatbot_windows_manifest(chatbot)

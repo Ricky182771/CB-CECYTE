@@ -2,6 +2,7 @@
 
 #include "input_style.h"
 #include "list_style.h"
+#include "yes_no.h"
 
 #include "chatbot/error.h"
 #include "chatbot/markdown/markdown.h"
@@ -87,9 +88,12 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
     : loader_(loader), palette_(palette), on_save_(std::move(on_save)),
       on_save_appearance_(std::move(on_save_appearance)),
       on_save_system_prompt_(std::move(on_save_system_prompt)),
-      on_save_search_key_(std::move(on_save_search_key)), on_close_(std::move(on_close)) {
+      on_save_search_key_(std::move(on_save_search_key)), on_close_(std::move(on_close)),
+      addons_(
+          palette, [this](std::string notice) { status_ = std::move(notice); },
+          [this] { save(); }) {
     category_names_ = {"Proveedor", "Colores y Accesibilidad", "Instrucciones del sistema",
-                       "Búsqueda web"};
+                       "Búsqueda web", "Addons"};
     for (const Theme& theme : themes()) {
         theme_names_.emplace_back(theme.name);
     }
@@ -104,6 +108,11 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
     categories.entries = &category_names_;
     categories.selected = &category_;
     categories.entries_option.transform = row_transform(palette_, false);
+    categories.on_change = [this] {
+        if (category_ == kAddons) {
+            addons_.show(); // El estado, la primera vez que se ve.
+        }
+    };
     categories_ = ftxui::Menu(categories);
 
     ftxui::RadioboxOption theme_list;
@@ -241,8 +250,9 @@ SettingsScreen::SettingsScreen(ModelsLoader& loader, const Palette& palette, OnS
         ftxui::Maybe(search_key_input_, [this] { return !search_.key_locked(); }),
     });
     const ftxui::Component form = ftxui::Container::Vertical({
-        ftxui::Container::Tab({provider_form, appearance_form, prompt_form, search_form},
-                              &category_),
+        ftxui::Container::Tab(
+            {provider_form, appearance_form, prompt_form, search_form, addons_.component()},
+            &category_),
         ftxui::Container::Horizontal({save_button_, cancel_button_}),
     });
     root_ = ftxui::CatchEvent(
@@ -282,6 +292,7 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
     prompt_input_->set_text(std::move(system_prompt), 0);
     search_ = std::move(search);
     search_key_text_.clear();
+    addons_.open(base_.model);
     provider_selected_ = static_cast<int>(settings_->provider());
     dropdown_open_ = false;
     confirm_discard_ = false;
@@ -296,8 +307,11 @@ void SettingsScreen::open(ProviderSettings settings, Config base, Appearance app
 void SettingsScreen::focus() { categories_->TakeFocus(); }
 
 PasteTarget SettingsScreen::paste_target() const {
-    if (!settings_ || confirm_discard_ || dropdown_open_) {
+    if (!settings_ || confirm_discard_ || dropdown_open_ || addons_.question()) {
         return PasteTarget::None;
+    }
+    if (addons_.text_field_focused()) {
+        return PasteTarget::SingleLine;
     }
     if (prompt_input_->Focused()) {
         return PasteTarget::MultiLine;
@@ -350,7 +364,8 @@ bool SettingsScreen::background_enabled() const {
 
 bool SettingsScreen::request_close() {
     if (settings_ &&
-        (settings_->dirty() || appearance_dirty() || system_prompt_dirty() || search_.dirty())) {
+        (settings_->dirty() || appearance_dirty() || system_prompt_dirty() || search_.dirty() ||
+         addons_.dirty())) {
         confirm_discard_ = true;
         return false;
     }
@@ -367,6 +382,7 @@ void SettingsScreen::close() {
     confirm_discard_ = false;
     dropdown_open_ = false;
     status_.clear();
+    addons_.close();
     on_close_();
 }
 
@@ -409,8 +425,9 @@ void SettingsScreen::save() {
     const bool appearance_changed = appearance_dirty();
     const bool prompt_changed = system_prompt_dirty();
     const bool search_changed = search_.dirty();
-    // Las instrucciones y la key de búsqueda se revisan antes de guardar
-    // nada: un error no deja guardada solo una parte.
+    const bool addons_changed = addons_.pending();
+    // Las instrucciones, la key de búsqueda y los addons se revisan antes de
+    // guardar nada: un error no deja guardada solo una parte.
     if (prompt_changed) {
         if (const std::optional<std::string> error =
                 validate_system_prompt(prompt_input_->text())) {
@@ -422,10 +439,18 @@ void SettingsScreen::save() {
         status_ = *error;
         return;
     }
+    if (const std::optional<std::string> error = addons_.check()) {
+        status_ = *error;
+        return;
+    }
+    if (addons_.ask_before_saving()) {
+        return; // "Se descartarán: …": al contestar que sí, se vuelve a guardar.
+    }
     // Si solo cambió la apariencia, las instrucciones o la key de búsqueda,
     // el proveedor no se guarda (ni se reconstruye el cliente); si no cambió
     // nada, se guarda como siempre.
-    if (settings_->dirty() || (!appearance_changed && !prompt_changed && !search_changed)) {
+    if (settings_->dirty() ||
+        (!appearance_changed && !prompt_changed && !search_changed && !addons_changed)) {
         if (const std::optional<std::string> error = settings_->validate()) {
             status_ = *error;
             return;
@@ -460,6 +485,15 @@ void SettingsScreen::save() {
         search_.mark_saved();
         search_key_text_.clear();
     }
+    if (addons_changed) {
+        if (const std::optional<std::string> error = addons_.commit()) {
+            status_ = *error;
+            return;
+        }
+        // Se queda abierta: las preguntas y el resultado del servicio salen
+        // en la línea de estado.
+        return;
+    }
     close();
 }
 
@@ -480,6 +514,10 @@ void SettingsScreen::move_focus(int step) {
     } else if (category_ == kSearch) {
         if (!search_.key_locked()) {
             order.push_back(search_key_input_);
+        }
+    } else if (category_ == kAddons) {
+        for (const ftxui::Component& component : addons_.focus_order()) {
+            order.push_back(component);
         }
     } else {
         order.push_back(dropdown_);
@@ -513,14 +551,28 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
     if (!settings_) {
         return false;
     }
-    if (confirm_discard_) {
-        if (event.is_mouse()) {
-            return true; // Primero se contesta la pregunta.
+    if (asking()) {
+        // La regla de yes_no.h: también la del Event::Custom que llega tras
+        // cada post (el mismo que trae la pregunta del servicio o la lista
+        // de modelos).
+        const YesNo reply = yes_no_answer(event == ftxui::Event::Escape,
+                                          event.is_character() ? event.character() : std::string{});
+        if (reply == YesNo::Ignore) {
+            return true;
         }
-        if (event.is_character() && (event.character() == "s" || event.character() == "S")) {
+        if (addons_.question()) {
+            if (reply == YesNo::Cancel) {
+                addons_.cancel_question();
+            } else {
+                addons_.answer(reply == YesNo::Yes);
+            }
+        } else if (reply == YesNo::Yes) {
             close();
         } else {
             confirm_discard_ = false;
+            if (reply == YesNo::Cancel) {
+                status_ = std::string{kDiscardCancelled};
+            }
         }
         return true;
     }
@@ -536,6 +588,9 @@ bool SettingsScreen::handle_event(const ftxui::Event& event) {
     }
     if (event == ftxui::Event::Tab || event == ftxui::Event::TabReverse) {
         move_focus(event == ftxui::Event::Tab ? 1 : -1);
+        return true;
+    }
+    if (category_ == kAddons && addons_.handle_event(event)) {
         return true;
     }
     if (category_ == kProvider && event.is_mouse() &&
@@ -817,7 +872,9 @@ ftxui::Element SettingsScreen::render() const {
         return ftxui::emptyElement();
     }
     ftxui::Element status;
-    if (confirm_discard_) {
+    if (addons_.question()) {
+        status = ftxui::paragraph(addons_.question()->text) | ftxui::bold;
+    } else if (confirm_discard_) {
         status = ftxui::text("¿Descartar los cambios? (s/n)") | ftxui::bold;
     } else if (!status_.empty()) {
         status = ftxui::paragraph(clean(status_)) | ftxui::bold;
@@ -827,7 +884,7 @@ ftxui::Element SettingsScreen::render() const {
     } else if (category_ == kSystemPrompt) {
         status = ftxui::text("Tab: campo · Enter: nueva línea · Esc: cerrar") |
                  palette_.ink(&Theme::notice);
-    } else if (category_ == kSearch) {
+    } else if (category_ == kSearch || category_ == kAddons) {
         status = ftxui::text("Tab: campo · Esc: cerrar") | palette_.ink(&Theme::notice);
     } else {
         status = ftxui::text("Tab: campo · ↑/↓ y Enter: modelo · Esc: cerrar") |
@@ -844,6 +901,9 @@ ftxui::Element SettingsScreen::render() const {
         break;
     case kSearch:
         page = render_search();
+        break;
+    case kAddons:
+        page = addons_.render();
         break;
     default:
         page = render_provider();

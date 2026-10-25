@@ -186,9 +186,12 @@ std::optional<std::uint32_t> windows_build() {
     return static_cast<std::uint32_t>(info.dwBuildNumber);
 }
 
-std::optional<std::string> executable_dir() {
-    // GetModuleFileNameW trunca sin error si no cabe (devuelve el tamaño del
-    // búfer): se repite con uno más grande, hasta el máximo de una ruta larga.
+namespace {
+
+/// La ruta del ejecutable en UTF-16. GetModuleFileNameW trunca sin error si
+/// no cabe (devuelve el tamaño del búfer): se repite con uno más grande,
+/// hasta el máximo de una ruta larga.
+std::optional<std::wstring> module_file_name() {
     std::wstring path(MAX_PATH, L'\0');
     while (path.size() <= 32768) {
         const DWORD length =
@@ -198,16 +201,34 @@ std::optional<std::string> executable_dir() {
         }
         if (length < path.size()) {
             path.resize(length);
-            const std::size_t slash = path.find_last_of(L"\\/");
-            if (slash == std::wstring::npos || slash == 0) {
-                return std::nullopt;
-            }
-            path.resize(slash);
-            return utf16_to_utf8(path);
+            return path;
         }
         path.resize(path.size() * 2);
     }
     return std::nullopt;
+}
+
+} // namespace
+
+std::optional<std::string> executable_path() {
+    const std::optional<std::wstring> path = module_file_name();
+    if (!path.has_value()) {
+        return std::nullopt;
+    }
+    return utf16_to_utf8(*path);
+}
+
+std::optional<std::string> executable_dir() {
+    std::optional<std::wstring> path = module_file_name();
+    if (!path.has_value()) {
+        return std::nullopt;
+    }
+    const std::size_t slash = path->find_last_of(L"\\/");
+    if (slash == std::wstring::npos || slash == 0) {
+        return std::nullopt;
+    }
+    path->resize(slash);
+    return utf16_to_utf8(*path);
 }
 
 bool console_closes_on_exit() {

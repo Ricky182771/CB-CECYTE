@@ -85,7 +85,7 @@ bool stdio_is_terminal() {
 
 bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
-std::optional<std::string> executable_dir() {
+std::optional<std::string> executable_path() {
     // readlink no termina la cadena y trunca sin avisar: se repite con un
     // búfer más grande mientras lo llene completo.
     std::string target(256, '\0');
@@ -96,15 +96,23 @@ std::optional<std::string> executable_dir() {
         }
         if (static_cast<std::size_t>(length) < target.size()) {
             target.resize(static_cast<std::size_t>(length));
-            const std::size_t slash = target.rfind('/');
-            if (slash == std::string::npos) {
-                return std::nullopt;
-            }
-            return slash == 0 ? std::string{"/"} : target.substr(0, slash);
+            return target;
         }
         target.resize(target.size() * 2);
     }
     return std::nullopt;
+}
+
+std::optional<std::string> executable_dir() {
+    const std::optional<std::string> path = executable_path();
+    if (!path.has_value()) {
+        return std::nullopt;
+    }
+    const std::size_t slash = path->rfind('/');
+    if (slash == std::string::npos) {
+        return std::nullopt;
+    }
+    return slash == 0 ? std::string{"/"} : path->substr(0, slash);
 }
 
 // La terminal de POSIX no se cierra al terminar el proceso.

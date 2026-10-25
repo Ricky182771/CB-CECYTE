@@ -26,7 +26,11 @@ add_executable(chatbot_tests
     test_models_loader.cpp
     test_paste.cpp
     test_provider_settings.cpp
+    test_addon_launcher.cpp
     test_platform.cpp
+    test_addon_form.cpp
+    test_child_process.cpp
+    test_service_control.cpp
     test_published_date.cpp
     test_redirect.cpp
     test_response.cpp
@@ -78,9 +82,11 @@ add_test(NAME chatbot_markdown_tests COMMAND chatbot_markdown_tests)
 # Pruebas de la vista de markdown: dibujan con ftxui::Screen (sin terminal).
 # Van aparte para que chatbot_tests no enlace FTXUI.
 add_executable(chatbot_ui_tests
+    ${PROJECT_SOURCE_DIR}/cli/src/addons_panel.cpp
     ${PROJECT_SOURCE_DIR}/cli/src/settings_screen.cpp
     ${PROJECT_SOURCE_DIR}/cli/src/text_area.cpp
     test_settings_screen.cpp
+    test_addons_panel.cpp
     test_command_menu_view.cpp
     test_history_view.cpp
     test_input_box.cpp
@@ -94,7 +100,8 @@ add_executable(chatbot_ui_tests
     test_theme.cpp
     test_title_bar.cpp)
 target_compile_features(chatbot_ui_tests PRIVATE cxx_std_20)
-target_link_libraries(chatbot_ui_tests PRIVATE chatbot_cli_ui ftxui::component Catch2::Catch2WithMain)
+target_link_libraries(chatbot_ui_tests PRIVATE
+    chatbot_cli_ui ftxui::component Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 # Archivos de tests/data (solo lectura).
 target_compile_definitions(chatbot_ui_tests PRIVATE
     CHATBOT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
@@ -132,9 +139,22 @@ if(NOT WIN32)
     set_tests_properties(chatbot_portable_readonly PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
 endif()
 
-# Dirección de las dependencias en los #include: nada fuera de addons/ los
-# incluye, y markdown/ y addons/ no incluyen cli/ ni FTXUI. Corre siempre,
-# también con los addons apagados (include_rules.cmake).
+# chatbot <addon> con el ejecutable real y un addon falso junto a él, en el
+# PATH y en modo portable (addon_launcher.cmake).
+add_test(NAME chatbot_addon_launcher
+    COMMAND ${CMAKE_COMMAND} -DCHATBOT=$<TARGET_FILE:chatbot>
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/addon_launcher
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/addon_launcher.cmake)
+
+# Dirección de las dependencias en los #include: nada fuera de addons/
+# incluye chatbot/bot/ ni chatbot/telegram/ (cli/ solo chatbot/addon_settings/),
+# y markdown/ y addons/ no incluyen cli/ ni FTXUI. Corre siempre, también con
+# los addons apagados (include_rules.cmake). La segunda revisa que la regla
+# falle de verdad con un árbol de mentira (include_rules_check.cmake).
 add_test(NAME chatbot_include_rules
     COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/include_rules.cmake)
+add_test(NAME chatbot_include_rules_check
+    COMMAND ${CMAKE_COMMAND} -DRULES=${CMAKE_CURRENT_SOURCE_DIR}/include_rules.cmake
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/include_rules_check
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/include_rules_check.cmake)

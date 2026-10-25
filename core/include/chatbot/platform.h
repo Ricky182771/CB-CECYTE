@@ -118,6 +118,13 @@ private:
 /// de /proc/self/exe (Linux y Termux). Nullopt si no se puede saber.
 [[nodiscard]] std::optional<std::string> executable_dir();
 
+/// Ruta completa del ejecutable de este proceso en UTF-8 (para ExecStart
+/// del servicio de systemd). POSIX: el destino de /proc/self/exe, que es la
+/// ruta real del archivo: si se abrió desde un enlace simbólico, da el
+/// archivo al que apunta, no el enlace. Windows: GetModuleFileNameW.
+/// Nullopt si no se puede saber.
+[[nodiscard]] std::optional<std::string> executable_path();
+
 /// true si este proceso es el único en su consola y stdin es esa consola:
 /// en Windows, la ventana de conhost que abrió el doble clic y que se cierra
 /// en cuanto el proceso termina (GetConsoleProcessList da 1). Desde CMD,

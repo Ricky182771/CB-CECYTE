@@ -7,9 +7,11 @@
 
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace chatbot::bot {
@@ -36,6 +38,11 @@ public:
     /// (o el error): mientras, los mensajes del chat reciben un aviso.
     bool busy = false;
     TimePoint last_activity;
+    /// Quien escribe en el chat (en un chat privado, siempre el mismo).
+    UserId user = 0;
+    /// Perdió el acceso con la respuesta en curso: Bot borra la sesión al
+    /// liberarla, sin guardar ese par.
+    bool revoked = false;
 
 private:
     std::vector<Message> history_;
@@ -59,11 +66,24 @@ public:
     /// false.
     bool reset(ChatId chat);
 
+    /// Borra la sesión del chat aunque esté ocupada.
+    void erase(ChatId chat) { sessions_.erase(chat); }
+
     /// Borra las sesiones que expiraron y no están ocupadas. Devuelve
     /// cuántas borró.
     std::size_t expire(TimePoint now);
 
     [[nodiscard]] std::size_t size() const { return sessions_.size(); }
+
+    /// Para las sesiones nuevas; las que ya existen se quedan con las suyas.
+    void set_system_prompt(std::string system_prompt) { system_prompt_ = std::move(system_prompt); }
+    /// También para las que ya existen.
+    void set_idle_timeout(std::chrono::minutes idle_timeout) { idle_timeout_ = idle_timeout; }
+
+    /// Quien ya no tiene acceso (allowed(user) da false): borra sus sesiones
+    /// libres y marca las ocupadas (revoked). Quita la marca a quien lo
+    /// recuperó. Devuelve cuántas borró.
+    std::size_t revoke(const std::function<bool(UserId)>& allowed);
 
 private:
     [[nodiscard]] bool expired(const Session& session, TimePoint now) const;
@@ -89,6 +109,8 @@ public:
     void refund(UserId user, std::string_view day);
 
     [[nodiscard]] std::size_t limit() const { return limit_; }
+    /// Nuevo tope; los conteos del día se conservan.
+    void set_limit(std::size_t limit) { limit_ = limit; }
 
 private:
     std::size_t limit_;
