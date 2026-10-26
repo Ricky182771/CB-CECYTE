@@ -34,5 +34,8 @@ check(cli_telegram cli/src/a.cpp chatbot/telegram/api.h 1)
 check(core_settings core/src/a.cpp chatbot/addon_settings/registry.h 1)
 check(settings_bot addons/settings/src/a.cpp chatbot/bot/types.h 1)
 check(cli_settings cli/src/a.cpp chatbot/addon_settings/registry.h 0)
+check(rpc_ftxui rpc/src/a.cpp ftxui/dom/elements.hpp 1)
+check(rpc_bot rpc/src/a.cpp chatbot/bot/bot.h 1)
+check(rpc_cli rpc/src/a.cpp session.h 0)
 
 message(STATUS "include_rules.cmake detecta los #include prohibidos")

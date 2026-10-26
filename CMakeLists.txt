@@ -103,6 +103,9 @@ add_subdirectory(tools)
 if(CHATBOT_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
+# chatbot-rpc (rpc/PROTOCOL.md): siempre, también en Windows y sin addons.
+# Después de tests/: sus pruebas usan los helpers de tests/.
+add_subdirectory(rpc)
 
 # Después de cli/: la revisión de dependencias de los addons necesita que
 # existan los targets de cli/ y de FTXUI para reconocerlos.
@@ -115,9 +118,13 @@ endif()
 chatbot_forbid_ui_dependencies(chatbot_core)
 chatbot_forbid_ui_dependencies(chatbot_markdown)
 chatbot_forbid_ui_dependencies(chatbot_addon_settings)
+# chatbot-rpc usa la lógica de la TUI (chatbot_cli_lib), pero nunca FTXUI ni
+# el dibujo (chatbot_cli_ui).
+chatbot_forbid_ui_dependencies(chatbot_rpc_lib chatbot_cli_lib)
+chatbot_forbid_ui_dependencies(chatbot-rpc chatbot_cli_lib)
 # Y al revés: de addons/, cli/ (y core y chatbot::markdown, nada) solo usa
 # chatbot::addon_settings, nunca chatbot::bot ni un addon.
 foreach(app_target chatbot_core chatbot_markdown chatbot_addon_settings chatbot_cli_lib
-                   chatbot_cli_ui chatbot)
+                   chatbot_cli_ui chatbot chatbot_rpc_lib chatbot-rpc)
     chatbot_forbid_addon_dependencies(${app_target})
 endforeach()
