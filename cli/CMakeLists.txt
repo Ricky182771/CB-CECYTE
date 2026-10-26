@@ -46,6 +46,7 @@ endif()
 add_library(chatbot_cli_lib STATIC
     src/addon_form.cpp
     src/addon_launcher.cpp
+    src/app_startup.cpp
     src/block_actions.cpp
     src/clipboard.cpp
     ${CHATBOT_CLIPBOARD_SOURCE}

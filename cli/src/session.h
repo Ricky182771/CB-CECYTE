@@ -12,6 +12,7 @@
 
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
+#include "chatbot/error.h"
 #include "chatbot/result.h"
 #include "chatbot/web_search.h"
 
@@ -22,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace chatbot::cli {
 
@@ -62,6 +64,15 @@ struct SubmitOutcome {
     CodeBlock block;    ///< Copy: el bloque elegido.
 };
 
+/// Lo que pasó con Session::send.
+enum class SendResult {
+    Sent,             ///< Se envió al modelo; al terminar llega OnFinished.
+    NotConfigured,    ///< Falta la key o el modelo (kSetupNotice).
+    Busy,             ///< Hay una respuesta en curso.
+    Empty,            ///< El texto (o la consulta de búsqueda) está vacío.
+    MissingSearchKey, ///< Búsqueda sin key (kMissingSearchKey).
+};
+
 /// La lógica de la app sin FTXUI: configuración vigente, cliente y runner,
 /// búsqueda web, la conversación abierta (una sola) y su almacén, los
 /// comandos de la caja y los guardados de la configuración. La interfaz solo
@@ -75,10 +86,20 @@ struct SubmitOutcome {
 class Session {
 public:
     using Post = RequestRunner::Post;
-    /// Terminó una respuesta (vía post). restored: el texto para regresar a
-    /// la caja (error, cancelación, sin resultados), o nullopt si el par se
-    /// guardó (la lista de conversaciones cambió).
-    using OnFinished = std::function<void(std::optional<std::string> restored)>;
+    /// Cómo terminó una respuesta.
+    struct Finished {
+        /// El texto para regresar a la caja (error, cancelación, sin
+        /// resultados, respuesta sin texto), o nullopt si el par terminó bien.
+        std::optional<std::string> restored;
+        /// nullopt si terminó bien; una respuesta sin texto es BadResponse
+        /// con kEmptyAnswer, como la entrada de error.
+        std::optional<ChatError> error;
+        std::string finish_reason; ///< Solo si terminó bien ("" si no llegó).
+        std::size_t dropped = 0;   ///< Mensajes omitidos por el recorte.
+        bool saved = false;        ///< El par se guardó (la lista cambió).
+    };
+    /// Terminó una respuesta (vía post), ya con el par guardado si salió bien.
+    using OnFinished = std::function<void(Finished finished)>;
 
     /// Carga las instrucciones del sistema y la key de búsqueda y abre el
     /// almacén. initial: la de load_config con allow_missing_key_and_model;
@@ -107,6 +128,12 @@ public:
     /// Avisos de arranque (instrucciones del sistema y búsqueda), separados
     /// por un espacio; vacío si no hay.
     [[nodiscard]] const std::string& startup_warning() const { return startup_warning_; }
+    /// Los mismos avisos, uno por elemento.
+    [[nodiscard]] const std::vector<std::string>& startup_warnings() const {
+        return startup_warnings_;
+    }
+    /// Hay key de búsqueda (CHAT_SEARCH_API_KEY o credentials.json).
+    [[nodiscard]] bool has_search_key() const { return search_provider_ != nullptr; }
     /// Para el menú de comandos.
     [[nodiscard]] CommandContext command_context();
     /// Los bloques de código de la conversación, actualizados.
@@ -115,6 +142,9 @@ public:
     // --- Caja de entrada ---
     /// Lo que hace Enter con este texto (comandos incluidos).
     [[nodiscard]] SubmitOutcome submit(std::string_view text);
+    /// Envía text al modelo sin interpretar comandos. Con search, hace lo de
+    /// /buscar con esa consulta y text es lo que se muestra y se guarda.
+    [[nodiscard]] SendResult send(std::string_view text, std::optional<std::string> search = {});
     /// Cancela la petición en curso, si la hay.
     void cancel();
     /// Resultado de copiar (SubmitOutcome::Copy) al historial: aviso o error.
@@ -154,6 +184,7 @@ private:
     OnFinished on_finished_;
     std::string system_prompt_;
     std::string startup_warning_;
+    std::vector<std::string> startup_warnings_;
     /// Se comparte con el hilo de trabajo: se puede reemplazar al guardar la
     /// key aunque haya un hilo terminado sin unir.
     std::shared_ptr<SearchProvider> search_provider_;

@@ -7,6 +7,7 @@
 
 #include "addon_launcher.h"
 #include "addons_panel.h"
+#include "app_startup.h"
 #include "child_process.h"
 #include "block_actions.h"
 #include "clipboard.h"
@@ -37,16 +38,13 @@
 #include "chatbot/addon_settings/paths.h"
 #include "chatbot/addon_settings/registry.h"
 #include "chatbot/addon_settings/secrets.h"
-#include "chatbot/chat_client.h"
 #include "chatbot/config.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
 #include "chatbot/markdown/markdown.h"
 #include "chatbot/platform.h"
 #include "chatbot/result.h"
-#include "chatbot/tavily_search.h"
 #include "chatbot/types.h"
-#include "chatbot/web_search.h"
 
 #include <ftxui/component/app.hpp>
 #include <ftxui/component/component.hpp>
@@ -89,12 +87,6 @@ std::optional<std::string> env_value(const char* name) {
 std::optional<std::string> env_non_empty(const char* name) {
     std::optional<std::string> value = env_value(name);
     return value.has_value() && !value->empty() ? value : std::nullopt;
-}
-
-/// El entorno real del proceso, para la sesión.
-std::string_view process_env(std::string_view name) {
-    const char* value = std::getenv(std::string{name}.c_str());
-    return value != nullptr ? std::string_view{value} : std::string_view{};
 }
 
 /// El sistema real para F2 → Addons.
@@ -321,25 +313,14 @@ int main(int argc, char** argv) {
         return 1;
     };
 
-    // Modo portable (chatbot.portable junto al ejecutable): la configuración,
-    // la key y las conversaciones van a datos/. Si no se puede escribir ahí,
-    // se sale con el error; nunca se usa en silencio la carpeta del usuario.
-    const std::optional<std::string>& portable_dir = chatbot::process_portable_data_dir();
-    if (portable_dir.has_value()) {
-        if (const std::optional<chatbot::ChatError> error =
-                chatbot::prepare_portable_data_dir(*portable_dir)) {
-            return fail(*error);
-        }
-    }
-
-    // La configuración se carga antes de tocar la terminal: si falla, el
-    // error sale por stderr sin abrir la pantalla completa. Si lo único que
-    // falta es la key o el modelo, la app arranca con la pantalla de
-    // configuración abierta; sin terminal (stdin o stdout redirigidos) no
-    // hay pantalla que abrir y también sale con el error.
-    chatbot::ConfigOptions load_options;
-    load_options.allow_missing_key_and_model = true;
-    const chatbot::Result<chatbot::Config> initial = chatbot::load_config(load_options);
+    // Modo portable y configuración (app_startup.h), antes de tocar la
+    // terminal: si fallan, el error sale por stderr sin abrir la pantalla
+    // completa (si no se puede escribir en datos/, nunca se usa en silencio
+    // la carpeta del usuario). Si lo único que falta es la key o el modelo,
+    // la app arranca con la pantalla de configuración abierta; sin terminal
+    // (stdin o stdout redirigidos) no hay pantalla que abrir y también sale
+    // con el error.
+    const chatbot::Result<chatbot::Config> initial = chatbot::cli::load_startup_config();
     const std::optional<chatbot::ChatError> incomplete =
         initial.is_ok() ? chatbot::validate_config(initial.value()) : std::nullopt;
     const bool has_terminal = chatbot::stdio_is_terminal();
@@ -407,44 +388,25 @@ int main(int argc, char** argv) {
         screen.PostEvent(ftxui::Event::Custom);
     };
 
-    /// Abrevia rutas con "~" (en Windows, vacía: las rutas van completas).
-    const std::string home =
-        chatbot::cli::display_home(chatbot::cli::environment_value, chatbot::current_os());
-
     // La caja de entrada; se crea después de la sesión, que su placeholder consulta.
     std::shared_ptr<chatbot::cli::TextArea> input_area;
 
-    // La lógica sin FTXUI (session.h): configuración vigente, cliente y
-    // runner, búsqueda, la conversación abierta y su almacén. Sin
-    // configuración completa no hay cliente ni runner (la caja no envía).
-    chatbot::cli::SessionEnvironment session_environment;
-    session_environment.config_path = chatbot::default_config_path();
-    session_environment.credentials_path = chatbot::default_credentials_path();
-    session_environment.data_dir = chatbot::cli::default_data_dir().value_or("");
-    session_environment.env = process_env;
-    session_environment.make_client = [](const chatbot::Config& complete) {
-        return std::make_unique<chatbot::ChatClient>(complete,
-                                                     std::make_unique<chatbot::CurlTransport>());
-    };
-    session_environment.make_search =
-        [](const std::string& key) -> std::shared_ptr<chatbot::SearchProvider> {
-        return std::make_shared<chatbot::TavilySearch>(key,
-                                                       std::make_unique<chatbot::CurlTransport>());
-    };
-    session_environment.now = [] { return std::time(nullptr); };
-    session_environment.download_base = [] {
-        return chatbot::cli::default_download_dir(chatbot::cli::environment_value);
-    };
-    session_environment.home = home;
+    // La lógica sin FTXUI (session.h), con el sistema real (app_startup.h):
+    // configuración vigente, cliente y runner, búsqueda, la conversación
+    // abierta y su almacén. Sin configuración completa no hay cliente ni
+    // runner (la caja no envía).
+    chatbot::cli::SessionEnvironment session_environment = chatbot::cli::app_session_environment();
+    /// Abrevia rutas con "~" (en Windows, vacía: las rutas van completas).
+    const std::string home = session_environment.home;
     chatbot::cli::Session session(
         std::move(session_environment), initial.value(), post,
-        [&](std::optional<std::string> restored) {
-            if (!restored.has_value()) {
+        [&](chatbot::cli::Session::Finished finished) {
+            if (finished.saved) {
                 // Se guardó el par: la conversación sube a "Hoy" en la barra.
                 sidebar.refresh(session.store().list(), session.conversation().id());
-            } else if (input_area->text().empty()) {
+            } else if (finished.restored.has_value() && input_area->text().empty()) {
                 // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
-                input_area->set_text(*restored);
+                input_area->set_text(*finished.restored);
             }
         });
     chatbot::cli::ModelsLoader models_loader(
@@ -585,7 +547,7 @@ int main(int argc, char** argv) {
             input->TakeFocus();
         });
 
-    settings.set_portable_dir(portable_dir);
+    settings.set_portable_dir(chatbot::process_portable_data_dir());
     settings.set_addons_environment(addons_environment(post));
 
     // El foco del lado derecho: la configuración si está abierta; si no, la caja.

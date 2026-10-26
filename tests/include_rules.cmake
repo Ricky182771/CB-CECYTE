@@ -2,12 +2,13 @@
 # "Addons"). La revisión del enlace la hace cmake/dependency_rules.cmake al
 # configurar; esta revisa el código fuente, también con los addons apagados:
 #   cmake -DSOURCE_DIR=<raíz del proyecto> -P include_rules.cmake
-# - core/, markdown/, cli/, tools/ y tests/ nunca incluyen nada de addons/
-#   (chatbot/bot/..., chatbot/telegram/... ni rutas con addons/), salvo
-#   chatbot/addon_settings/... en cli/, tools/ y tests/.
+# - core/, markdown/, cli/, rpc/, tools/ y tests/ nunca incluyen nada de
+#   addons/ (chatbot/bot/..., chatbot/telegram/... ni rutas con addons/),
+#   salvo chatbot/addon_settings/... en cli/, rpc/, tools/ y tests/.
 # - core/ y markdown/ tampoco incluyen chatbot/addon_settings/ (está encima).
 # - addons/settings/ no incluye chatbot/bot/ ni chatbot/telegram/ (está debajo).
 # - markdown/ y addons/ nunca incluyen FTXUI ni headers de cli/src.
+# - rpc/ nunca incluye FTXUI (sí los headers de chatbot_cli_lib).
 # Imprime cada violación con archivo y línea, y falla si hay alguna.
 
 if(NOT DEFINED SOURCE_DIR)
@@ -53,7 +54,7 @@ macro(add_violation file number text)
 endmacro()
 
 # 1. Nada fuera de addons/ incluye algo de addons/.
-foreach(directory core markdown cli tools tests)
+foreach(directory core markdown cli rpc tools tests)
     sources_under(${directory} files)
     foreach(file IN LISTS files)
         read_includes("${file}" includes)
@@ -106,6 +107,20 @@ foreach(directory markdown addons)
                 add_violation("${file}" ${number} "incluye ${path}, un header de cli/src")
             endif()
         endforeach()
+    endforeach()
+endforeach()
+
+# 4. rpc/ no incluye FTXUI.
+sources_under(rpc files)
+foreach(file IN LISTS files)
+    read_includes("${file}" includes)
+    foreach(include IN LISTS includes)
+        string(REPLACE "|" ";" parts "${include}")
+        list(GET parts 0 number)
+        list(GET parts 1 path)
+        if(path MATCHES "^ftxui/")
+            add_violation("${file}" ${number} "incluye ${path} (FTXUI)")
+        endif()
     endforeach()
 endforeach()
 

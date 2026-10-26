@@ -429,6 +429,23 @@ Para cambiarla, define la variable antes de abrir el chatbot:
 CHAT_DOWNLOAD_DIR=~/proyectos/escuela ./build/release/cli/chatbot
 ```
 
+## Otras interfaces: `chatbot-rpc`
+
+`chatbot-rpc` es el chatbot sin pantalla: habla [JSON-RPC 2.0](https://www.jsonrpc.org/specification) por stdin/stdout, un mensaje por línea, y hace lo mismo que la terminal porque usa su misma lógica (configuración, conversaciones guardadas, `/buscar`). Es la base de la interfaz gráfica y sirve para que cualquiera adapte otra interfaz sin reescribir nada: el protocolo completo, con lo que ya está implementado, está en [`rpc/PROTOCOL.md`](rpc/PROTOCOL.md). Se compila con todo lo demás (también en Windows) y sale en `build/<preset>/rpc/chatbot-rpc`.
+
+Para probarlo a mano, sin interfaz (con [`jq`](https://jqlang.org/) para leer la salida):
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client":{"name":"manual","version":"0"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"conversation.get","params":{"conversation":"c1"}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}' \
+  '{"jsonrpc":"2.0","method":"exit"}' \
+| ./build/dev/rpc/chatbot-rpc | jq -c .
+```
+
+Usa la misma configuración que la terminal (y el modo portable). stdout es solo del protocolo; los avisos van a stderr. `CHAT_DEBUG_RPC=/ruta/archivo` guarda cada línea que entra y sale con las keys tapadas, pero **contiene la conversación**: solo para diagnosticar.
+
 ## Bot de Telegram
 
 `chatbot-telegram` es un bot de Telegram que responde con el mismo modelo y las mismas instrucciones que el chatbot de la terminal. Usa *long polling* (solo hace peticiones HTTPS de salida, sin servidor público ni certificados), responde **solo en chats privados** (en grupos y canales no contesta) y las conversaciones viven **solo en memoria**: se borran tras un rato sin mensajes, con `/nuevo` o al reiniciar el bot. Solo Linux por ahora.

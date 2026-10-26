@@ -16,6 +16,9 @@
 
 namespace chatbot::cli {
 
+/// Error de una respuesta que terminó bien pero sin texto (finish_success).
+inline constexpr std::string_view kEmptyAnswer = "El modelo no devolvió texto.";
+
 /// Tipo de una entrada de la pantalla.
 enum class EntryKind {
     User,
@@ -145,7 +148,8 @@ private:
 /// nada (una conversación nueva no crea archivo). La primera vez asigna id y
 /// fecha de creación. Si falla, agrega una entrada de error ("No se pudo
 /// guardar la conversación: <motivo>") y el chat sigue. No lanza excepciones.
-void save_conversation(Conversation& conversation, const ConversationStore& store);
+/// Devuelve true si escribió el archivo.
+[[nodiscard]] bool save_conversation(Conversation& conversation, const ConversationStore& store);
 
 } // namespace chatbot::cli
 

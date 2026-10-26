@@ -109,7 +109,7 @@ std::optional<std::string> Conversation::finish_success(std::string_view finish_
     Entry* answer = current_answer();
     if (answer == nullptr || answer->text.empty()) {
         return finish_error(ChatError{ErrorKind::BadResponse, 0,
-                                      "El modelo no devolvió texto.", std::nullopt});
+                                      std::string{kEmptyAnswer}, std::nullopt});
     }
     answer->in_progress = false;
     answer->note = finish_note(finish_reason);
@@ -245,9 +245,9 @@ std::string Conversation::finish_error(const ChatError& error) {
     return std::exchange(pending_user_text_, std::string{});
 }
 
-void save_conversation(Conversation& conversation, const ConversationStore& store) {
+bool save_conversation(Conversation& conversation, const ConversationStore& store) {
     if (!conversation.has_turns()) {
-        return;
+        return false;
     }
     const std::string now = format_iso8601(std::time(nullptr));
     if (conversation.id().empty()) {
@@ -255,7 +255,9 @@ void save_conversation(Conversation& conversation, const ConversationStore& stor
     }
     if (const std::optional<std::string> error = store.save(conversation.to_stored(now))) {
         conversation.add_error("No se pudo guardar la conversación: " + *error);
+        return false;
     }
+    return true;
 }
 
 } // namespace chatbot::cli

@@ -415,14 +415,14 @@ TEST_CASE("save_conversation: sin pares no crea archivo; con un par lo crea",
     const chatbot::cli::ConversationStore store{temp.string()};
     Conversation conversation{kDefaultSystemPrompt};
 
-    chatbot::cli::save_conversation(conversation, store);
+    CHECK_FALSE(chatbot::cli::save_conversation(conversation, store));
     CHECK(store.list().empty());
     CHECK(conversation.id().empty());
 
     REQUIRE(conversation.submit("Hola").has_value());
     conversation.append_delta("Qué tal");
     REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
-    chatbot::cli::save_conversation(conversation, store);
+    CHECK(chatbot::cli::save_conversation(conversation, store));
 
     REQUIRE_FALSE(conversation.id().empty());
     CHECK_FALSE(conversation.created_at().empty());
@@ -437,7 +437,7 @@ TEST_CASE("save_conversation: sin pares no crea archivo; con un par lo crea",
     conversation.append_delta("Respuesta");
     REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
     const std::string first_id = conversation.id();
-    chatbot::cli::save_conversation(conversation, store);
+    CHECK(chatbot::cli::save_conversation(conversation, store));
     CHECK(conversation.id() == first_id);
     REQUIRE(store.list().size() == 1);
     CHECK(store.list()[0].message_count == 4);
@@ -454,7 +454,7 @@ TEST_CASE("save_conversation: si falla agrega un error y el chat sigue",
     conversation.append_delta("Qué tal");
     REQUIRE_FALSE(conversation.finish_success("stop", "m").has_value());
 
-    chatbot::cli::save_conversation(conversation, store);
+    CHECK_FALSE(chatbot::cli::save_conversation(conversation, store));
     REQUIRE(conversation.entries().size() == 3);
     CHECK(conversation.entries()[2].kind == EntryKind::Error);
     CHECK(conversation.entries()[2].text.rfind("No se pudo guardar la conversación: ", 0) == 0);

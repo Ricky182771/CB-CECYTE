@@ -44,9 +44,11 @@ function(chatbot_collect_dependencies target out_var)
 endfunction()
 
 # Falla la configuración si target depende de cli/ (chatbot_cli_lib,
-# chatbot_cli_ui, el ejecutable chatbot) o de FTXUI.
+# chatbot_cli_ui, el ejecutable chatbot) o de FTXUI. Los demás argumentos son
+# los targets de cli/ que sí puede usar (chatbot-rpc: chatbot_cli_lib).
 function(chatbot_forbid_ui_dependencies target)
     set(forbidden chatbot_cli_lib chatbot_cli_ui chatbot)
+    list(REMOVE_ITEM forbidden ${ARGN})
     foreach(ftxui_target ftxui::screen ftxui::dom ftxui::component)
         if(TARGET ${ftxui_target})
             get_target_property(real ${ftxui_target} ALIASED_TARGET)
@@ -62,7 +64,8 @@ function(chatbot_forbid_ui_dependencies target)
         if(dependency IN_LIST forbidden OR dependency MATCHES "^ftxui::")
             message(FATAL_ERROR
                 "${target} depende de ${dependency}: core, chatbot::markdown y los addons "
-                "nunca dependen de cli/ ni de FTXUI (AGENTS.md, sección \"Addons\").")
+                "nunca dependen de cli/ ni de FTXUI, y chatbot-rpc solo de chatbot_cli_lib "
+                "(AGENTS.md, secciones 5 y \"Addons\").")
         endif()
     endforeach()
 endfunction()
