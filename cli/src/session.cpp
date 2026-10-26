@@ -9,6 +9,8 @@
 #include "chatbot/search_context.h"
 #include "chatbot/system_prompt.h"
 
+#include <algorithm>
+#include <cctype>
 #include <utility>
 #include <vector>
 
@@ -22,9 +24,9 @@ std::optional<std::string> non_empty(const chatbot::EnvLookup& env, std::string_
     return value.empty() ? std::nullopt : std::optional<std::string>{value};
 }
 
-void append_warning(std::string& warnings, const std::string& warning) {
+void append_warning(std::vector<std::string>& warnings, std::string warning) {
     if (!warning.empty()) {
-        warnings += (warnings.empty() ? "" : " ") + warning;
+        warnings.push_back(std::move(warning));
     }
 }
 
@@ -53,12 +55,15 @@ Session::Session(SessionEnvironment environment, Config initial, Post post,
         ResolvedSystemPrompt resolved =
             resolve_system_prompt(load_system_prompt_value(*env_.config_path));
         system_prompt_ = std::move(resolved.text);
-        append_warning(startup_warning_, resolved.warning);
+        append_warning(startup_warnings_, std::move(resolved.warning));
         conversation_ = Conversation{system_prompt_};
     }
     std::string search_warning;
     search_provider_ = load_search(search_warning);
-    append_warning(startup_warning_, search_warning);
+    append_warning(startup_warnings_, std::move(search_warning));
+    for (const std::string& warning : startup_warnings_) {
+        startup_warning_ += (startup_warning_.empty() ? "" : " ") + warning;
+    }
     if (!validate_config(config_).has_value()) {
         connect();
     }
@@ -118,38 +123,70 @@ SubmitOutcome Session::submit(std::string_view text) {
     default:
         break;
     }
-    if (runner_ == nullptr) {
+    // /buscar sin consulta es una búsqueda vacía: send da Empty en el mismo
+    // orden que antes (después de la configuración y la respuesta en curso).
+    const bool search = command.type == Type::Search || command.type == Type::SearchEmpty;
+    switch (send(text, search ? std::optional<std::string>{command.text} : std::nullopt)) {
+    case SendResult::Sent:
+        return outcome(SubmitOutcome::Type::Started, {}, true);
+    case SendResult::NotConfigured:
         return outcome(SubmitOutcome::Type::Status, std::string{kSetupNotice});
+    case SendResult::Busy:
+        return {}; // Enter no hace nada mientras hay una respuesta en curso.
+    case SendResult::Empty:
+        // /buscar sin consulta: el uso, y el texto se queda en la caja.
+        return search ? outcome(SubmitOutcome::Type::Status, std::string{kSearchUsage})
+                      : SubmitOutcome{}; // Caja vacía.
+    case SendResult::MissingSearchKey:
+        return outcome(SubmitOutcome::Type::Status, std::string{kMissingSearchKey});
+    }
+    return {};
+}
+
+SendResult Session::send(std::string_view text, std::optional<std::string> search) {
+    if (runner_ == nullptr) {
+        return SendResult::NotConfigured;
     }
     if (runner_->busy()) {
-        return {}; // Enter no hace nada mientras hay una respuesta en curso.
+        return SendResult::Busy;
     }
-    // /buscar: sin consulta o sin key, el texto se queda en la caja.
-    if (command.type == Type::SearchEmpty) {
-        return outcome(SubmitOutcome::Type::Status, std::string{kSearchUsage});
+    if (search.has_value() && std::all_of(search->begin(), search->end(), [](char c) {
+            return std::isspace(static_cast<unsigned char>(c)) != 0;
+        })) {
+        return SendResult::Empty;
     }
-    const bool search = command.type == Type::Search;
-    if (search && search_provider_ == nullptr) {
-        return outcome(SubmitOutcome::Type::Status, std::string{kMissingSearchKey});
+    if (search.has_value() && search_provider_ == nullptr) {
+        return SendResult::MissingSearchKey;
     }
     std::optional<std::vector<Message>> messages = conversation_.submit(text);
     if (!messages.has_value()) {
-        return {}; // Caja vacía.
+        return SendResult::Empty;
     }
     const auto on_delta = [this](std::string delta) { conversation_.append_delta(delta); };
     const auto on_done = [this](Result<CompletionInfo> result, std::size_t dropped) {
         searching_ = false;
         last_dropped_ = dropped;
-        std::optional<std::string> restored =
-            result.is_ok() ? conversation_.finish_success(result.value().finish_reason, model_)
-                           : std::optional<std::string>{conversation_.finish_error(result.error())};
-        if (!restored.has_value()) {
-            // Par usuario/asistente completo: es lo único que se guarda.
-            save_conversation(conversation_, store_);
+        Finished finished;
+        finished.dropped = dropped;
+        if (result.is_ok()) {
+            finished.restored = conversation_.finish_success(result.value().finish_reason, model_);
+            if (finished.restored.has_value()) {
+                finished.error =
+                    ChatError{ErrorKind::BadResponse, 0, std::string{kEmptyAnswer}, std::nullopt};
+            } else {
+                finished.finish_reason = result.value().finish_reason;
+            }
+        } else {
+            finished.error = result.error();
+            finished.restored = conversation_.finish_error(result.error());
         }
-        on_finished_(std::move(restored));
+        if (!finished.restored.has_value()) {
+            // Par usuario/asistente completo: es lo único que se guarda.
+            finished.saved = save_conversation(conversation_, store_);
+        }
+        on_finished_(std::move(finished));
     };
-    if (!search) {
+    if (!search.has_value()) {
         runner_->start(std::move(*messages), on_delta, on_done);
     } else {
         // La fecha se guarda con la búsqueda (AAAA-MM-DD) y el bloque la
@@ -157,7 +194,7 @@ SubmitOutcome Session::submit(std::string_view text) {
         const std::string date = local_iso_date(env_.now());
         searching_ = true;
         runner_->start_with_search(
-            std::move(*messages), command.text, search_provider_, spanish_date(date),
+            std::move(*messages), *search, search_provider_, spanish_date(date),
             [this, date](RequestRunner::SearchContext found) {
                 searching_ = false;
                 (void)conversation_.attach_search(std::move(found.response), date,
@@ -165,7 +202,7 @@ SubmitOutcome Session::submit(std::string_view text) {
             },
             on_delta, on_done);
     }
-    return outcome(SubmitOutcome::Type::Started, {}, true);
+    return SendResult::Sent;
 }
 
 SubmitOutcome Session::run_local_command(const ParsedCommand& command) {

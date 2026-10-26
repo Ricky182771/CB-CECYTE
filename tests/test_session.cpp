@@ -56,6 +56,15 @@ chatbot::HttpResponse stream(const std::string& piece) {
     return response;
 }
 
+/// Como stream, con choices[0].finish_reason en el último evento.
+chatbot::HttpResponse stream_with_finish(const std::string& piece, const std::string& reason) {
+    chatbot::HttpResponse response;
+    response.status = 200;
+    response.body = "data: {\"choices\":[{\"delta\":{\"content\":\"" + piece +
+                    "\"},\"finish_reason\":\"" + reason + "\"}]}\n\ndata: [DONE]\n\n";
+    return response;
+}
+
 /// La app con un directorio temporal para config.json, credentials.json,
 /// las conversaciones y las descargas.
 struct Harness {
@@ -71,7 +80,7 @@ struct Harness {
     std::vector<chatbot::HttpResponse> search_responses{chatbot_test::tavily_response(
         nlohmann::json::array({{{"title", "T"}, {"url", "https://ejemplo.mx"}, {"content", "c"}}}))};
     std::optional<std::string> download_base;
-    std::vector<std::optional<std::string>> finished; ///< Cada on_finished.
+    std::vector<Session::Finished> finished; ///< Cada on_finished.
     std::unique_ptr<Session> session; ///< Al último: se destruye primero (join).
 
     [[nodiscard]] std::string path(const char* name) const { return (dir.path() / name).string(); }
@@ -122,7 +131,7 @@ struct Harness {
         session = std::make_unique<Session>(
             std::move(environment), std::move(config),
             [this](chatbot::cli::RequestRunner::Task task) { queue.post(std::move(task)); },
-            [this](std::optional<std::string> restored) { finished.push_back(std::move(restored)); });
+            [this](Session::Finished done) { finished.push_back(std::move(done)); });
     }
 
     /// Vacía la cola hasta el siguiente on_finished.
@@ -135,7 +144,7 @@ struct Harness {
     bool exchange(const std::string& text) {
         REQUIRE(session->submit(text).type == Type::Started);
         REQUIRE(finish());
-        return !finished.back().has_value();
+        return finished.back().saved;
     }
 
     /// Cada cliente nuevo usa un BlockingTransport que se queda esperando
@@ -190,7 +199,11 @@ TEST_CASE("Session envía, guarda el par y avisa al terminar", "[session]") {
     CHECK(sent.clear);
     CHECK(h.session->busy());
     REQUIRE(h.finish());
-    CHECK(h.finished == std::vector<std::optional<std::string>>{std::nullopt});
+    REQUIRE(h.finished.size() == 1);
+    CHECK(h.finished[0].restored == std::nullopt);
+    CHECK(h.finished[0].error == std::nullopt);
+    CHECK(h.finished[0].saved);
+    CHECK(h.finished[0].dropped == 0);
     CHECK_FALSE(h.session->busy());
     const std::string& id = h.session->conversation().id();
     REQUIRE_FALSE(id.empty());
@@ -210,7 +223,9 @@ TEST_CASE("Session regresa el texto tras un error o una cancelación, sin guarda
         h.responses = {limited};
         h.start();
         CHECK_FALSE(h.exchange("hola"));
-        CHECK(h.finished.back() == "hola");
+        CHECK(h.finished.back().restored == "hola");
+        REQUIRE(h.finished.back().error.has_value());
+        CHECK(h.finished.back().error->kind == chatbot::ErrorKind::RateLimited);
         CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Error);
     }
     SECTION("cancelación a la mitad") {
@@ -221,7 +236,9 @@ TEST_CASE("Session regresa el texto tras un error o una cancelación, sin guarda
         REQUIRE(blocking->started.wait_for(kThreadTimeout));
         h.session->cancel();
         REQUIRE(h.finish());
-        CHECK(h.finished.back() == "hola");
+        CHECK(h.finished.back().restored == "hola");
+        REQUIRE(h.finished.back().error.has_value());
+        CHECK(h.finished.back().error->kind == chatbot::ErrorKind::Cancelled);
         CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Assistant);
         CHECK(h.last_entry().cancelled);
     }
@@ -250,7 +267,7 @@ TEST_CASE("Session: /buscar", "[session]") {
         REQUIRE(h.queue.run_until([&] { return !h.session->searching(); }));
         CHECK(h.session->busy()); // Se apagó al llegar la búsqueda, no al terminar.
         REQUIRE(h.finish());
-        REQUIRE(h.finished.back() == std::nullopt);
+        REQUIRE(h.finished.back().restored == std::nullopt);
         CHECK_FALSE(h.session->searching());
         const chatbot::cli::LoadResult loaded =
             h.session->store().load(h.session->conversation().id());
@@ -265,7 +282,9 @@ TEST_CASE("Session: /buscar", "[session]") {
         h.search_responses = {chatbot_test::tavily_response(nlohmann::json::array())};
         h.start();
         CHECK_FALSE(h.exchange("/buscar nada"));
-        CHECK(h.finished.back() == "/buscar nada");
+        CHECK(h.finished.back().restored == "/buscar nada");
+        REQUIRE(h.finished.back().error.has_value());
+        CHECK(h.finished.back().error->kind == chatbot::ErrorKind::NoSearchResults);
         CHECK(h.chat->requests.empty());
         CHECK_FALSE(h.session->searching());
     }
@@ -489,13 +508,94 @@ TEST_CASE("Session: avisos de arranque", "[session]") {
         REQUIRE(key.is_error());
         h.start();
         CHECK(h.session->startup_warning() == prompt_warning + " " + key.error().message);
+        CHECK(h.session->startup_warnings() ==
+              std::vector<std::string>{prompt_warning, key.error().message});
         CHECK_FALSE(h.session->command_context().has_search_key);
     }
 #endif
     SECTION("solo las instrucciones") {
         h.start();
         CHECK(h.session->startup_warning() == prompt_warning);
+        CHECK(h.session->startup_warnings() == std::vector<std::string>{prompt_warning});
         CHECK(h.session->system_prompt() == chatbot::kDefaultSystemPrompt);
+    }
+}
+
+TEST_CASE("Session::send no interpreta comandos y dice por qué no envió", "[session]") {
+    using chatbot::cli::SendResult;
+    Harness h;
+    SECTION("sin configuración") {
+        chatbot::Config config = chatbot_test::test_config();
+        config.model.clear();
+        h.start(config);
+        CHECK(h.session->send("hola") == SendResult::NotConfigured);
+        CHECK(h.session->send("", std::string{"clima"}) == SendResult::NotConfigured);
+    }
+    SECTION("texto vacío, consulta vacía y sin key") {
+        h.start();
+        CHECK(h.session->send("   ") == SendResult::Empty);
+        CHECK(h.session->send("/buscar clima", std::string{" "}) == SendResult::Empty);
+        CHECK(h.session->send("/buscar clima", std::string{"clima"}) ==
+              SendResult::MissingSearchKey);
+        CHECK(h.session->conversation().entries().empty());
+    }
+    SECTION("un comando va al modelo tal cual") {
+        h.start();
+        REQUIRE(h.session->send("/copiar") == SendResult::Sent);
+        CHECK(h.session->send("otra") == SendResult::Busy);
+        REQUIRE(h.finish());
+        CHECK(h.finished.back().saved);
+        CHECK(h.session->conversation().entries().front().text == "/copiar");
+    }
+    SECTION("con búsqueda: text se muestra y se guarda, search va a la búsqueda") {
+        h.env.values["CHAT_SEARCH_API_KEY"] = kSearchKey;
+        h.start();
+        REQUIRE(h.session->send("¿Qué clima hace?", std::string{"clima"}) == SendResult::Sent);
+        CHECK(h.session->searching());
+        REQUIRE(h.finish());
+        REQUIRE(h.finished.back().saved);
+        const chatbot::cli::LoadResult loaded =
+            h.session->store().load(h.session->conversation().id());
+        REQUIRE(loaded.conversation.has_value());
+        const auto& user = loaded.conversation->messages.front();
+        CHECK(user.content == "¿Qué clima hace?");
+        REQUIRE(user.search.has_value());
+        CHECK(user.search->response.query == "clima");
+        CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Sources);
+    }
+}
+
+TEST_CASE("Session::Finished: finish_reason, respuesta sin texto y guardado que falla",
+          "[session]") {
+    Harness h;
+    SECTION("finish_reason") {
+        h.responses = {stream_with_finish("cortada", "length")};
+        h.start();
+        REQUIRE(h.exchange("hola"));
+        CHECK(h.finished.back().finish_reason == "length");
+    }
+    SECTION("sin texto: BadResponse con kEmptyAnswer, sin guardar") {
+        chatbot::HttpResponse empty;
+        empty.status = 200;
+        empty.body = "data: [DONE]\n\n";
+        h.responses = {empty};
+        h.start();
+        CHECK_FALSE(h.exchange("hola"));
+        CHECK(h.finished.back().restored == "hola");
+        REQUIRE(h.finished.back().error.has_value());
+        CHECK(h.finished.back().error->kind == chatbot::ErrorKind::BadResponse);
+        CHECK(h.finished.back().error->message == chatbot::cli::kEmptyAnswer);
+        CHECK(h.finished.back().finish_reason.empty());
+    }
+    SECTION("guardado que falla: terminó bien, pero saved es false y hay un error") {
+        // La carpeta de conversaciones es un archivo: store.save falla.
+        std::ofstream{h.path("conversations")} << "x";
+        h.start();
+        CHECK_FALSE(h.exchange("hola"));
+        CHECK(h.finished.back().restored == std::nullopt);
+        CHECK(h.finished.back().error == std::nullopt);
+        CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Error);
+        CHECK(h.last_entry().text.rfind("No se pudo guardar la conversación: ", 0) == 0);
     }
 }
 

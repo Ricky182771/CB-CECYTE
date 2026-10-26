@@ -438,13 +438,13 @@ int main(int argc, char** argv) {
     session_environment.home = home;
     chatbot::cli::Session session(
         std::move(session_environment), initial.value(), post,
-        [&](std::optional<std::string> restored) {
-            if (!restored.has_value()) {
+        [&](chatbot::cli::Session::Finished finished) {
+            if (finished.saved) {
                 // Se guardó el par: la conversación sube a "Hoy" en la barra.
                 sidebar.refresh(session.store().list(), session.conversation().id());
-            } else if (input_area->text().empty()) {
+            } else if (finished.restored.has_value() && input_area->text().empty()) {
                 // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
-                input_area->set_text(*restored);
+                input_area->set_text(*finished.restored);
             }
         });
     chatbot::cli::ModelsLoader models_loader(
