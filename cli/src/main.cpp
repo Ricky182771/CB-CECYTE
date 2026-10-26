@@ -1,23 +1,20 @@
 // main.cpp — interfaz de terminal del chatbot.
 //
 // Pantalla completa con FTXUI: historial arriba, caja de entrada abajo. La
-// petición corre en el hilo de trabajo de RequestRunner; todo lo que toca la
-// pantalla o la Conversation se ejecuta en el hilo de la interfaz mediante
-// App::Post.
+// lógica sin FTXUI está en Session (session.h) y la petición corre en el
+// hilo de trabajo de RequestRunner; todo lo que toca la pantalla o la
+// sesión se ejecuta en el hilo de la interfaz mediante App::Post.
 
 #include "addon_launcher.h"
 #include "addons_panel.h"
 #include "child_process.h"
 #include "block_actions.h"
 #include "clipboard.h"
-#include "code_blocks.h"
 #include "command_menu.h"
 #include "command_menu_view.h"
-#include "command_parser.h"
 #include "commands.h"
 #include "conversation.h"
 #include "conversation_list.h"
-#include "conversation_store.h"
 #include "downloads.h"
 #include "glyphs.h"
 #include "history_view.h"
@@ -26,8 +23,8 @@
 #include "models_loader.h"
 #include "paste.h"
 #include "provider_settings.h"
-#include "request_runner.h"
 #include "search_settings.h"
+#include "session.h"
 #include "settings_screen.h"
 #include "sidebar.h"
 #include "sidebar_view.h"
@@ -42,14 +39,11 @@
 #include "chatbot/addon_settings/secrets.h"
 #include "chatbot/chat_client.h"
 #include "chatbot/config.h"
-#include "chatbot/credentials.h"
 #include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
 #include "chatbot/markdown/markdown.h"
 #include "chatbot/platform.h"
 #include "chatbot/result.h"
-#include "chatbot/search_context.h"
-#include "chatbot/system_prompt.h"
 #include "chatbot/tavily_search.h"
 #include "chatbot/types.h"
 #include "chatbot/web_search.h"
@@ -81,9 +75,6 @@
 
 namespace {
 
-/// Aviso mientras no hay una configuración completa (falta key o modelo).
-constexpr const char* kSetupNotice = "Configura un proveedor para empezar.";
-
 /// Líneas que mueve cada paso de la rueda del ratón.
 constexpr int kWheelStep = 3;
 
@@ -100,7 +91,7 @@ std::optional<std::string> env_non_empty(const char* name) {
     return value.has_value() && !value->empty() ? value : std::nullopt;
 }
 
-/// El entorno real del proceso, para load_search_api_key.
+/// El entorno real del proceso, para la sesión.
 std::string_view process_env(std::string_view name) {
     const char* value = std::getenv(std::string{name}.c_str());
     return value != nullptr ? std::string_view{value} : std::string_view{};
@@ -138,27 +129,6 @@ chatbot::cli::AddonsEnvironment addons_environment(chatbot::cli::ServiceWorker::
     }
     environment.home = env_value("HOME").value_or("");
     return environment;
-}
-
-/// Proveedor de /buscar con la key vigente (CHAT_SEARCH_API_KEY o
-/// credentials.json): nullptr si no hay key. Si credentials.json no se puede
-/// leer, también nullptr y el motivo en warning.
-std::shared_ptr<chatbot::SearchProvider> make_search_provider(std::string& warning) {
-    const std::optional<std::string> credentials_path = chatbot::default_credentials_path();
-    if (!credentials_path.has_value() && env_non_empty("CHAT_SEARCH_API_KEY") == std::nullopt) {
-        return nullptr;
-    }
-    const chatbot::Result<std::string> key =
-        chatbot::load_search_api_key(process_env, credentials_path.value_or(""));
-    if (key.is_error()) {
-        warning = key.error().message;
-        return nullptr;
-    }
-    if (key.value().empty()) {
-        return nullptr;
-    }
-    return std::make_shared<chatbot::TavilySearch>(key.value(),
-                                                   std::make_unique<chatbot::CurlTransport>());
 }
 
 /// Traduce una tecla de FTXUI a la de la barra de conversaciones.
@@ -376,8 +346,6 @@ int main(int argc, char** argv) {
     if (initial.is_error() || (incomplete.has_value() && !has_terminal)) {
         return fail(initial.is_error() ? initial.error() : *incomplete);
     }
-    chatbot::Config config = initial.value(); ///< La vigente; cambia al guardar la configuración.
-    std::string model;                       ///< Modelo del cliente; vacío sin configuración.
 
     // Tema, fondo y símbolos de config.json ("appearance"). Un valor
     // desconocido usa el de por defecto y deja un aviso en la línea de
@@ -401,46 +369,16 @@ int main(int argc, char** argv) {
     /// Con lo que se dibuja todo; cambia al guardar la apariencia.
     chatbot::cli::Palette palette{appearance};
 
-    // Instrucciones de sistema de config.json ("system_prompt"). Una llave
-    // que no es cadena usa las predeterminadas y deja un aviso.
-    std::string startup_warning = appearance_warning;
-    /// Las vigentes (vacías: sin mensaje de sistema); cambian al guardarlas.
-    std::string system_prompt{chatbot::kDefaultSystemPrompt};
-    if (const std::optional<std::string> path = chatbot::default_config_path()) {
-        chatbot::ResolvedSystemPrompt resolved =
-            chatbot::resolve_system_prompt(chatbot::load_system_prompt_value(*path));
-        system_prompt = std::move(resolved.text);
-        if (!resolved.warning.empty()) {
-            startup_warning += (startup_warning.empty() ? "" : " ") + resolved.warning;
-        }
-    }
-
-    // Búsqueda web (/buscar). Se comparte con el hilo de trabajo del runner,
-    // así que se puede reemplazar al guardar la key aunque haya un hilo
-    // terminado sin unir.
-    std::string search_warning;
-    std::shared_ptr<chatbot::SearchProvider> search_provider =
-        make_search_provider(search_warning);
-    if (!search_warning.empty()) {
-        startup_warning += (startup_warning.empty() ? "" : " ") + search_warning;
-    }
-    bool searching = false; ///< /buscar en curso, antes de que llegue la respuesta.
-
-    // El orden de declaración importa: se destruyen en orden inverso. El
-    // runner se destruye antes que screen y client (cancela y hace join del
-    // hilo, que usa ambos); igual el cargador de modelos, que une sus hilos.
-    // Las tareas que queden en la cola de screen apuntan a conversation,
-    // scroll, last_dropped y store: van antes que screen (la caja de entrada
-    // la llevan por copia del shared_ptr).
-    const chatbot::cli::ConversationStore store{chatbot::cli::default_data_dir().value_or("")};
-    chatbot::cli::Conversation conversation{system_prompt};
+    // El orden de declaración importa: se destruyen en orden inverso. La
+    // sesión se destruye antes que screen: su runner cancela y hace join del
+    // hilo, que usa post; igual el cargador de modelos, que une sus hilos. Lo
+    // que un hilo encole durante el join apunta a la sesión, pero nunca se
+    // ejecuta: después de Loop() FTXUI no corre tareas (App::Internal::PostMain
+    // → App::Internal::Uninstall puede correr algunas todavía dentro de Loop(),
+    // con todo vivo), y App::~App y TaskRunner::~TaskRunner solo descartan la cola.
     Scroll scroll;
     chatbot::cli::HistoryView history;
-    chatbot::cli::CodeBlockIndex code_blocks; ///< Números de los bloques (/copiar, /guardar).
-    std::size_t last_dropped = 0;
     chatbot::cli::Sidebar sidebar;
-    sidebar.open(store.list(), conversation.id());
-    std::string flash = startup_warning; ///< Aviso de la línea de estado hasta la siguiente tecla.
     // Barra lateral: visible al arrancar si la terminal es ancha. Si el ancho
     // la ocultó, el ancho la vuelve a mostrar; si la ocultó Ctrl+B, no.
     bool last_wide = ftxui::Terminal::Size().dimx >= chatbot::cli::kSidebarMinTerminal;
@@ -462,51 +400,79 @@ int main(int argc, char** argv) {
     bool export_hover = false;
     bool dragging = false;  ///< Se arrastra el divisor: el ratón es de ResizableSplit.
     int right_tab = 0; ///< Lado derecho: 0 = conversación, 1 = configuración.
-    // Sin configuración completa no hay cliente ni runner (la caja no envía).
-    std::unique_ptr<chatbot::ChatClient> client;
     auto screen = ftxui::App::Fullscreen();
     const auto post = [&screen](std::function<void()> task) {
         screen.Post(std::move(task));
         // Post de una tarea no redibuja por sí solo; un evento sí.
         screen.PostEvent(ftxui::Event::Custom);
     };
-    std::unique_ptr<chatbot::cli::RequestRunner> runner;
-    chatbot::cli::ModelsLoader models_loader(
-        [] { return std::make_unique<chatbot::CurlTransport>(); }, post);
-
-    // (Re)construye el cliente y el runner con una configuración completa.
-    // Solo sin respuesta en curso: el runner viejo se destruye (join) antes
-    // que el cliente que usa.
-    const auto connect = [&](const chatbot::Config& complete) {
-        runner.reset();
-        client = std::make_unique<chatbot::ChatClient>(complete,
-                                                       std::make_unique<chatbot::CurlTransport>());
-        runner = std::make_unique<chatbot::cli::RequestRunner>(*client,
-                                                               complete.history_limit_bytes, post);
-        model = complete.model;
-    };
-    if (!incomplete.has_value()) {
-        connect(config);
-    }
-    const auto busy = [&] { return runner != nullptr && runner->busy(); };
-
-    // La caja de entrada (text_area.h): el texto, el cursor y la vista son
-    // suyos. Enter envía (on_enter, abajo); "\" + Enter y Alt+Enter hacen el
-    // salto (root). Sin configuración, el placeholder lo dice.
-    const auto input_area = chatbot::cli::make_text_area(
-        {.palette = &palette, .min_rows = 1, .max_rows = chatbot::cli::kMaxInputLines,
-         .enter = chatbot::cli::EnterKey::Submit, .on_enter = {}, .on_change = {},
-         .placeholder = [&runner](int columns) {
-             return runner != nullptr ? std::string{chatbot::cli::input_placeholder(columns)}
-                                      : std::string{kSetupNotice} + " (F2)";
-         }});
-    const ftxui::Component input = input_area;
 
     /// Abrevia rutas con "~" (en Windows, vacía: las rutas van completas).
     const std::string home =
         chatbot::cli::display_home(chatbot::cli::environment_value, chatbot::current_os());
-    // Carpeta de descargas (sin chatbot/) para /guardar y /exportar, o
-    // nullopt con el motivo en la línea de estado.
+
+    // La caja de entrada; se crea después de la sesión, que su placeholder consulta.
+    std::shared_ptr<chatbot::cli::TextArea> input_area;
+
+    // La lógica sin FTXUI (session.h): configuración vigente, cliente y
+    // runner, búsqueda, la conversación abierta y su almacén. Sin
+    // configuración completa no hay cliente ni runner (la caja no envía).
+    chatbot::cli::SessionEnvironment session_environment;
+    session_environment.config_path = chatbot::default_config_path();
+    session_environment.credentials_path = chatbot::default_credentials_path();
+    session_environment.data_dir = chatbot::cli::default_data_dir().value_or("");
+    session_environment.env = process_env;
+    session_environment.make_client = [](const chatbot::Config& complete) {
+        return std::make_unique<chatbot::ChatClient>(complete,
+                                                     std::make_unique<chatbot::CurlTransport>());
+    };
+    session_environment.make_search =
+        [](const std::string& key) -> std::shared_ptr<chatbot::SearchProvider> {
+        return std::make_shared<chatbot::TavilySearch>(key,
+                                                       std::make_unique<chatbot::CurlTransport>());
+    };
+    session_environment.now = [] { return std::time(nullptr); };
+    session_environment.download_base = [] {
+        return chatbot::cli::default_download_dir(chatbot::cli::environment_value);
+    };
+    session_environment.home = home;
+    chatbot::cli::Session session(
+        std::move(session_environment), initial.value(), post,
+        [&](std::optional<std::string> restored) {
+            if (!restored.has_value()) {
+                // Se guardó el par: la conversación sube a "Hoy" en la barra.
+                sidebar.refresh(session.store().list(), session.conversation().id());
+            } else if (input_area->text().empty()) {
+                // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
+                input_area->set_text(*restored);
+            }
+        });
+    chatbot::cli::ModelsLoader models_loader(
+        [] { return std::make_unique<chatbot::CurlTransport>(); }, post);
+
+    // Avisos de arranque: tema, instrucciones del sistema y búsqueda.
+    std::string startup_warning = appearance_warning;
+    if (!session.startup_warning().empty()) {
+        startup_warning += (startup_warning.empty() ? "" : " ") + session.startup_warning();
+    }
+    std::string flash = startup_warning; ///< Aviso de la línea de estado hasta la siguiente tecla.
+    sidebar.open(session.store().list(), session.conversation().id());
+
+    // La caja de entrada (text_area.h): el texto, el cursor y la vista son
+    // suyos. Enter envía (on_enter, abajo); "\" + Enter y Alt+Enter hacen el
+    // salto (root). Sin configuración, el placeholder lo dice.
+    input_area = chatbot::cli::make_text_area(
+        {.palette = &palette, .min_rows = 1, .max_rows = chatbot::cli::kMaxInputLines,
+         .enter = chatbot::cli::EnterKey::Submit, .on_enter = {}, .on_change = {},
+         .placeholder = [&session](int columns) {
+             return session.configured()
+                        ? std::string{chatbot::cli::input_placeholder(columns)}
+                        : std::string{chatbot::cli::kSetupNotice} + " (F2)";
+         }});
+    const ftxui::Component input = input_area;
+
+    // Carpeta de descargas (sin chatbot/) para [Exportar], o nullopt con el
+    // motivo en la línea de estado.
     const auto download_base = [&]() -> std::optional<std::string> {
         std::optional<std::string> base =
             chatbot::cli::default_download_dir(chatbot::cli::environment_value);
@@ -516,166 +482,30 @@ int main(int argc, char** argv) {
         return base;
     };
 
-    // /copiar, /guardar y /exportar: no van al modelo ni al historial. Los
-    // errores de uso van en la línea de estado y el texto se queda en la caja;
-    // el resultado, en el historial.
-    const auto run_local_command = [&](const chatbot::cli::ParsedCommand& command) {
-        using Type = chatbot::cli::ParsedCommand::Type;
-        if (busy()) {
-            flash = "Espera a que termine la respuesta";
-            return;
-        }
-        // Muestra el resultado; la caja se vacía si salió bien (o siempre).
-        const auto show = [&](const chatbot::cli::ActionResult& result, bool always_clear) {
-            if (result.error) {
-                conversation.add_error(result.message);
-            } else {
-                conversation.add_notice(result.message);
-            }
-            if (!result.error || always_clear) {
-                input_area->set_text("");
-            }
-            scroll.to_bottom();
-        };
-        switch (command.type) {
-        case Type::CopyUsage:
-            flash = std::string{chatbot::cli::kCopyUsage};
-            return;
-        case Type::SaveUsage:
-            flash = std::string{chatbot::cli::kSaveUsage};
-            return;
-        case Type::ExportUsage:
-            flash = std::string{chatbot::cli::kExportUsage};
-            return;
-        case Type::Export: {
-            if (!conversation.has_turns()) {
-                flash = "Todavía no hay respuestas que exportar.";
-                return;
-            }
-            if (const std::optional<std::string> base = download_base()) {
-                show(chatbot::cli::export_conversation(conversation, std::time(nullptr), *base,
-                                                       home),
-                     false);
-            }
-            return;
-        }
-        default:
-            break;
-        }
-        code_blocks.update(conversation.entries());
-        const chatbot::cli::CodeBlockChoice choice =
-            chatbot::cli::choose_code_block(code_blocks.blocks(), command.block);
-        if (choice.block == nullptr) {
-            flash = choice.problem;
-            return;
-        }
-        if (command.type == Type::Save) {
-            if (!command.file_name.empty()) {
-                if (const std::optional<std::string> reason =
-                        chatbot::cli::validate_file_name(command.file_name)) {
-                    flash = *reason;
-                    return;
-                }
-            }
-            if (const std::optional<std::string> base = download_base()) {
-                show(chatbot::cli::save_block(*choice.block, command.file_name, *base, home),
-                     false);
-            }
-            return;
-        }
-        // Copy: la caja se vacía aunque no se haya podido copiar.
-        show(chatbot::cli::copy_block(*choice.block, chatbot::cli::real_clipboard()), true);
-    };
-
-    // Envía el contenido de la caja. Solo se llama desde el hilo de la interfaz.
+    // Envía el contenido de la caja (o corre el comando). Solo se llama
+    // desde el hilo de la interfaz.
     const auto send = [&] {
-        const auto command = chatbot::cli::parse_command(input_area->text());
-        switch (command.type) {
-        case chatbot::cli::ParsedCommand::Type::Copy:
-        case chatbot::cli::ParsedCommand::Type::CopyUsage:
-        case chatbot::cli::ParsedCommand::Type::Save:
-        case chatbot::cli::ParsedCommand::Type::SaveUsage:
-        case chatbot::cli::ParsedCommand::Type::Export:
-        case chatbot::cli::ParsedCommand::Type::ExportUsage:
-            // No necesitan modelo: funcionan aunque falte la configuración.
-            run_local_command(command);
-            return;
-        default:
-            break;
-        }
-        if (runner == nullptr) {
-            flash = kSetupNotice; // Sin configuración, la caja no envía.
+        using Type = chatbot::cli::SubmitOutcome::Type;
+        const chatbot::cli::SubmitOutcome outcome = session.submit(input_area->text());
+        if (outcome.type == Type::Ignored) {
             return;
         }
-        if (runner->busy()) {
-            return; // Enter no hace nada mientras hay una respuesta en curso.
-        }
-        // /buscar: sin consulta o sin key, el texto se queda en la caja.
-        if (command.type == chatbot::cli::ParsedCommand::Type::SearchEmpty) {
-            flash = std::string{chatbot::cli::kSearchUsage};
+        if (outcome.type == Type::Status) {
+            flash = outcome.status; // El texto se queda en la caja.
             return;
         }
-        const bool search = command.type == chatbot::cli::ParsedCommand::Type::Search;
-        if (search && search_provider == nullptr) {
-            flash = std::string{chatbot::cli::kMissingSearchKey};
-            return;
+        if (outcome.type == Type::Copy) {
+            session.report(chatbot::cli::copy_block(outcome.block, chatbot::cli::real_clipboard()));
         }
-        auto messages = conversation.submit(input_area->text());
-        if (!messages.has_value()) {
-            return; // Caja vacía.
+        if (outcome.clear) {
+            input_area->set_text("");
         }
-        input_area->set_text("");
         scroll.to_bottom();
-        const auto on_delta = [&conversation](std::string delta) {
-            conversation.append_delta(delta);
-        };
-        const auto on_done =
-            [&conversation, input_area, &last_dropped, &store, &sidebar, &model,
-             &searching](chatbot::Result<chatbot::CompletionInfo> result, std::size_t dropped) {
-                searching = false;
-                last_dropped = dropped;
-                const std::optional<std::string> restored =
-                    result.is_ok()
-                        ? conversation.finish_success(result.value().finish_reason, model)
-                        : std::optional<std::string>{conversation.finish_error(result.error())};
-                if (!restored.has_value()) {
-                    // Par usuario/asistente completo: es lo único que se guarda.
-                    chatbot::cli::save_conversation(conversation, store);
-                    // La barra se refresca: la conversación sube a "Hoy".
-                    sidebar.refresh(store.list(), conversation.id());
-                }
-                // Regresa el texto a la caja si está vacía: reenviar es solo Enter.
-                if (restored.has_value() && input_area->text().empty()) {
-                    input_area->set_text(*restored);
-                }
-            };
-        if (!search) {
-            runner->start(std::move(*messages), on_delta, on_done);
-            return;
-        }
-        // La fecha se guarda con la búsqueda (AAAA-MM-DD) y el bloque la
-        // lleva en español.
-        const std::string date = chatbot::local_iso_date(std::time(nullptr));
-        searching = true;
-        runner->start_with_search(
-            std::move(*messages), command.text, search_provider, chatbot::spanish_date(date),
-            [&conversation, &searching, date](chatbot::cli::RequestRunner::SearchContext found) {
-                searching = false;
-                (void)conversation.attach_search(std::move(found.response), date,
-                                                 std::move(found.block));
-            },
-            on_delta, on_done);
     };
 
     // La barra con lo que hay en el almacén y la conversación abierta.
-    const auto refresh_sidebar = [&] { sidebar.refresh(store.list(), conversation.id()); };
-
-    // Empieza una conversación nueva (la actual ya quedó guardada si tenía pares).
-    const auto new_conversation = [&] {
-        conversation = chatbot::cli::Conversation{system_prompt};
-        last_dropped = 0;
-        scroll.to_bottom();
-        refresh_sidebar();
+    const auto refresh_sidebar = [&] {
+        sidebar.refresh(session.store().list(), session.conversation().id());
     };
 
     input_area->set_on_enter([&] {
@@ -683,18 +513,6 @@ int main(int argc, char** argv) {
         screen.PostEvent(ftxui::Event::Custom);
     });
 
-    // Lo que el menú de comandos necesita saber para atenuar los que no se
-    // pueden usar ahora.
-    const auto command_context = [&] {
-        code_blocks.update(conversation.entries());
-        chatbot::cli::CommandContext context;
-        context.configured = runner != nullptr;
-        context.has_search_key = search_provider != nullptr;
-        context.has_code_blocks = !code_blocks.blocks().empty();
-        context.has_turns = conversation.has_turns();
-        context.busy = busy();
-        return context;
-    };
     // Aplica lo que pidió el menú de comandos. true si el menú usó el evento.
     const auto apply_command_menu = [&](const chatbot::cli::CommandMenuAction& action) {
         using Type = chatbot::cli::CommandMenuAction::Type;
@@ -717,40 +535,12 @@ int main(int argc, char** argv) {
     // Pantalla de configuración. Al cerrarse, vuelve la conversación.
     chatbot::cli::SettingsScreen settings(
         models_loader, palette,
-        [&](const chatbot::cli::ProviderSettings& form) -> std::optional<std::string> {
-            const std::optional<std::string> config_path = chatbot::default_config_path();
-            const std::optional<std::string> credentials_path =
-                chatbot::default_credentials_path();
-            if (!config_path.has_value() || !credentials_path.has_value()) {
-                return chatbot::missing_config_dir_message(chatbot::current_os());
+        [&](const chatbot::cli::ProviderSettings& form) {
+            std::optional<std::string> error = session.save_provider(form);
+            if (!error.has_value()) {
+                scroll.to_bottom();
             }
-            // Primero la key: si falla, config.json no apunta a un proveedor sin key.
-            if (const auto update = form.credential_update()) {
-                chatbot::Result<chatbot::Credentials> saved =
-                    chatbot::load_credentials(*credentials_path);
-                if (saved.is_error()) {
-                    return saved.error().message;
-                }
-                chatbot::Credentials credentials = saved.value();
-                credentials.keys[update->first] = update->second;
-                if (const auto error = chatbot::save_credentials(*credentials_path, credentials)) {
-                    return error->message;
-                }
-            }
-            if (const auto error = chatbot::save_config_file(*config_path, form.file_values())) {
-                return error->message;
-            }
-            // Lo que quedó guardado más el entorno, validado como al arrancar.
-            const chatbot::Result<chatbot::Config> fresh = chatbot::load_config();
-            if (fresh.is_error()) {
-                return fresh.error().message;
-            }
-            config = fresh.value();
-            connect(config);
-            conversation.add_notice("Ahora se usa " + model + " de " + form.provider_label() +
-                                    ".");
-            scroll.to_bottom();
-            return std::nullopt;
+            return error;
         },
         [&](const chatbot::cli::Appearance& chosen) -> std::optional<std::string> {
             const std::optional<std::string> config_path = chatbot::default_config_path();
@@ -776,58 +566,19 @@ int main(int argc, char** argv) {
             palette = chatbot::cli::Palette{appearance};
             return std::nullopt;
         },
-        [&](const std::optional<std::string>& stored) -> std::optional<std::string> {
-            const std::optional<std::string> config_path = chatbot::default_config_path();
-            if (!config_path.has_value()) {
-                return chatbot::missing_config_dir_message(chatbot::current_os());
+        [&](const std::optional<std::string>& stored) {
+            std::optional<std::string> error = session.save_system_prompt(stored);
+            if (!error.has_value()) {
+                scroll.to_bottom();
             }
-            if (const auto error = chatbot::save_system_prompt(*config_path, stored)) {
-                return error->message;
-            }
-            // Se aplica sin reiniciar y sin perder la conversación: valen
-            // desde el siguiente mensaje (la pantalla no se abre con una
-            // respuesta en curso).
-            system_prompt = stored.value_or(std::string{chatbot::kDefaultSystemPrompt});
-            (void)conversation.set_system_prompt(system_prompt);
-            conversation.add_notice(system_prompt.empty()
-                                        ? "Sin instrucciones del sistema desde el siguiente "
-                                          "mensaje."
-                                        : "Instrucciones del sistema actualizadas: valen desde "
-                                          "el siguiente mensaje.");
-            if (const std::optional<std::string> warning =
-                    chatbot::system_prompt_limit_warning(system_prompt,
-                                                              config.history_limit_bytes)) {
-                conversation.add_notice(*warning);
-            }
-            scroll.to_bottom();
-            return std::nullopt;
+            return error;
         },
-        [&](const std::string& key) -> std::optional<std::string> {
-            const std::optional<std::string> credentials_path =
-                chatbot::default_credentials_path();
-            if (!credentials_path.has_value()) {
-                return chatbot::missing_config_dir_message(chatbot::current_os());
+        [&](const std::string& key) {
+            std::optional<std::string> error = session.save_search_key(key);
+            if (!error.has_value()) {
+                scroll.to_bottom();
             }
-            chatbot::Result<chatbot::Credentials> saved =
-                chatbot::load_credentials(*credentials_path);
-            if (saved.is_error()) {
-                return saved.error().message;
-            }
-            chatbot::Credentials credentials = saved.value();
-            credentials.keys[std::string{chatbot::kSearchCredentialsKey}] = key;
-            if (const auto error = chatbot::save_credentials(*credentials_path, credentials)) {
-                return error->message;
-            }
-            // Se aplica sin reiniciar (la pantalla no se abre con una
-            // respuesta en curso).
-            std::string warning;
-            search_provider = make_search_provider(warning);
-            if (!warning.empty()) {
-                return warning;
-            }
-            conversation.add_notice("Key de búsqueda guardada: usa /buscar <consulta>.");
-            scroll.to_bottom();
-            return std::nullopt;
+            return error;
         },
         [&] {
             right_tab = 0;
@@ -848,45 +599,27 @@ int main(int argc, char** argv) {
 
     // Abre la configuración (F2 o "⚙ Configuración"), con un aviso opcional.
     const auto open_settings = [&](std::string notice) {
-        if (busy()) {
-            flash = "Espera la respuesta o cancélala con Esc.";
+        if (session.busy()) {
+            flash = std::string{chatbot::cli::kWaitOrCancel};
             return;
         }
         if (settings.is_open()) {
             settings.focus();
             return;
         }
-        const std::optional<std::string> config_path = chatbot::default_config_path();
-        const std::optional<std::string> credentials_path = chatbot::default_credentials_path();
-        if (!config_path.has_value() || !credentials_path.has_value()) {
-            flash = chatbot::missing_config_dir_message(chatbot::current_os());
+        const chatbot::Result<chatbot::cli::ProviderSettings> provider = session.provider_form();
+        if (provider.is_error()) {
+            flash = provider.error().message;
             return;
         }
-        const chatbot::Result<chatbot::ConfigFileValues> values =
-            chatbot::load_config_file_values(*config_path);
-        if (values.is_error()) {
-            flash = values.error().message;
+        const chatbot::Result<chatbot::cli::SearchSettings> search = session.search_form();
+        if (search.is_error()) {
+            flash = search.error().message;
             return;
         }
-        const chatbot::Result<chatbot::Credentials> credentials =
-            chatbot::load_credentials(*credentials_path);
-        if (credentials.is_error()) {
-            flash = credentials.error().message;
-            return;
-        }
-        chatbot::cli::SettingsEnv env;
-        env.base_url = env_non_empty("CHAT_BASE_URL");
-        env.model = env_non_empty("CHAT_MODEL");
-        env.api_key = env_non_empty("CHAT_API_KEY");
-        const auto saved_search =
-            credentials.value().keys.find(std::string{chatbot::kSearchCredentialsKey});
-        chatbot::cli::SearchSettings search(
-            saved_search != credentials.value().keys.end() ? saved_search->second : std::string{},
-            env_non_empty("CHAT_SEARCH_API_KEY"));
         right_tab = 1;
-        settings.open(chatbot::cli::ProviderSettings(values.value(), credentials.value(),
-                                                     std::move(env)),
-                      config, appearance, system_prompt, std::move(search), std::move(notice));
+        settings.open(provider.value(), session.config(), appearance, session.system_prompt(),
+                      search.value(), std::move(notice));
     };
 
     // Ejecuta lo que pidió la barra de conversaciones.
@@ -907,9 +640,9 @@ int main(int argc, char** argv) {
             open_settings({});
             return;
         }
-        if (busy()) {
+        if (session.busy()) {
             // Abrir, borrar o crear cambiaría la conversación en curso.
-            flash = "Espera la respuesta o cancélala con Esc.";
+            flash = std::string{chatbot::cli::kWaitOrCancel};
             return;
         }
         if ((action.type == Type::New || action.type == Type::Open) && settings.is_open() &&
@@ -925,36 +658,27 @@ int main(int argc, char** argv) {
         case Type::Cancelled:
             break;
         case Type::New:
-            new_conversation();
-            input->TakeFocus();
-            break;
-        case Type::Open: {
-            const chatbot::cli::LoadResult loaded = store.load(action.id);
-            if (!loaded.conversation.has_value()) {
-                flash = loaded.error;
+        case Type::Open:
+            if (const std::optional<std::string> error = action.type == Type::New
+                                                             ? session.new_conversation()
+                                                             : session.open(action.id)) {
+                flash = *error;
                 break;
             }
-            conversation =
-                chatbot::cli::Conversation::from_stored(*loaded.conversation, system_prompt);
-            const std::string used = conversation.last_model();
-            if (!used.empty() && !model.empty() && used != model) {
-                conversation.add_notice("Esta conversación usó " + used + "; se continúa con " +
-                                        model + ".");
-            }
-            last_dropped = 0;
             scroll.to_bottom();
             refresh_sidebar();
             input->TakeFocus();
             break;
-        }
-        case Type::Delete:
-            if (const std::optional<std::string> error = store.remove(action.id)) {
-                flash = "No se pudo borrar la conversación: " + *error;
-            } else if (action.id == conversation.id()) {
-                new_conversation(); // Se borró la que estaba abierta.
+        case Type::Delete: {
+            const bool was_open = action.id == session.conversation().id();
+            if (const std::optional<std::string> error = session.remove(action.id)) {
+                flash = *error;
+            } else if (was_open) {
+                scroll.to_bottom(); // Se borró la abierta: queda una nueva.
             }
             refresh_sidebar();
             break;
+        }
         }
     };
 
@@ -988,9 +712,9 @@ int main(int argc, char** argv) {
         // El historial ocupa el ancho que deja la barra (más su divisor y un
         // espacio de separación).
         const int width = ftxui::Terminal::Size().dimx - (sidebar_visible ? split_size + 2 : 0);
-        code_blocks.update(conversation.entries());
-        ftxui::Element body = scroll.apply(
-            history.render(conversation.entries(), width, palette, code_blocks.first_numbers()));
+        const chatbot::cli::Conversation& conversation = session.conversation();
+        ftxui::Element body = scroll.apply(history.render(
+            conversation.entries(), width, palette, session.code_blocks().first_numbers()));
         const ftxui::Decorator notice = palette.ink(&chatbot::cli::Theme::notice);
 
         // Los avisos usan lo que dejan los indicadores (reserved) y se
@@ -999,7 +723,7 @@ int main(int argc, char** argv) {
         if (sidebar_visible && sidebar_panel->Focused()) {
             if (const std::optional<std::string> question = sidebar.confirmation()) {
                 status.push_back({*question, ftxui::bold});
-            } else if (flash.empty() && !busy()) {
+            } else if (flash.empty() && !session.busy()) {
                 // La ayuda solo si no hay otro aviso: juntos no caben.
                 status.push_back({"Enter abre · Supr borra · Esc vuelve a la caja", notice});
             }
@@ -1007,8 +731,8 @@ int main(int argc, char** argv) {
         if (!flash.empty()) {
             status.push_back({flash, ftxui::bold});
         }
-        if (busy()) {
-            status.push_back({searching ? "Buscando en la web… (Esc para cancelar)"
+        if (session.busy()) {
+            status.push_back({session.searching() ? "Buscando en la web… (Esc para cancelar)"
                                         : "Pensando… (Esc para cancelar)",
                               ftxui::nothing, true});
         }
@@ -1018,8 +742,8 @@ int main(int argc, char** argv) {
                                                  : "↓ Hay más abajo (PgDn)",
                               ftxui::bold, true});
         }
-        if (last_dropped > 0) {
-            status.push_back({"Se omitieron " + std::to_string(last_dropped) +
+        if (session.last_dropped() > 0) {
+            status.push_back({"Se omitieron " + std::to_string(session.last_dropped()) +
                                   " mensajes antiguos para no exceder el límite.",
                               notice});
         }
@@ -1030,7 +754,7 @@ int main(int argc, char** argv) {
         ftxui::Element menu = ftxui::emptyElement();
         if (command_menu.is_open()) {
             menu = chatbot::cli::render_command_menu(
-                       command_menu, chatbot::cli::command_availability(command_context()),
+                       command_menu, chatbot::cli::command_availability(session.command_context()),
                        width, palette, &command_menu_rows) |
                    ftxui::reflect(command_menu_box);
         } else {
@@ -1040,7 +764,8 @@ int main(int argc, char** argv) {
         const bool hide_status = command_menu.is_open() && status.empty();
         input_area->set_max_rows(chatbot::cli::input_max_rows(ftxui::Terminal::Size().dimy));
         const std::string title =
-            "Chatbot CECyTE — " + (model.empty() ? std::string{"sin configurar"} : model) + " — " +
+            "Chatbot CECyTE — " +
+            (session.model().empty() ? std::string{"sin configurar"} : session.model()) + " — " +
             (conversation.title().empty() ? std::string{"Nueva conversación"}
                                           : chatbot::md::sanitize(conversation.title()));
         ftxui::Element content = ftxui::vbox({
@@ -1214,9 +939,8 @@ int main(int argc, char** argv) {
         // estado; no tocan el historial, el scroll ni la caja.
         if (const std::optional<chatbot::cli::ButtonHit> hit = history.hit_test(mouse.x, mouse.y);
             click && hit.has_value()) {
-            code_blocks.update(conversation.entries());
             const chatbot::cli::ActionResult result = chatbot::cli::run_block_action(
-                code_blocks.blocks(), hit->block, hit->action, chatbot::cli::real_clipboard(),
+                session.code_blocks().blocks(), hit->block, hit->action, chatbot::cli::real_clipboard(),
                 chatbot::cli::default_download_dir(chatbot::cli::environment_value), home,
                 palette.symbols());
             flash = result.message;
@@ -1225,10 +949,11 @@ int main(int argc, char** argv) {
             }
             return true;
         }
-        if (click && export_box.Contain(mouse.x, mouse.y) && conversation.has_turns()) {
+        if (click && export_box.Contain(mouse.x, mouse.y) &&
+            session.conversation().has_turns()) {
             if (const std::optional<std::string> base = download_base()) {
-                flash = chatbot::cli::export_conversation(conversation, std::time(nullptr), *base,
-                                                          home)
+                flash = chatbot::cli::export_conversation(session.conversation(),
+                                                          std::time(nullptr), *base, home)
                             .message;
             }
             return true;
@@ -1437,8 +1162,8 @@ int main(int argc, char** argv) {
         if (sidebar_visible && sidebar_panel->Focused()) {
             // La barra recibe todas las teclas; la caja de entrada, ninguna.
             const chatbot::cli::ListKey key = list_key(event);
-            if (key == chatbot::cli::ListKey::Delete && busy()) {
-                flash = "Espera la respuesta o cancélala con Esc.";
+            if (key == chatbot::cli::ListKey::Delete && session.busy()) {
+                flash = std::string{chatbot::cli::kWaitOrCancel};
                 return true;
             }
             apply_sidebar_action(sidebar.handle(
@@ -1483,9 +1208,7 @@ int main(int argc, char** argv) {
             return true;
         }
         if (event == ftxui::Event::Escape) {
-            if (runner != nullptr) {
-                runner->cancel(); // Sin petición en curso no hace nada (no borra la caja).
-            }
+            session.cancel(); // Sin petición en curso no hace nada (no borra la caja).
             return true;
         }
         if (event == ftxui::Event::PageUp) {
@@ -1513,8 +1236,9 @@ int main(int argc, char** argv) {
         // Falta la key o el modelo. Los avisos del tema y de las
         // instrucciones, si hay, van también.
         const std::string notice = startup_warning.empty()
-                                       ? std::string{kSetupNotice}
-                                       : std::string{kSetupNotice} + " " + startup_warning;
+                                       ? std::string{chatbot::cli::kSetupNotice}
+                                       : std::string{chatbot::cli::kSetupNotice} + " " +
+                                             startup_warning;
         open_settings(notice);
         flash = notice; // Si no se pudo abrir, al menos el aviso.
     } else {
@@ -1523,8 +1247,8 @@ int main(int argc, char** argv) {
     screen.Post([] { (void)chatbot::cli::write_to_terminal(chatbot::cli::kBracketedPasteOn); });
     screen.Loop(root);
 
-    // Al regresar de Loop(), el runner se destruye antes que screen y client
-    // (y el cargador de modelos une sus hilos):
+    // Al regresar de Loop(), la sesión (con su runner) se destruye antes que
+    // screen (y el cargador de modelos une sus hilos): el runner
     // cancela la petición en curso y hace join (alrededor de 1 s como máximo,
     // aunque el modelo no esté mandando nada o haya una espera de reintento).
     return 0;
