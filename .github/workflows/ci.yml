@@ -81,6 +81,26 @@ jobs:
           grep -q "error de configuración" errores.txt
           grep -q "CHAT_API_KEY" errores.txt
 
+      # chatbot-rpc sin configuración (HOME vacío): initialize responde con
+      # "ready":false y shutdown + exit salen con 0. Nunca toca la red.
+      - name: Arranque de chatbot-rpc sin configuración
+        run: |
+          mkdir -p "$RUNNER_TEMP/rpc-home"
+          status=0
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}' \
+            '{"jsonrpc":"2.0","method":"exit"}' \
+            | env -u CHAT_API_KEY -u XDG_CONFIG_HOME -u XDG_DATA_HOME HOME="$RUNNER_TEMP/rpc-home" \
+              ./build/${{ matrix.preset }}/rpc/chatbot-rpc > salida-rpc.txt 2> errores-rpc.txt \
+            || status=$?
+          cat salida-rpc.txt errores-rpc.txt
+          if [ "$status" -ne 0 ]; then
+            echo "Se esperaba el código de salida 0 y fue $status"
+            exit 1
+          fi
+          grep -q '"ready":false' salida-rpc.txt
+
       # El bot, por "chatbot telegram" (lo busca junto a chatbot), sin red:
       # --config-version; desactivado (sin sección) sale con 0; activado sin
       # token, con 78. HOME propio y sin las CHAT_* del bot.
