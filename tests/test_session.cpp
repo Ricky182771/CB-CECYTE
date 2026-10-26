@@ -12,6 +12,7 @@
 #include "fake_search_provider.hpp"
 #include "fake_transport.hpp"
 #include "performance.hpp"
+#include "session_fakes.hpp"
 #include "system_prompt_invariants.hpp"
 #include "temp_dir.hpp"
 
@@ -43,93 +44,22 @@ using chatbot_test::BlockingTransport;
 using chatbot_test::kThreadTimeout;
 using Type = SubmitOutcome::Type;
 
-/// Fecha fija de /buscar y /exportar.
-constexpr std::time_t kNow = 1767225600; // 2026-01-01 UTC.
-constexpr const char* kSearchKey = "tvly-clave-ficticia-de-busqueda";
+using chatbot_test::kSearchKey;
+using chatbot_test::kSessionNow;
+using chatbot_test::stream;
+using chatbot_test::stream_with_finish;
+constexpr std::time_t kNow = kSessionNow;
 
-/// Flujo SSE con un delta por pedazo (el texto ya escapado para JSON).
-chatbot::HttpResponse stream(const std::string& piece) {
-    chatbot::HttpResponse response;
-    response.status = 200;
-    response.body =
-        "data: {\"choices\":[{\"delta\":{\"content\":\"" + piece + "\"}}]}\n\ndata: [DONE]\n\n";
-    return response;
-}
-
-/// Como stream, con choices[0].finish_reason en el último evento.
-chatbot::HttpResponse stream_with_finish(const std::string& piece, const std::string& reason) {
-    chatbot::HttpResponse response;
-    response.status = 200;
-    response.body = "data: {\"choices\":[{\"delta\":{\"content\":\"" + piece +
-                    "\"},\"finish_reason\":\"" + reason + "\"}]}\n\ndata: [DONE]\n\n";
-    return response;
-}
-
-/// La app con un directorio temporal para config.json, credentials.json,
-/// las conversaciones y las descargas.
-struct Harness {
-    chatbot_test::ScopedTempDir dir;
+/// La app con un directorio temporal (session_fakes.hpp): config.json,
+/// credentials.json, las conversaciones y las descargas.
+struct Harness : chatbot_test::SessionFakes {
     chatbot_test::TaskQueue queue;
-    chatbot_test::FakeEnv env;
-    /// Respuestas del modelo de cada cliente nuevo (FakeTransport).
-    std::vector<chatbot::HttpResponse> responses{stream("Hola, soy el asistente.")};
-    /// Si está, el transporte de cada cliente nuevo en lugar del FakeTransport.
-    std::function<std::unique_ptr<chatbot::Transport>()> chat_transport;
-    chatbot_test::FakeTransport* chat = nullptr; ///< El del último cliente.
-    int clients = 0;
-    std::vector<chatbot::HttpResponse> search_responses{chatbot_test::tavily_response(
-        nlohmann::json::array({{{"title", "T"}, {"url", "https://ejemplo.mx"}, {"content", "c"}}}))};
-    std::optional<std::string> download_base;
     std::vector<Session::Finished> finished; ///< Cada on_finished.
     std::unique_ptr<Session> session; ///< Al último: se destruye primero (join).
 
-    [[nodiscard]] std::string path(const char* name) const { return (dir.path() / name).string(); }
-    [[nodiscard]] std::string config_path() const { return path("config.json"); }
-    [[nodiscard]] std::string credentials_path() const { return path("credentials.json"); }
-
-    /// Como main: load_config con allow_missing_key_and_model.
-    [[nodiscard]] chatbot::Config load() const {
-        chatbot::ConfigOptions options;
-        options.env = env;
-        options.path = [this] { return std::optional<std::string>{config_path()}; };
-        options.credentials_path = [this] {
-            return std::optional<std::string>{credentials_path()};
-        };
-        options.allow_missing_key_and_model = true;
-        const chatbot::Result<chatbot::Config> config = chatbot::load_config(options);
-        REQUIRE(config.is_ok());
-        return config.value();
-    }
-
     void start(chatbot::Config config = chatbot_test::test_config()) {
-        chatbot::cli::SessionEnvironment environment;
-        environment.config_path = config_path();
-        environment.credentials_path = credentials_path();
-        environment.data_dir = path("conversations");
-        environment.env = [this](std::string_view name) { return env(name); };
-        environment.make_client = [this](const chatbot::Config& complete) {
-            ++clients;
-            std::unique_ptr<chatbot::Transport> transport;
-            if (chat_transport) {
-                transport = chat_transport();
-            } else {
-                auto fake = std::make_unique<chatbot_test::FakeTransport>();
-                fake->responses = responses;
-                chat = fake.get();
-                transport = std::move(fake);
-            }
-            return std::make_unique<chatbot::ChatClient>(
-                complete, std::move(transport), std::make_unique<chatbot_test::FakeSleeper>());
-        };
-        environment.make_search = [this](const std::string& key) {
-            auto fake = std::make_unique<chatbot_test::FakeTransport>();
-            fake->responses = search_responses;
-            return std::make_shared<chatbot::TavilySearch>(key, std::move(fake));
-        };
-        environment.now = [] { return kNow; };
-        environment.download_base = [this] { return download_base; };
         session = std::make_unique<Session>(
-            std::move(environment), std::move(config),
+            environment(), std::move(config),
             [this](chatbot::cli::RequestRunner::Task task) { queue.post(std::move(task)); },
             [this](Session::Finished done) { finished.push_back(std::move(done)); });
     }
@@ -145,17 +75,6 @@ struct Harness {
         REQUIRE(session->submit(text).type == Type::Started);
         REQUIRE(finish());
         return finished.back().saved;
-    }
-
-    /// Cada cliente nuevo usa un BlockingTransport que se queda esperando
-    /// después de un delta; blocking apunta al último.
-    void block(BlockingTransport*& blocking) {
-        chat_transport = [&blocking] {
-            auto transport = std::make_unique<BlockingTransport>(BlockingTransport::Mode::Block);
-            transport->first_chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"parcial\"}}]}\n\n";
-            blocking = transport.get();
-            return transport;
-        };
     }
 
     [[nodiscard]] const chatbot::cli::Entry& last_entry() const {
