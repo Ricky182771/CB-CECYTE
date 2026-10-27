@@ -43,7 +43,7 @@ Lee la guía correspondiente antes de hacer cambios:
 
 ## 3. Alcance por hitos
 
-En curso: reorganizar `AGENTS.md` en la rama `docs/agents-slim`, desde `main` en `6da5d28` (después del PR #37, R1). Solo documentación. La tabla completa de hitos está en `guias/HISTORIAL.md`.
+El alcance de cada PR lo fija su prompt. Todo lo de hitos posteriores está fuera de alcance del hito actual. No lo adelantes. La tabla completa de hitos está en `guias/HISTORIAL.md`.
 
 Detalle: guias/HISTORIAL.md
 
@@ -120,7 +120,7 @@ Detalle: guias/06-nucleo.md
 - **Entorno > archivo > valores por defecto.** Sin modelo por defecto; archivo ausente no es error. Keys solo en entorno o `credentials.json` por proveedor, **nunca `config.json`**; Tavily usa `search:tavily`.
 - POSIX: credenciales 0600, carpeta 0700; permisos abiertos son error `Config`. Windows usa ACL del perfil, sin comprobaciones POSIX. Guardado atómico, conservando claves ajenas y orden.
 - Rutas normales XDG o las del usuario; Windows usa AppData e ignora `HOME`/`XDG_*`. `CHAT_DATA_DIR` y `CHAT_DOWNLOAD_DIR` prevalecen.
-- Portable: `chatbot.portable` junto al ejecutable lleva los datos a `datos/`, gana sobre rutas del usuario, no sobre `CHAT_*`; descargas iguales. Probar escritura al arrancar: si falla, error y salida 1, nunca volver en silencio a la carpeta del usuario.
+- Portable: `chatbot.portable` junto al ejecutable lleva los datos a `datos/`, gana sobre rutas del usuario, no sobre `CHAT_*`; descargas iguales. Probar escritura al arrancar: si falla, la TUI sale con el error `Config` y código 1, y `chatbot-rpc` responde `StartupFailed` (-32011) en `initialize`, sin salir; nunca volver en silencio a la carpeta del usuario.
 - `system_prompt` global, sin entorno ni copia por conversación: ausente usa el predeterminado, vacío omite `System`. UTF-8, máximo 8000 bytes, sin controles salvo salto/tabulador; guardar aplica desde el siguiente mensaje.
 - Apariencia sin entorno; valores desconocidos usan predeterminados con aviso. Símbolos siguen configurables con `NO_COLOR`.
 - Conversaciones versión 1: al menos un par user/assistant alternado completo, nunca `system` persistido. Guardar tras cada par, atómicamente, carpeta nueva 0700 y archivo 0600. Archivo ilegible o de versión desconocida se lista, nunca se sobrescribe ni borra. Cargar usa sistema vigente, búsqueda con nonce nuevo y fecha guardada.
