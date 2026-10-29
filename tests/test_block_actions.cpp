@@ -126,6 +126,14 @@ TEST_CASE("copy_block y save_block avisan si el bloque está incompleto", "[bloc
               ". Ojo: el bloque está incompleto (la respuesta se canceló).");
 }
 
+TEST_CASE("copied_message: el aviso de la GUI, sin programa", "[block_actions]") {
+    CHECK(chatbot::cli::copied_message(block(3, "cpp", "int a;\nint b;")) ==
+          "Copiado el bloque #3 (cpp, 2 líneas).");
+    CHECK(chatbot::cli::copied_message(block(1, "", "x", false)) ==
+          "Copiado el bloque #1 (1 línea). Ojo: el bloque está incompleto (la respuesta se "
+          "canceló).");
+}
+
 TEST_CASE("save_block: nombre por defecto, propio, inválido y carpeta imposible",
           "[block_actions]") {
     const chatbot_test::ScopedTempDir dir;
@@ -149,15 +157,22 @@ TEST_CASE("save_block: nombre por defecto, propio, inválido y carpeta imposible
 
     result = chatbot::cli::save_block(code, "hola", dir.string(), "");
     CHECK(result.message == "Guardado en " + native_separators(dir.string() + "/chatbot/hola.py"));
+    // path es la ruta completa, aunque el aviso la abrevie con ~.
+    CHECK(result.path == native_separators(dir.string() + "/chatbot/hola.py"));
+    result = chatbot::cli::save_block(code, "corto", dir.string(), dir.string(),
+                                      chatbot::cli::Wording::Short);
+    CHECK(result.path == native_separators(dir.string() + "/chatbot/corto.py"));
 
     result = chatbot::cli::save_block(code, "../x", dir.string(), "");
     CHECK(result.error);
+    CHECK_FALSE(result.path.has_value());
     CHECK_FALSE(fs::exists(dir.path() / "x.py"));
 
     std::ofstream(dir.path() / "archivo") << "no soy carpeta";
     result = chatbot::cli::save_block(code, "", (dir.path() / "archivo").string(), "");
     CHECK(result.error);
     CHECK(result.message.find("No se pudo crear") != std::string::npos);
+    CHECK_FALSE(result.path.has_value());
 }
 
 TEST_CASE("export_conversation: sin pares es un error; con pares escribe el Markdown",
@@ -168,6 +183,7 @@ TEST_CASE("export_conversation: sin pares es un error; con pares escribe el Mark
     ActionResult result = chatbot::cli::export_conversation(conversation, now, dir.string(), "");
     CHECK(result.error);
     CHECK(result.message == "Todavía no hay respuestas que exportar.");
+    CHECK_FALSE(result.path.has_value());
     CHECK_FALSE(fs::exists(dir.path() / "chatbot"));
 
     REQUIRE(conversation.submit("hola").has_value());
@@ -176,6 +192,8 @@ TEST_CASE("export_conversation: sin pares es un error; con pares escribe el Mark
     conversation.set_identity("20260101-000000-abcdef", "2026-01-01T00:00:00Z");
     result = chatbot::cli::export_conversation(conversation, now, dir.string(), dir.string());
     CHECK_FALSE(result.error);
+    CHECK(result.path ==
+          native_separators(dir.string() + "/chatbot/conversacion-20260101-000000-abcdef.md"));
     if (chatbot::current_os() == chatbot::Os::Posix) {
         CHECK(result.message == "Conversación exportada a ~/chatbot/conversacion-20260101-000000-"
                                 "abcdef.md");
