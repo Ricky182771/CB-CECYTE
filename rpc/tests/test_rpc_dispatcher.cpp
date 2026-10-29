@@ -6,20 +6,26 @@
 #include "dispatcher.h"
 #include "protocol.h"
 
+#include "code_blocks.h"
 #include "conversation.h"
+#include "conversation_store.h"
+#include "downloads.h"
 #include "search_settings.h"
 #include "session.h"
+#include "sidebar.h"
 
 #include "blocking_transport.hpp"
 #include "fake_transport.hpp"
 #include "session_fakes.hpp"
 
+#include "chatbot/platform.h"
 #include "chatbot/search_context.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -711,12 +717,415 @@ TEST_CASE("RPC: ciclo de vida y errores del protocolo", "[rpc]") {
         const std::vector<Json> got = rpc.take();
         CHECK(summaries(got) == std::vector<std::string>{"#2 result"});
     }
-    SECTION("un método de R2 en adelante: MethodNotFound; el id puede ser cadena") {
+    SECTION("un método de R3 en adelante: MethodNotFound; el id puede ser cadena") {
         rpc.initialize();
-        rpc.call("a", "conversations.list");
+        rpc.call("a", "models.list");
         rpc.call("b", "settings.provider.get");
         const std::vector<Json> got = rpc.take();
         CHECK(summaries(got) ==
               std::vector<std::string>{R"(#"a" error -32601)", R"(#"b" error -32601)"});
+    }
+}
+
+namespace {
+
+/// Respuesta con un bloque de código ("int x;").
+chatbot::HttpResponse with_block() { return stream_of({"Mira:\\n\\n```cpp\\nint x;\\n```"}); }
+
+/// Un chat.send que termina bien; descarta lo que sale.
+void exchange(Rpc& rpc, const Json& id, const std::string& handle, const std::string& text) {
+    rpc.call(id, "chat.send", {{"conversation", handle}, {"text", text}});
+    REQUIRE(rpc.finish());
+    (void)rpc.take();
+}
+
+/// Una sola respuesta: su result (o su error).
+Json only(Rpc& rpc) {
+    const std::vector<Json> got = rpc.take();
+    REQUIRE(got.size() == 1);
+    return got[0];
+}
+
+/// El error de JSON-RPC con data.message.
+void check_error(const Json& message, int code, const std::string& text) {
+    CHECK(message["error"]["code"] == code);
+    CHECK(message["error"]["data"]["message"] == text);
+}
+
+} // namespace
+
+TEST_CASE("RPC: conversations.list, conversation.open y conversation.delete", "[rpc]") {
+    Rpc rpc;
+    rpc.config.model = "modelo-a";
+    rpc.initialize();
+    exchange(rpc, 2, "c1", "uno");
+    rpc.call(3, "conversation.new");
+    exchange(rpc, 4, "c2", "dos");
+    const std::string unreadable = "20260101-000000-abcdef";
+    std::ofstream{rpc.dir.path() / "conversations" / (unreadable + ".json")} << "{no es json";
+
+    // Otro proceso con otro modelo y la misma carpeta.
+    rpc.config.model = "modelo-b";
+    rpc.initialize();
+    rpc.call(2, "conversations.list");
+    Json list = only(rpc)["result"]["items"];
+    REQUIRE(list.size() == 3);
+    const chatbot::cli::ConversationStore store{rpc.path("conversations")};
+    const std::vector<chatbot::cli::ConversationSummary> summaries_now = store.list();
+    const chatbot::cli::CalendarDay today =
+        chatbot::cli::local_day(chatbot_test::kSessionNow).value();
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        CHECK(list[i]["id"] == summaries_now[i].id);
+        CHECK(list[i]["group"] == chatbot::cli::group_for(summaries_now[i], today));
+        CHECK(list[i]["open_as"].is_null()); // La abierta es nueva y no está guardada.
+    }
+    // Las dos se guardan en el mismo segundo: su orden no es fijo.
+    const std::size_t at_one = list[0]["title"] == "uno" ? 0 : 1;
+    CHECK(list[at_one]["title"] == "uno");
+    CHECK(list[1 - at_one]["title"] == "dos");
+    CHECK(list[0]["message_count"] == 2);
+    CHECK(list[0]["last_model"] == "modelo-a");
+    CHECK(list[0]["readable"] == true);
+    CHECK(list[0]["error"] == "");
+    CHECK(list[2]["id"] == unreadable);
+    CHECK(list[2]["readable"] == false);
+    CHECK(list[2]["group"] == "Sin fecha");
+    const std::string one = list[at_one]["id"];
+    const std::string two = list[1 - at_one]["id"];
+
+    // Abrir otra: closed antes de la respuesta, con el aviso del modelo.
+    rpc.call(3, "conversation.open", {{"id", one}});
+    std::vector<Json> got = rpc.take();
+    CHECK(summaries(got) ==
+          std::vector<std::string>{"conversation.closed c1 replaced", "#3 result"});
+    const Json opened = got[1]["result"];
+    CHECK(opened["conversation"] == "c2");
+    CHECK(opened["rev"] == 0);
+    CHECK(opened["id"] == one);
+    CHECK(opened["title"] == "uno");
+    CHECK(opened["entries"].back()["kind"] == "notice");
+    CHECK(opened["entries"].back()["text"] ==
+          "Esta conversación usó modelo-a; se continúa con modelo-b.");
+    rpc.call(4, "conversations.list");
+    list = only(rpc)["result"]["items"];
+    for (const Json& item : list) {
+        CHECK(item["open_as"] == (item["id"] == one ? Json("c2") : Json(nullptr)));
+    }
+
+    // La misma: el mismo handle, sin recargar (el aviso sigue una sola vez).
+    rpc.call(5, "conversation.open", {{"id", one}});
+    got = rpc.take();
+    CHECK(summaries(got) == std::vector<std::string>{"#5 result"});
+    CHECK(got[0]["result"] == opened);
+
+    // Ilegible: -32007 con el error de load, y la abierta no cambia.
+    rpc.call(6, "conversation.open", {{"id", unreadable}});
+    check_error(only(rpc), -32007, store.load(unreadable).error);
+    rpc.call(7, "app.status");
+    CHECK(only(rpc)["result"]["conversation"] == "c2");
+
+    // Borrar otra: sin closed y replaced_by null.
+    rpc.call(8, "conversation.delete", {{"id", two}});
+    got = rpc.take();
+    CHECK(summaries(got) == std::vector<std::string>{"#8 result", "conversations.changed"});
+    CHECK(got[0]["result"].dump() == R"({"replaced_by":null})");
+
+    // Borrar la abierta: closed, y replaced_by trae la nueva.
+    rpc.call(9, "conversation.delete", {{"id", one}});
+    got = rpc.take();
+    CHECK(summaries(got) == std::vector<std::string>{"conversation.closed c2 deleted", "#9 result",
+                                                     "conversations.changed"});
+    CHECK(got[1]["result"]["replaced_by"].dump() ==
+          R"({"conversation":"c3","rev":0,"id":null,"title":"","created_at":null,)"
+          R"("last_model":"","phase":"idle","entries":[]})");
+
+    // Ilegible: nunca se borra.
+    rpc.call(10, "conversation.delete", {{"id", unreadable}});
+    const Json error = only(rpc);
+    CHECK(error["error"]["code"] == -32007);
+    CHECK(std::filesystem::exists(rpc.dir.path() / "conversations" / (unreadable + ".json")));
+    rpc.call(11, "conversations.list");
+    CHECK(only(rpc)["result"]["items"].size() == 1);
+}
+
+TEST_CASE("RPC: abrir y borrar con una respuesta en curso → Busy", "[rpc]") {
+    Rpc rpc;
+    BlockingTransport* blocking = nullptr;
+    rpc.block(blocking);
+    rpc.initialize();
+    rpc.call(2, "chat.send", {{"conversation", "c1"}, {"text", "hola"}});
+    (void)rpc.take();
+    rpc.call(3, "conversation.open", {{"id", "20260101-000000-abcdef"}});
+    rpc.call(4, "conversation.delete", {{"id", "20260101-000000-abcdef"}});
+    const std::vector<Json> got = rpc.take();
+    REQUIRE(got.size() == 2);
+    for (const Json& message : got) {
+        check_error(message, -32002, std::string{chatbot::cli::kWaitOrCancel});
+    }
+    rpc.call(5, "chat.cancel", {{"conversation", "c1"}});
+    REQUIRE(rpc.finish());
+}
+
+TEST_CASE("RPC: commands.list con y sin configuración", "[rpc]") {
+    Rpc rpc;
+    SECTION("sin configuración") {
+        rpc.config.model.clear();
+        rpc.initialize();
+        rpc.call(2, "commands.list", {{"conversation", "c1"}});
+        const Json commands = only(rpc)["result"]["commands"];
+        REQUIRE(commands.size() == chatbot::cli::kCommands.size());
+        CHECK(commands[0].dump() ==
+              R"({"name":"/buscar","arguments":"<consulta>",)"
+              R"("description":"Busca en la web y responde con fuentes citadas",)"
+              R"("needs_argument":true,"available":false,)"
+              R"x("note":"falta configurar el proveedor (F2)"})x");
+        CHECK(commands[3]["note"] == "la conversación está vacía");
+    }
+    SECTION("con configuración, bloques y pares") {
+        rpc.responses = {with_block()};
+        rpc.initialize();
+        exchange(rpc, 2, "c1", "un bloque");
+        rpc.call(3, "commands.list", {{"conversation", "c1"}});
+        const Json commands = only(rpc)["result"]["commands"];
+        CHECK(commands[0]["note"] == "falta la key de búsqueda (F2)");
+        for (std::size_t i = 1; i < commands.size(); ++i) {
+            CHECK(commands[i]["available"] == true);
+            CHECK(commands[i]["note"] == "");
+        }
+        rpc.call(4, "commands.list", {{"conversation", "c9"}});
+        CHECK(only(rpc)["error"]["code"] == -32003);
+    }
+}
+
+TEST_CASE("RPC: commands.run", "[rpc]") {
+    Rpc rpc;
+    rpc.responses = {with_block()};
+    const auto run = [&rpc](const Json& id, const std::string& text) {
+        rpc.call(id, "commands.run", {{"conversation", "c1"}, {"text", text}});
+    };
+    const auto check_status = [&rpc](const std::string& text) {
+        CHECK(only(rpc)["result"] ==
+              Json({{"kind", "status"}, {"message", text}, {"clear", false}}));
+    };
+    const std::string no_dir{chatbot::cli::no_download_dir_message(chatbot::current_os())};
+
+    SECTION("sin configuración: el texto para el modelo da -32004; lo local responde") {
+        rpc.config.model.clear();
+        rpc.initialize();
+        run(2, "hola");
+        check_error(only(rpc), -32004, std::string{chatbot::cli::kSetupNotice});
+        run(3, "/buscar clima");
+        check_error(only(rpc), -32004, std::string{chatbot::cli::kSetupNotice});
+        run(4, "/copiar");
+        check_status("No hay bloques de código en la conversación.");
+        run(5, "/exportar");
+        check_status("Todavía no hay respuestas que exportar.");
+    }
+    SECTION("errores del texto al modelo, como chat.send") {
+        rpc.initialize();
+        run(2, "   ");
+        check_error(only(rpc), -32005, "El mensaje está vacío.");
+        run(3, "/buscar   ");
+        check_error(only(rpc), -32005, std::string{chatbot::cli::kSearchUsage});
+        run(4, "/buscar clima");
+        check_error(only(rpc), -32005, std::string{chatbot::cli::kMissingSearchKey});
+    }
+    SECTION("message, status, copy, save y export") {
+        rpc.initialize();
+        run(2, "/exportar");
+        check_status("Todavía no hay respuestas que exportar.");
+        run(3, "un bloque");
+        std::vector<Json> got = rpc.take();
+        REQUIRE_FALSE(got.empty());
+        CHECK(got[0]["result"].dump() == R"({"kind":"message","clear":true})");
+        CHECK(summary(got[1]) == "conversation.entry_added 0 user");
+        REQUIRE(rpc.finish());
+        (void)rpc.take();
+
+        // Cada status de la TUI, con su texto.
+        const std::vector<chatbot::cli::CodeBlock> blocks = {[] {
+            chatbot::cli::CodeBlock block;
+            block.number = 1;
+            return block;
+        }()};
+        run(4, "/copiar tres");
+        check_status(std::string{chatbot::cli::kCopyUsage});
+        run(5, "/guardar suma.cpp");
+        check_status(std::string{chatbot::cli::kSaveUsage});
+        run(6, "/exportar todo");
+        check_status(std::string{chatbot::cli::kExportUsage});
+        run(7, "/copiar 2");
+        check_status(chatbot::cli::choose_code_block(blocks, 2).problem);
+        run(8, "/guardar 1 ../x");
+        check_status(*chatbot::cli::validate_file_name("../x"));
+        run(9, "/guardar 1");
+        check_status(no_dir);
+        run(10, "/exportar");
+        check_status(no_dir);
+
+        // copy: el código y el aviso, que también va al historial.
+        run(11, "/copiar");
+        got = rpc.take();
+        CHECK(summaries(got) == std::vector<std::string>{"#11 result",
+                                                         "conversation.entry_added 2 notice"});
+        CHECK(got[0]["result"].dump() ==
+              R"({"kind":"copy","number":1,"language":"cpp","text":"int x;\n",)"
+              R"("message":"Copiado el bloque #1 (cpp, 1 línea).","clear":true})");
+        CHECK(got[1]["params"]["entry"]["text"] == "Copiado el bloque #1 (cpp, 1 línea).");
+
+        // save: el aviso al historial (entry_added) y la ruta completa.
+        rpc.download_base = rpc.path("descargas");
+        std::filesystem::create_directory(*rpc.download_base);
+        run(12, "/guardar 1 x.cpp");
+        got = rpc.take();
+        CHECK(summaries(got) == std::vector<std::string>{"#12 result",
+                                                         "conversation.entry_added 3 notice"});
+        const Json& saved = got[0]["result"];
+        CHECK(saved["kind"] == "save");
+        CHECK(saved["path"] == (rpc.dir.path() / "descargas" / "chatbot" / "x.cpp").string());
+        CHECK(saved["error"] == false);
+        CHECK(saved["clear"] == true);
+        CHECK(saved["message"] == got[1]["params"]["entry"]["text"]);
+
+        // save que falla al escribir: error al historial, path null, sin vaciar.
+        std::ofstream{rpc.dir.path() / "archivo"} << "x";
+        rpc.download_base = (rpc.dir.path() / "archivo" / "sub").string();
+        run(13, "/guardar 1 y.cpp");
+        got = rpc.take();
+        CHECK(summaries(got) == std::vector<std::string>{"#13 result",
+                                                         "conversation.entry_added 4 error"});
+        CHECK(got[0]["result"]["kind"] == "save");
+        CHECK(got[0]["result"]["path"].is_null());
+        CHECK(got[0]["result"]["error"] == true);
+        CHECK(got[0]["result"]["clear"] == false);
+        rpc.download_base = rpc.path("descargas");
+
+        run(14, "/exportar");
+        got = rpc.take();
+        CHECK(summaries(got) == std::vector<std::string>{"#14 result",
+                                                         "conversation.entry_added 5 notice"});
+        CHECK(got[0]["result"]["kind"] == "export");
+        CHECK(got[0]["result"]["error"] == false);
+        CHECK(got[0]["result"]["clear"] == true);
+        CHECK(got[0]["result"]["path"].get<std::string>().find("conversacion-") !=
+              std::string::npos);
+    }
+    SECTION("search") {
+        rpc.env.values["CHAT_SEARCH_API_KEY"] = chatbot_test::kSearchKey;
+        rpc.initialize();
+        run(2, "/buscar clima");
+        const std::vector<Json> got = rpc.take();
+        REQUIRE_FALSE(got.empty());
+        CHECK(got[0]["result"].dump() == R"({"kind":"search","clear":true})");
+        REQUIRE(rpc.finish());
+    }
+    SECTION("con una respuesta en curso") {
+        BlockingTransport* blocking = nullptr;
+        rpc.block(blocking);
+        rpc.initialize();
+        run(2, "hola");
+        (void)rpc.take();
+        run(3, "otra");
+        check_error(only(rpc), -32002, std::string{chatbot::cli::kWaitOrCancel});
+        run(4, "/copiar");
+        check_status("Espera a que termine la respuesta");
+        run(5, "/exportar");
+        check_status("Espera a que termine la respuesta");
+        rpc.call(6, "chat.cancel", {{"conversation", "c1"}});
+        REQUIRE(rpc.finish());
+    }
+}
+
+TEST_CASE("RPC: blocks.list, blocks.get, blocks.save y conversation.export", "[rpc]") {
+    Rpc rpc;
+    rpc.responses = {with_block()};
+    SECTION("sin respuesta en curso; los botones no emiten eventos") {
+        rpc.initialize();
+        rpc.call(2, "conversation.export", {{"conversation", "c1"}});
+        check_error(only(rpc), -32005, "Todavía no hay respuestas que exportar.");
+        rpc.call(3, "blocks.list", {{"conversation", "c1"}});
+        CHECK(only(rpc)["result"].dump() == R"({"blocks":[]})");
+        exchange(rpc, 4, "c1", "un bloque");
+
+        rpc.call(5, "blocks.list", {{"conversation", "c1"}});
+        CHECK(only(rpc)["result"].dump() ==
+              R"({"blocks":[{"number":1,"entry":1,"language":"cpp","lines":1,)"
+              R"("complete":true,"reason":"none"}]})");
+        rpc.call(6, "blocks.get", {{"conversation", "c1"}, {"number", 1}});
+        CHECK(only(rpc)["result"].dump() ==
+              R"({"code":"int x;\n","language":"cpp","complete":true,"reason":"none"})");
+        rpc.call(7, "blocks.get", {{"conversation", "c1"}, {"number", 2}});
+        check_error(only(rpc), -32005, "No existe el bloque #2: solo hay el #1.");
+        rpc.call(8, "blocks.get", {{"conversation", "c1"}, {"number", 1}, {"file_name", "x"}});
+        CHECK(only(rpc)["error"]["code"] == -32602);
+        rpc.call(9, "blocks.save", {{"conversation", "c1"}, {"number", 4294967297LL}});
+        CHECK(only(rpc)["error"].dump() ==
+              R"({"code":-32602,"message":"Parámetros inválidos.","data":{"fields":["number"]}})");
+
+        const std::string no_dir{chatbot::cli::no_download_dir_message(chatbot::current_os())};
+        rpc.call(10, "blocks.save", {{"conversation", "c1"}, {"number", 1}});
+        check_error(only(rpc), -32007, no_dir);
+        rpc.call(11, "conversation.export", {{"conversation", "c1"}});
+        check_error(only(rpc), -32007, no_dir);
+
+        rpc.download_base = rpc.path("descargas");
+        std::filesystem::create_directory(*rpc.download_base);
+        const std::filesystem::path folder = rpc.dir.path() / "descargas" / "chatbot";
+        rpc.call(12, "blocks.save", {{"conversation", "c1"}, {"number", 1}});
+        Json got = only(rpc); // Sin entry_added: no toca el historial.
+        CHECK(got["result"]["path"] == (folder / "bloque-1.cpp").string());
+        CHECK(got["result"]["message"] ==
+              "Guardado en " + (folder / "bloque-1.cpp").string());
+        rpc.call(13, "blocks.save",
+                 {{"conversation", "c1"}, {"number", 1}, {"file_name", "suma.cpp"}});
+        CHECK(only(rpc)["result"]["path"] == (folder / "suma.cpp").string());
+        rpc.call(14, "blocks.save",
+                 {{"conversation", "c1"}, {"number", 1}, {"file_name", "../x"}});
+        check_error(only(rpc), -32005, *chatbot::cli::validate_file_name("../x"));
+        rpc.call(15, "blocks.save", {{"conversation", "c1"}, {"number", 9}});
+        check_error(only(rpc), -32005, "No existe el bloque #9: solo hay el #1.");
+
+        rpc.call(16, "conversation.export", {{"conversation", "c1"}});
+        got = only(rpc);
+        const std::string path = got["result"]["path"];
+        CHECK(std::filesystem::exists(path));
+        CHECK(got["result"]["message"] == "Conversación exportada a " + path);
+        rpc.call(17, "conversation.get", {{"conversation", "c1"}});
+        CHECK(only(rpc)["result"]["entries"].size() == 2);
+
+        std::ofstream{rpc.dir.path() / "archivo"} << "x";
+        rpc.download_base = (rpc.dir.path() / "archivo" / "sub").string();
+        rpc.call(18, "blocks.save", {{"conversation", "c1"}, {"number", 1}});
+        CHECK(only(rpc)["error"]["code"] == -32007);
+    }
+    SECTION("con una respuesta en curso: el bloque a medias, con su aviso") {
+        BlockingTransport* blocking = nullptr;
+        rpc.chat_transport = [&blocking] {
+            auto transport = std::make_unique<BlockingTransport>(BlockingTransport::Mode::Block);
+            transport->first_chunk =
+                "data: {\"choices\":[{\"delta\":{\"content\":\"```py\\nprint(1)\\n\"}}]}\n\n";
+            blocking = transport.get();
+            return transport;
+        };
+        rpc.download_base = rpc.path("descargas");
+        std::filesystem::create_directory(*rpc.download_base);
+        rpc.initialize();
+        rpc.call(2, "chat.send", {{"conversation", "c1"}, {"text", "hola"}});
+        (void)rpc.take();
+        REQUIRE(rpc.run_until_method("conversation.entry_added"));
+        (void)rpc.take();
+        rpc.call(3, "blocks.list", {{"conversation", "c1"}});
+        CHECK(only(rpc)["result"].dump() ==
+              R"({"blocks":[{"number":1,"entry":1,"language":"py","lines":1,)"
+              R"("complete":false,"reason":"in_progress"}]})");
+        rpc.call(4, "blocks.get", {{"conversation", "c1"}, {"number", 1}});
+        CHECK(only(rpc)["result"]["reason"] == "in_progress");
+        rpc.call(5, "blocks.save", {{"conversation", "c1"}, {"number", 1}});
+        const Json got = only(rpc);
+        CHECK(got["result"]["message"].get<std::string>().find(
+                  "Ojo: el bloque está incompleto (la respuesta aún no termina).") !=
+              std::string::npos);
+        rpc.call(6, "chat.cancel", {{"conversation", "c1"}});
+        REQUIRE(rpc.finish());
     }
 }

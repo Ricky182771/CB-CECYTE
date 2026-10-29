@@ -111,6 +111,7 @@ const CodeBlockIndex& Session::code_blocks() {
 SubmitOutcome Session::submit(std::string_view text) {
     using Type = ParsedCommand::Type;
     const ParsedCommand command = parse_command(text);
+    SubmitOutcome result;
     switch (command.type) {
     case Type::Copy:
     case Type::CopyUsage:
@@ -119,28 +120,39 @@ SubmitOutcome Session::submit(std::string_view text) {
     case Type::Export:
     case Type::ExportUsage:
         // No necesitan modelo: funcionan aunque falte la configuración.
-        return run_local_command(command);
+        result = run_local_command(command);
+        result.command = command.type;
+        return result;
     default:
         break;
     }
     // /buscar sin consulta es una búsqueda vacía: send da Empty en el mismo
     // orden que antes (después de la configuración y la respuesta en curso).
     const bool search = command.type == Type::Search || command.type == Type::SearchEmpty;
-    switch (send(text, search ? std::optional<std::string>{command.text} : std::nullopt)) {
+    const SendResult sent =
+        send(text, search ? std::optional<std::string>{command.text} : std::nullopt);
+    switch (sent) {
     case SendResult::Sent:
-        return outcome(SubmitOutcome::Type::Started, {}, true);
+        result = outcome(SubmitOutcome::Type::Started, {}, true);
+        break;
     case SendResult::NotConfigured:
-        return outcome(SubmitOutcome::Type::Status, std::string{kSetupNotice});
+        result = outcome(SubmitOutcome::Type::Status, std::string{kSetupNotice});
+        break;
     case SendResult::Busy:
-        return {}; // Enter no hace nada mientras hay una respuesta en curso.
+        break; // Enter no hace nada mientras hay una respuesta en curso.
     case SendResult::Empty:
         // /buscar sin consulta: el uso, y el texto se queda en la caja.
-        return search ? outcome(SubmitOutcome::Type::Status, std::string{kSearchUsage})
-                      : SubmitOutcome{}; // Caja vacía.
+        if (search) {
+            result = outcome(SubmitOutcome::Type::Status, std::string{kSearchUsage});
+        }
+        break; // Caja vacía: Ignored.
     case SendResult::MissingSearchKey:
-        return outcome(SubmitOutcome::Type::Status, std::string{kMissingSearchKey});
+        result = outcome(SubmitOutcome::Type::Status, std::string{kMissingSearchKey});
+        break;
     }
-    return {};
+    result.command = command.type;
+    result.sent = sent;
+    return result;
 }
 
 SendResult Session::send(std::string_view text, std::optional<std::string> search) {
@@ -210,12 +222,17 @@ SubmitOutcome Session::run_local_command(const ParsedCommand& command) {
     const auto status = [](std::string text) {
         return outcome(SubmitOutcome::Type::Status, std::move(text));
     };
-    // El resultado va al historial; la caja se vacía si salió bien.
-    const auto done = [this](const ActionResult& result) {
-        report(result);
-        return outcome(SubmitOutcome::Type::Done, {}, !result.error);
+    // Lo que no se pudo ni intentar va a la línea de estado; el resultado,
+    // al historial, y la caja se vacía si salió bien.
+    const auto done = [this, &status](FileOutcome file) {
+        if (file.status != FileOutcome::Status::Attempted) {
+            return status(std::move(file.result.message));
+        }
+        report(file.result);
+        SubmitOutcome result = outcome(SubmitOutcome::Type::Done, {}, !file.result.error);
+        result.action = std::move(file.result);
+        return result;
     };
-    const std::string no_download_dir{no_download_dir_message(current_os())};
     if (busy()) {
         return status("Espera a que termine la respuesta");
     }
@@ -226,16 +243,10 @@ SubmitOutcome Session::run_local_command(const ParsedCommand& command) {
         return status(std::string{kSaveUsage});
     case Type::ExportUsage:
         return status(std::string{kExportUsage});
-    case Type::Export: {
-        if (!conversation_.has_turns()) {
-            return status("Todavía no hay respuestas que exportar.");
-        }
-        const std::optional<std::string> base = env_.download_base();
-        if (!base.has_value()) {
-            return status(no_download_dir);
-        }
-        return done(export_conversation(conversation_, env_.now(), *base, env_.home));
-    }
+    case Type::Export:
+        return done(export_to_downloads());
+    case Type::Save:
+        return done(save_code_block(command.block, command.file_name));
     default:
         break;
     }
@@ -243,22 +254,42 @@ SubmitOutcome Session::run_local_command(const ParsedCommand& command) {
     if (choice.block == nullptr) {
         return status(choice.problem);
     }
-    if (command.type == Type::Save) {
-        if (!command.file_name.empty()) {
-            if (const std::optional<std::string> reason = validate_file_name(command.file_name)) {
-                return status(*reason);
-            }
-        }
-        const std::optional<std::string> base = env_.download_base();
-        if (!base.has_value()) {
-            return status(no_download_dir);
-        }
-        return done(save_block(*choice.block, command.file_name, *base, env_.home));
-    }
     // Copy: la caja se vacía aunque no se haya podido copiar.
     SubmitOutcome copy = outcome(SubmitOutcome::Type::Copy, {}, true);
     copy.block = *choice.block;
     return copy;
+}
+
+FileOutcome Session::save_code_block(std::optional<int> number, std::string_view file_name) {
+    const CodeBlockChoice choice = choose_code_block(code_blocks().blocks(), number);
+    if (choice.block == nullptr) {
+        return {FileOutcome::Status::Invalid, {choice.problem, true}};
+    }
+    if (!file_name.empty()) {
+        if (std::optional<std::string> reason = validate_file_name(file_name)) {
+            return {FileOutcome::Status::Invalid, {std::move(*reason), true}};
+        }
+    }
+    const std::optional<std::string> base = env_.download_base();
+    if (!base.has_value()) {
+        return {FileOutcome::Status::NoFolder,
+                {std::string{no_download_dir_message(current_os())}, true}};
+    }
+    return {FileOutcome::Status::Attempted,
+            save_block(*choice.block, file_name, *base, env_.home)};
+}
+
+FileOutcome Session::export_to_downloads() {
+    if (!conversation_.has_turns()) {
+        return {FileOutcome::Status::Invalid, {"Todavía no hay respuestas que exportar.", true}};
+    }
+    const std::optional<std::string> base = env_.download_base();
+    if (!base.has_value()) {
+        return {FileOutcome::Status::NoFolder,
+                {std::string{no_download_dir_message(current_os())}, true}};
+    }
+    return {FileOutcome::Status::Attempted,
+            export_conversation(conversation_, env_.now(), *base, env_.home)};
 }
 
 void Session::cancel() {

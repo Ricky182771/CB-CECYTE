@@ -113,9 +113,14 @@ TEST_CASE("Session envía, guarda el par y avisa al terminar", "[session]") {
     h.start();
     REQUIRE(h.session->configured());
     CHECK(h.session->model() == "modelo-de-prueba");
+    const SubmitOutcome empty = h.session->submit("   ");
+    CHECK(empty.type == Type::Ignored);
+    CHECK(empty.sent == chatbot::cli::SendResult::Empty);
+    CHECK(empty.command == chatbot::cli::ParsedCommand::Type::Normal);
     const SubmitOutcome sent = h.session->submit("  hola  ");
     CHECK(sent.type == Type::Started);
     CHECK(sent.clear);
+    CHECK(sent.sent == chatbot::cli::SendResult::Sent);
     CHECK(h.session->busy());
     REQUIRE(h.finish());
     REQUIRE(h.finished.size() == 1);
@@ -216,7 +221,9 @@ TEST_CASE("Session con una respuesta en curso", "[session]") {
     h.start();
     REQUIRE(h.session->submit("hola").type == Type::Started);
     REQUIRE(blocking->started.wait_for(kThreadTimeout));
-    CHECK(h.session->submit("otra").type == Type::Ignored);
+    const SubmitOutcome busy = h.session->submit("otra");
+    CHECK(busy.type == Type::Ignored);
+    CHECK(busy.sent == chatbot::cli::SendResult::Busy);
     check_status(h.session->submit("/copiar"), "Espera a que termine la respuesta");
     check_status(h.session->submit("/exportar"), "Espera a que termine la respuesta");
     const std::optional<std::string> wait{std::string{chatbot::cli::kWaitOrCancel}};
@@ -297,8 +304,12 @@ TEST_CASE("Session: /copiar, /guardar y /exportar", "[session]") {
     CHECK(copy.clear);
     CHECK(copy.block.number == 1);
     CHECK(copy.block.code == blocks.front().code);
-    h.session->report({"copiado", false});
+    CHECK(copy.command == chatbot::cli::ParsedCommand::Type::Copy);
+    CHECK_FALSE(copy.sent.has_value());
+    // Lo que hace chatbot-rpc: el aviso de la GUI al historial.
+    h.session->report({chatbot::cli::copied_message(copy.block), false});
     CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Notice);
+    CHECK(h.last_entry().text == "Copiado el bloque #1 (cpp, 1 línea).");
     h.session->report({"no se pudo", true});
     CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Error);
 
@@ -307,6 +318,10 @@ TEST_CASE("Session: /copiar, /guardar y /exportar", "[session]") {
     const SubmitOutcome saved = h.session->submit("/guardar 1 suma.cpp");
     CHECK(saved.type == Type::Done);
     CHECK(saved.clear);
+    CHECK(saved.command == chatbot::cli::ParsedCommand::Type::Save);
+    CHECK(saved.action.path ==
+          (h.dir.path() / "descargas" / "chatbot" / "suma.cpp").string());
+    CHECK(h.last_entry().text == saved.action.message);
     CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Notice);
     CHECK(std::filesystem::exists(h.dir.path() / "descargas" / "chatbot" / "suma.cpp"));
 
@@ -317,6 +332,8 @@ TEST_CASE("Session: /copiar, /guardar y /exportar", "[session]") {
     const SubmitOutcome failed = h.session->submit("/guardar 1 otro.cpp");
     CHECK(failed.type == Type::Done);
     CHECK_FALSE(failed.clear);
+    CHECK(failed.action.error);
+    CHECK_FALSE(failed.action.path.has_value());
     CHECK(h.last_entry().kind == chatbot::cli::EntryKind::Error);
     h.download_base = h.path("descargas");
 
@@ -325,6 +342,68 @@ TEST_CASE("Session: /copiar, /guardar y /exportar", "[session]") {
     CHECK(exported.clear);
     CHECK(std::filesystem::exists(h.dir.path() / "descargas" / "chatbot" /
                                   ("conversacion-" + h.session->conversation().id() + ".md")));
+}
+
+TEST_CASE("Session: los botones guardan y exportan sin tocar el historial", "[session]") {
+    using Status = chatbot::cli::FileOutcome::Status;
+    Harness h;
+    h.responses = {stream("Mira:\\n\\n```cpp\\nint x;\\n```")};
+    h.start();
+    chatbot::cli::FileOutcome got = h.session->export_to_downloads();
+    CHECK(got.status == Status::Invalid);
+    CHECK(got.result.message == "Todavía no hay respuestas que exportar.");
+    REQUIRE(h.exchange("un bloque"));
+    const std::size_t entries = h.session->conversation().entries().size();
+
+    got = h.session->save_code_block(2, "");
+    CHECK(got.status == Status::Invalid);
+    CHECK(got.result.message ==
+          chatbot::cli::choose_code_block(h.session->code_blocks().blocks(), 2).problem);
+    got = h.session->save_code_block(1, "../x");
+    CHECK(got.status == Status::Invalid);
+    CHECK(got.result.message == *chatbot::cli::validate_file_name("../x"));
+    got = h.session->save_code_block(1, "");
+    CHECK(got.status == Status::NoFolder);
+    CHECK(got.result.message == chatbot::cli::no_download_dir_message(chatbot::current_os()));
+    CHECK(h.session->export_to_downloads().status == Status::NoFolder);
+
+    h.download_base = h.path("descargas");
+    std::filesystem::create_directory(*h.download_base);
+    got = h.session->save_code_block(1, "");
+    CHECK(got.status == Status::Attempted);
+    CHECK_FALSE(got.result.error);
+    CHECK(got.result.path == (h.dir.path() / "descargas" / "chatbot" / "bloque-1.cpp").string());
+    got = h.session->save_code_block(std::nullopt, "x.cpp"); // Sin número: el último.
+    CHECK(got.result.path == (h.dir.path() / "descargas" / "chatbot" / "x.cpp").string());
+    got = h.session->export_to_downloads();
+    CHECK(got.status == Status::Attempted);
+    CHECK(got.result.message.rfind("Conversación exportada a ", 0) == 0);
+    CHECK(got.result.path.has_value());
+    CHECK(h.session->conversation().entries().size() == entries);
+
+    // Con una respuesta en curso también; el bloque a medias lleva su aviso.
+    BlockingTransport* blocking = nullptr;
+    h.chat_transport = [&blocking] {
+        auto transport = std::make_unique<BlockingTransport>(BlockingTransport::Mode::Block);
+        transport->first_chunk =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"```py\\nprint(1)\\n\"}}]}\n\n";
+        blocking = transport.get();
+        return transport;
+    };
+    h.start();
+    REQUIRE(h.session->open(h.session->store().list().front().id) == std::nullopt);
+    REQUIRE(h.session->submit("otro").type == Type::Started);
+    REQUIRE(blocking->started.wait_for(kThreadTimeout));
+    REQUIRE(h.queue.run_until([&] { return h.session->code_blocks().blocks().size() == 2; }));
+    const std::size_t busy_entries = h.session->conversation().entries().size();
+    got = h.session->save_code_block(2, "");
+    CHECK(got.status == Status::Attempted);
+    CHECK(got.result.message.find("Ojo: el bloque está incompleto (la respuesta aún no "
+                                  "termina).") != std::string::npos);
+    CHECK(h.session->export_to_downloads().status == Status::Attempted);
+    CHECK(h.session->conversation().entries().size() == busy_entries);
+    h.session->cancel();
+    REQUIRE(h.finish());
 }
 
 TEST_CASE("Session guarda el proveedor y reconstruye el cliente", "[session]") {

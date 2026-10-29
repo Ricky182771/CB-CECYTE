@@ -94,6 +94,15 @@ void Sidebar::refresh(std::vector<ConversationSummary> items, std::string curren
     }
 }
 
+std::string group_for(const ConversationSummary& summary, CalendarDay today) {
+    if (summary.readable) {
+        if (const std::optional<CalendarDay> day = day_of(summary.updated_at)) {
+            return group_label(*day, today);
+        }
+    }
+    return std::string{Sidebar::kUndated};
+}
+
 std::vector<SidebarRow> Sidebar::rows(CalendarDay today) const {
     std::vector<SidebarRow> rows;
     rows.push_back(SidebarRow{SidebarRow::Kind::New, {}, 0});
@@ -101,15 +110,7 @@ std::vector<SidebarRow> Sidebar::rows(CalendarDay today) const {
     std::string previous;
     for (std::size_t i = 0; i < list_.items().size(); ++i) {
         const ConversationSummary& item = list_.items()[i];
-        std::string label;
-        if (item.readable) {
-            if (const std::optional<CalendarDay> day = day_of(item.updated_at)) {
-                label = group_label(*day, today);
-            }
-        }
-        if (label.empty()) {
-            label = std::string{kUndated};
-        }
+        const std::string label = group_for(item, today);
         if (i == 0 || label != previous) {
             rows.push_back(SidebarRow{SidebarRow::Kind::Header, label, 0});
             previous = label;

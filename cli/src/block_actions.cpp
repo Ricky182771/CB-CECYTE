@@ -12,19 +12,14 @@ namespace chatbot::cli {
 
 namespace {
 
-/// Escribe un archivo nuevo en <base>/chatbot: la ruta (abreviada con
-/// "~") o el error.
-WriteResult write_download(const std::string& base, const std::string& home,
-                           std::string_view name, std::string_view content) {
+/// Escribe un archivo nuevo en <base>/chatbot: la ruta completa o el error.
+WriteResult write_download(const std::string& base, std::string_view name,
+                           std::string_view content) {
     const WriteResult dir = ensure_download_dir(base);
     if (!dir.error.empty()) {
         return dir;
     }
-    WriteResult written = write_new_file(dir.path, name, content);
-    if (written.error.empty()) {
-        written.path = display_path(written.path, home);
-    }
-    return written;
+    return write_new_file(dir.path, name, content);
 }
 
 /// Inicio de un aviso corto: "⚠ #3 incompleto (se canceló) · " si el bloque
@@ -93,6 +88,10 @@ ActionResult copy_block(const CodeBlock& block, const ClipboardAccess& clipboard
     return {"Copiado " + what + " con " + copied.method + "." + incomplete_warning(block), false};
 }
 
+std::string copied_message(const CodeBlock& block) {
+    return "Copiado " + describe_code_block(block) + "." + incomplete_warning(block);
+}
+
 ActionResult save_block(const CodeBlock& block, std::string_view file_name,
                         const std::string& download_base, const std::string& home,
                         Wording wording, Symbols symbols) {
@@ -102,16 +101,18 @@ ActionResult save_block(const CodeBlock& block, std::string_view file_name,
         }
     }
     const WriteResult written =
-        write_download(download_base, home, block_file_name(file_name, block.number, block.info),
+        write_download(download_base, block_file_name(file_name, block.number, block.info),
                        with_final_newline(block.code));
     if (!written.error.empty()) {
         return {written.error, true};
     }
+    const std::string shown = display_path(written.path, home);
     if (wording == Wording::Short) {
-        return {short_prefix(block, symbols) + "guardado en " + written.path, false};
+        return {short_prefix(block, symbols) + "guardado en " + shown, false, written.path};
     }
     const std::string warning = incomplete_warning(block);
-    return {"Guardado en " + written.path + (warning.empty() ? "" : "." + warning), false};
+    return {"Guardado en " + shown + (warning.empty() ? "" : "." + warning), false,
+            written.path};
 }
 
 ActionResult run_block_action(const std::vector<CodeBlock>& blocks, int number,
@@ -139,11 +140,11 @@ ActionResult export_conversation(const Conversation& conversation, std::time_t n
     const std::string markdown = export_markdown(conversation.to_stored(format_iso8601(now)),
                                                  export_date(format_iso8601(now)));
     const WriteResult written =
-        write_download(download_base, home, export_file_name(conversation.id(), now), markdown);
+        write_download(download_base, export_file_name(conversation.id(), now), markdown);
     if (!written.error.empty()) {
         return {written.error, true};
     }
-    return {"Conversación exportada a " + written.path, false};
+    return {"Conversación exportada a " + display_path(written.path, home), false, written.path};
 }
 
 } // namespace chatbot::cli

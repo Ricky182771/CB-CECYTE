@@ -10,11 +10,11 @@ Versión del protocolo: **1**.
 |---|---|---|
 | `initialize`, `shutdown`, `exit`, `$/cancel` | 3, 4 | Implementado |
 | `app.status` | 6.1 | Implementado |
-| `conversation.new`, `conversation.get` | 6.3 | Implementado |
+| `conversations.list`, `conversation.delete` | 6.2 | Implementado |
+| `conversation.new`, `conversation.get`, `conversation.open`, `conversation.export` | 6.3 | Implementado |
 | `chat.send` (con y sin `search`), `chat.cancel` | 6.4 | Implementado |
-| `conversations.list`, `conversation.open`, `conversation.delete`, `conversation.export` | 6.2, 6.3 | Falta (`-32601`) |
-| `commands.list`, `commands.run` | 6.5 | Falta (`-32601`) |
-| `blocks.list`, `blocks.get`, `blocks.save` | 6.6 | Falta (`-32601`) |
+| `commands.list`, `commands.run` | 6.5 | Implementado |
+| `blocks.list`, `blocks.get`, `blocks.save` | 6.6 | Implementado |
 | `settings.*`, `models.list` | 6.7 | Falta (`-32601`) |
 | `addons.*`, `service.*` | 6.8 | Falta (`-32601`) |
 | Eventos `conversation.entry_added`, `entry_delta`, `entry_updated`, `phase`, `saved`, `closed`; `chat.finished`; `conversations.changed` | 7 | Implementado |
@@ -80,7 +80,7 @@ cliente                                  servidor
 
 - Antes de `initialize`, cualquier otra petición recibe `-32001 NotInitialized`, salvo `shutdown`, `exit` y `$/cancel`. Un segundo `initialize` recibe `-32600`.
 - Después de `shutdown`, todo lo que no sea `exit` recibe `-32600`.
-- `shutdown` con una respuesta en curso la cancela y espera al hilo; la conversación recibe `conversation.closed` (`reason: "shutdown"`) antes del resultado. **Esa respuesta no manda `chat.finished`:** es la única excepción a "siempre un `chat.finished` por `chat.send`", porque el cliente se está yendo.
+- `shutdown` (después de un `initialize` que funcionó) **siempre** manda `conversation.closed` (`reason: "shutdown"`) a la conversación abierta antes del resultado, haya o no una respuesta en curso. Si la hay, la cancela y espera al hilo. **Esa respuesta no manda `chat.finished`:** es la única excepción a "siempre un `chat.finished` por `chat.send`", porque el cliente se está yendo.
 - **EOF en stdin** (la GUI se cerró o se cayó): el servidor cancela lo que esté en curso, espera a los hilos y sale con 0. Si en **3 s** no ha terminado, sale con `_exit(0)`. La cancelación de curl ya mide menos de 2 s en todos los presets. Esto evita procesos huérfanos en Linux y en Windows: al morir el padre, el pipe se cierra.
 - `exit` sin `shutdown` previo: sale igual, con código 1. Si `exit` llega con `id`, primero responde `{}`.
 - Dos GUIs abiertas son dos procesos con la misma carpeta de conversaciones, igual que dos TUIs. No se agrega nada nuevo para ese caso.
@@ -143,9 +143,9 @@ Los códigos estándar de JSON-RPC más los de la aplicación, en el rango que J
 | -32002 | Busy | Hay una respuesta en curso y la operación la necesita libre |
 | -32003 | UnknownConversation | El handle no existe o ya se cerró |
 | -32004 | NotConfigured | `chat.send` sin proveedor ni modelo |
-| -32005 | ValidationFailed | La configuración no pasa la validación (`data.message` o `data.fields`) |
+| -32005 | ValidationFailed | No pasa la validación: configuración, texto vacío, número de bloque o nombre de archivo (`data.message` o `data.fields`) |
 | -32006 | Unsupported | No disponible en esta plataforma (addons en Windows) |
-| -32007 | StorageError | No se pudo leer, escribir o borrar un archivo (`data.message`) |
+| -32007 | StorageError | No se pudo leer, escribir o borrar un archivo, o no hay carpeta de descargas (`data.message`) |
 | -32008 | ConfirmationRequired | Hay que preguntarle al usuario (unidad de systemd ajena; `data.message`) |
 | -32010 | ProtocolMismatch | Versión distinta en `initialize` |
 | -32011 | StartupFailed | El arranque falló (carpeta del modo portable no escribible, `config.json` inválido): `initialize` responde esto con `data.message`, el mismo texto que la TUI imprime al salir |
@@ -231,13 +231,13 @@ Notación: `→` parámetros, `←` resultado. `?` = opcional.
  "open_as":"c1"}                      // handle si está abierta en este proceso, o null
 ```
 
-Mismo orden que el almacén: la más reciente primero y las ilegibles al final. El grupo lo calcula el servidor para que el texto sea idéntico al de la TUI.
+Mismo orden que el almacén: la más reciente primero y las ilegibles al final. El grupo lo calcula el servidor con la misma regla que la barra de la TUI (`group_for`, en `cli/src/sidebar.h`), con el día local de la hora de la sesión: `Sin fecha` para las ilegibles o sin fecha válida.
 
 **`conversation.delete`** `→ {id}` `← {replaced_by: ConversationSnapshot | null}`
 - No pregunta. La confirmación (`¿Borrar …? (s/n)` en la TUI) es trabajo de la GUI.
-- Si es la abierta, el servidor empieza una nueva, igual que la TUI con `new_conversation()`: el handle viejo recibe `conversation.closed` (`reason: "deleted"`) y `replaced_by` trae la nueva.
-- Errores: `-32002 Busy` si es la que está respondiendo; `-32007` si es ilegible (nunca se borra) o falló el borrado.
-- Emite `conversations.changed`.
+- Si es la abierta, el servidor empieza una nueva, igual que la TUI con `new_conversation()`: el handle viejo recibe `conversation.closed` (`reason: "deleted"`) antes de la respuesta y `replaced_by` trae la nueva. Si no era la abierta, `replaced_by: null`.
+- Después de la respuesta emite `conversations.changed`.
+- Errores: `-32002 Busy` (`data.message`: `Espera la respuesta o cancélala con Esc.`) con **cualquier** respuesta en curso, como la TUI; `-32007` con `data.message` si es ilegible (nunca se borra), no existe o falló el borrado.
 
 ### 6.3 Conversación abierta
 
@@ -248,15 +248,14 @@ Siempre hay exactamente una conversación abierta, igual que en la TUI: al arran
 
 **`conversation.open`** `→ {id}` `← ConversationSnapshot`
 - Usa `ConversationStore::load` y `Conversation::from_stored`, con el mismo aviso de la TUI si cambió el modelo (`Esta conversación usó X; se continúa con Y.`). Ese aviso llega como entrada `notice` dentro del snapshot.
-- Reemplaza a la abierta, igual que `conversation.new` (y `-32002 Busy` con una respuesta en curso). Si ya es la abierta, devuelve el mismo handle sin volver a cargarla.
-- Errores: `-32007` (ilegible o no existe).
+- Reemplaza a la abierta, igual que `conversation.new`: el handle anterior recibe `conversation.closed` (`reason: "replaced"`) antes de la respuesta. Si `id` ya es el de la abierta, devuelve el snapshot con el mismo handle, sin cerrar ni volver a cargar.
+- Errores: `-32002 Busy` (`kWaitOrCancel`) con una respuesta en curso; `-32007` con el mensaje de `ConversationStore::load` si es ilegible o no existe (la abierta no cambia).
 
 **`conversation.get`** `→ {conversation}` `← ConversationSnapshot`
 
 **`conversation.export`** `→ {conversation}` `← {path, message}`
-- `export_conversation` hacia la carpeta de descargas. `message` es el aviso largo de la TUI.
-- Errores: `-32007` sin pares (`Todavía no hay respuestas que exportar.`) o si no hay carpeta de descargas.
-- Cambio chico en `cli/`: `ActionResult` agrega `std::optional<std::string> path`.
+- Es el botón `[Exportar]`: `export_conversation` hacia la carpeta de descargas, **sin tocar el historial** y también con una respuesta en curso (exporta los pares ya guardados). `path` es la ruta completa del archivo; `message` es el aviso largo (`Conversación exportada a ~/…`).
+- Errores: `-32005` sin pares (`Todavía no hay respuestas que exportar.`); `-32007` sin carpeta de descargas o si falla la escritura, con `data.message`.
 
 ### 6.4 Chat
 
@@ -277,26 +276,30 @@ Siempre hay exactamente una conversación abierta, igual que en la TUI: al arran
 {"name":"/buscar","arguments":"<consulta>",
  "description":"Busca en la web y responde con fuentes citadas",
  "needs_argument":true,
- "available":false, "note":"falta la key de búsqueda (F2)"}
+ "available":false, "note":"falta la key de búsqueda (F2)"}   // note: "" si available
 ```
 
-Sale de `kCommands` y `command_availability`, así que la GUI puede tener su menú `/` sin repetir la lista.
+Sale de `kCommands` y `command_availability`, así que la GUI puede tener su menú `/` sin repetir la lista. Funciona sin configuración, como el menú de la TUI.
 
 **`commands.run`** `→ {conversation, text}` `← CommandOutcome`
-- Hace exactamente lo de Enter en la TUI con `parse_command`.
+- Hace exactamente lo de Enter en la TUI (`Session::submit`, con `parse_command`). Toda respuesta trae `kind` y `clear`: si la GUI vacía su caja, igual que la TUI.
 
 ```jsonc
 // CommandOutcome
-{"kind":"message"}                                   // texto normal → como chat.send
-{"kind":"search"}                                    // /buscar con consulta → chat.send con search
-{"kind":"copy", "number":3, "text":"...código...", "message":"Copiado el bloque #3 (cpp, 24 líneas)."}
-{"kind":"save", "path":"...", "message":"..."}
-{"kind":"export", "path":"...", "message":"..."}
-{"kind":"usage_error", "message":"Uso: /copiar [número de bloque]", "restore_text":"/copiar x"}
+{"kind":"message", "clear":true}                     // texto normal enviado (como chat.send)
+{"kind":"search", "clear":true}                      // /buscar <consulta> enviado
+{"kind":"copy", "number":3, "language":"cpp", "text":"...código...",
+ "message":"Copiado el bloque #3 (cpp, 24 líneas).", "clear":true}
+{"kind":"save", "path":"/home/r/Descargas/chatbot/x.cpp", "message":"Guardado en ~/Descargas/chatbot/x.cpp",
+ "error":false, "clear":true}                        // path null y error true si falló la escritura
+{"kind":"export", "path":"...", "message":"Conversación exportada a ...", "error":false, "clear":true}
+{"kind":"status", "message":"Uso: /copiar [número de bloque]", "clear":false}
 ```
 
-- En `copy`, el servidor **no** toca el portapapeles: lo maneja la interfaz. La GUI copia `text` con `Clipboard.setData` y muestra `message`. El mensaje termina en "Copiado …" porque la GUI siempre puede copiar. Si el bloque está incompleto, `message` lleva el aviso de `incomplete_warning`.
-- `message` y `search` traen los mismos errores inmediatos que `chat.send`.
+- **Texto para el modelo** (`message`, `search`): si no se envía, los mismos errores de JSON-RPC que `chat.send`, en el mismo orden: `-32004`, `-32002`, `-32005` vacío (`El mensaje está vacío.`; con `/buscar` sin consulta, el uso de la TUI: `Uso: /buscar <consulta>`) y `-32005` sin key de búsqueda. Si se envía, siguen los eventos de la sección 7 y un `chat.finished`.
+- **`status`:** lo que la TUI pone en la línea de estado dejando el texto en la caja, con el mismo texto: los usos (`/copiar x`), `Todavía no hay respuestas que exportar.`, un número de bloque que no existe, un nombre inválido, sin carpeta de descargas, `Espera a que termine la respuesta` (comandos locales con una respuesta en curso), etc. La GUI ya tiene el texto, así que no vuelve.
+- **`copy`:** el servidor **no** toca el portapapeles: la GUI copia `text` (con `Clipboard.setData`). Como la GUI siempre puede copiar, el aviso (`message`, con el de `incomplete_warning` si el bloque está incompleto) **se agrega al historial** como en la TUI, y llega como `conversation.entry_added` (`notice`) después de la respuesta.
+- **`save` y `export`:** como en la TUI, el resultado ya está en el historial (`entry_added` con el aviso, o con el error si falló la escritura). `path` es la ruta completa del archivo, o `null` si no se escribió; `message` lleva la ruta abreviada con `~`.
 
 ### 6.6 Bloques de código
 
@@ -310,11 +313,12 @@ Sale de `kCommands` y `command_availability`, así que la GUI puede tener su men
 La numeración es la de `collect_code_blocks`, la misma `#3 · cpp` de la TUI. La GUI pone sus botones [Copiar] y [Guardar] por número.
 
 **`blocks.get`** `→ {conversation, number}` `← {code, language, complete, reason}`
-- Para el botón [Copiar] de la GUI.
+- Para el botón [Copiar] de la GUI. No toca el historial.
+- Errores: `-32005` con el texto de `choose_code_block` si el número no existe.
 
 **`blocks.save`** `→ {conversation, number, file_name?}` `← {path, message}`
-- `save_block` con `validate_file_name`. Sin `file_name` usa `bloque-<n>.<ext>`. Nunca sobrescribe.
-- Errores: `-32005` (nombre inválido), `-32007` (escritura o carpeta de descargas).
+- Es el botón `[Guardar]`: `save_block` con `validate_file_name`, **sin tocar el historial** y también con una respuesta en curso (un bloque incompleto lleva su aviso en `message`). Sin `file_name` usa `bloque-<n>.<ext>`. Nunca sobrescribe. `path` es la ruta completa; `message` es el aviso largo, con la ruta abreviada.
+- Errores: `-32005` (número que no existe o nombre inválido, con el texto de la TUI); `-32007` (sin carpeta de descargas o error al escribir). Un `number` que no cabe en un entero de 32 bits es `-32602`.
 
 ### 6.7 Configuración (F2)
 
@@ -470,7 +474,7 @@ Todas emiten `service.changed {addon}` al terminar.
 | `conversation.entry_updated` | `{conversation, rev, index, entry}` | Cambiaron las marcas (termina, se cancela, nota) |
 | `conversation.phase` | `{conversation, rev, phase}` | idle / searching / thinking / streaming |
 | `conversation.saved` | `{conversation, rev, id, title}` | Se guardó después de un par (la primera vez trae id y título). Si el guardado falla no llega: llega la entrada de error |
-| `conversation.closed` | `{conversation, reason}` | `replaced`, `deleted`, o `shutdown` al salir |
+| `conversation.closed` | `{conversation, reason}` | `replaced` (`new`, `open`), `deleted`, o `shutdown`: siempre en `shutdown` si hay sesión, con o sin respuesta en curso |
 | `chat.finished` | ver abajo | Una vez por cada `chat.send` aceptado, salvo si antes llegó `shutdown` (sección 3) |
 | `conversations.changed` | `{}` | Se guardó, borró o creó un archivo: la GUI vuelve a pedir la lista |
 | `settings.changed` | `{section}` | `provider` / `system_prompt` / `search` / `gui` / `telegram` |

@@ -20,6 +20,9 @@ namespace chatbot::cli {
 struct ActionResult {
     std::string message;
     bool error = false;
+    /// save_block y export_conversation: la ruta completa del archivo escrito
+    /// (sin abreviar con "~"); nullopt si no se escribió.
+    std::optional<std::string> path = std::nullopt;
 };
 
 /// Cómo se escriben los avisos: Long para los comandos (van al historial),
@@ -57,6 +60,11 @@ struct ClipboardAccess {
 [[nodiscard]] ActionResult copy_block(const CodeBlock& block, const ClipboardAccess& clipboard,
                                       Wording wording = Wording::Long,
                                       Symbols symbols = Symbols::Unicode);
+
+/// Aviso de que el bloque se copió en la interfaz (la GUI, que siempre
+/// puede copiar): "Copiado el bloque #3 (cpp, 24 líneas).", con
+/// incomplete_warning al final si hace falta.
+[[nodiscard]] std::string copied_message(const CodeBlock& block);
 
 /// Guarda el bloque en <download_base>/chatbot (que crea si falta) con
 /// file_name, o "bloque-<n>.<ext>" si está vacío (block_file_name), sin
