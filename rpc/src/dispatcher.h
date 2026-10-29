@@ -97,6 +97,16 @@ private:
                                     bool has_id);
     void start_conversation(); ///< Handle nuevo y estado de la conversación de cero.
 
+    /// Un SendResult que no es Sent, como los errores de chat.send; empty es
+    /// el texto de Empty.
+    void fail_send(cli::SendResult result, const Json& id, bool has_id, std::string_view empty);
+    /// blocks.save y conversation.export: {path, message}, -32005 o -32007.
+    void reply_file(const cli::FileOutcome& file, const Json& id, bool has_id);
+    /// conversations.list, commands.list y commands.run.
+    [[nodiscard]] Json conversation_list() const;
+    [[nodiscard]] Json command_list() const;
+    void run_command(const std::string& text, const Json& id, bool has_id);
+
     [[nodiscard]] Phase current_phase() const;
     [[nodiscard]] Json snapshot() const;
     [[nodiscard]] Json status() const;
