@@ -9,6 +9,8 @@
 #include "chatbot/search_context.h"
 #include "chatbot/system_prompt.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <utility>
@@ -44,6 +46,18 @@ ChatError config_error(std::string message) {
 
 } // namespace
 
+std::optional<std::string> gui_settings_problem(std::string_view json) {
+    // ordered_json: se guarda con las llaves en el orden en que llegaron.
+    const nlohmann::ordered_json value = nlohmann::ordered_json::parse(json, nullptr, false);
+    if (value.is_discarded() || !value.is_object()) {
+        return "Las preferencias de la GUI tienen que ser un objeto JSON.";
+    }
+    if (value.dump().size() > kMaxGuiSettingsBytes) {
+        return "Las preferencias de la GUI pasan de 64 KiB.";
+    }
+    return std::nullopt;
+}
+
 Session::Session(SessionEnvironment environment, Config initial, Post post,
                  OnFinished on_finished)
     : env_(std::move(environment)), config_(std::move(initial)), post_(std::move(post)),
@@ -52,8 +66,10 @@ Session::Session(SessionEnvironment environment, Config initial, Post post,
     // Instrucciones de config.json ("system_prompt"). Una llave que no es
     // cadena usa las predeterminadas y deja un aviso.
     if (env_.config_path.has_value()) {
-        ResolvedSystemPrompt resolved =
-            resolve_system_prompt(load_system_prompt_value(*env_.config_path));
+        const Result<std::optional<std::string>> loaded =
+            load_system_prompt_value(*env_.config_path);
+        system_prompt_stored_ = loaded.is_ok() && loaded.value().has_value();
+        ResolvedSystemPrompt resolved = resolve_system_prompt(loaded);
         system_prompt_ = std::move(resolved.text);
         append_warning(startup_warnings_, std::move(resolved.warning));
         conversation_ = Conversation{system_prompt_};
@@ -380,6 +396,12 @@ Result<SearchSettings> Session::search_form() const {
 }
 
 std::optional<std::string> Session::save_provider(const ProviderSettings& form) {
+    if (busy()) {
+        return std::string{kWaitOrCancel};
+    }
+    if (std::optional<std::string> error = form.validate()) {
+        return error;
+    }
     if (!env_.config_path.has_value() || !env_.credentials_path.has_value()) {
         return missing_config_dir_message(current_os());
     }
@@ -414,15 +436,18 @@ std::optional<std::string> Session::save_provider(const ProviderSettings& form) 
 }
 
 std::optional<std::string> Session::save_system_prompt(const std::optional<std::string>& stored) {
+    if (busy()) {
+        return std::string{kWaitOrCancel};
+    }
     if (!env_.config_path.has_value()) {
         return missing_config_dir_message(current_os());
     }
     if (const auto error = chatbot::save_system_prompt(*env_.config_path, stored)) {
         return error->message;
     }
-    // Valen desde el siguiente mensaje, sin perder la conversación (la
-    // configuración no se abre con una respuesta en curso).
+    // Valen desde el siguiente mensaje, sin perder la conversación.
     system_prompt_ = stored.value_or(std::string{kDefaultSystemPrompt});
+    system_prompt_stored_ = stored.has_value();
     (void)conversation_.set_system_prompt(system_prompt_);
     conversation_.add_notice(system_prompt_.empty()
                                  ? "Sin instrucciones del sistema desde el siguiente mensaje."
@@ -435,7 +460,17 @@ std::optional<std::string> Session::save_system_prompt(const std::optional<std::
     return std::nullopt;
 }
 
+std::optional<std::string> Session::save_system_prompt_text(const std::string& text) {
+    if (std::optional<std::string> error = validate_system_prompt(text)) {
+        return error;
+    }
+    return save_system_prompt(system_prompt_to_store(text));
+}
+
 std::optional<std::string> Session::save_search_key(const std::string& key) {
+    if (busy()) {
+        return std::string{kWaitOrCancel};
+    }
     if (!env_.credentials_path.has_value()) {
         return missing_config_dir_message(current_os());
     }
@@ -454,6 +489,30 @@ std::optional<std::string> Session::save_search_key(const std::string& key) {
         return warning;
     }
     conversation_.add_notice("Key de búsqueda guardada: usa /buscar <consulta>.");
+    return std::nullopt;
+}
+
+Result<std::optional<std::string>> Session::gui_settings() const {
+    if (!env_.config_path.has_value()) {
+        return config_error(missing_config_dir_message(current_os()));
+    }
+    return load_config_section(*env_.config_path, "gui");
+}
+
+std::optional<std::string> Session::save_gui_settings(const std::optional<std::string>& json) {
+    if (!env_.config_path.has_value()) {
+        return missing_config_dir_message(current_os());
+    }
+    std::optional<std::string> compact;
+    if (json.has_value()) {
+        if (std::optional<std::string> problem = gui_settings_problem(*json)) {
+            return problem;
+        }
+        compact = nlohmann::ordered_json::parse(*json).dump();
+    }
+    if (const auto error = save_config_section(*env_.config_path, "gui", compact)) {
+        return error->message;
+    }
     return std::nullopt;
 }
 
