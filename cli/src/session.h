@@ -49,6 +49,15 @@ struct SessionEnvironment {
     std::string home;                                          ///< display_home
 };
 
+/// Lo que pasó con Session::send.
+enum class SendResult {
+    Sent,             ///< Se envió al modelo; al terminar llega OnFinished.
+    NotConfigured,    ///< Falta la key o el modelo (kSetupNotice).
+    Busy,             ///< Hay una respuesta en curso.
+    Empty,            ///< El texto (o la consulta de búsqueda) está vacío.
+    MissingSearchKey, ///< Búsqueda sin key (kMissingSearchKey).
+};
+
 /// Lo que la interfaz hace con la caja después de Enter (Session::submit).
 struct SubmitOutcome {
     enum class Type {
@@ -62,15 +71,26 @@ struct SubmitOutcome {
     std::string status; ///< Status: el aviso.
     bool clear = false; ///< Si la caja se vacía (Started, Copy, Done si salió bien).
     CodeBlock block;    ///< Copy: el bloque elegido.
+    /// Lo que dio parse_command (Normal: texto para el modelo).
+    ParsedCommand::Type command = ParsedCommand::Type::Normal;
+    /// Si el texto fue a send (texto normal y /buscar): lo que dio, para
+    /// distinguir "respuesta en curso" de "caja vacía". nullopt con
+    /// /copiar, /guardar y /exportar.
+    std::optional<SendResult> sent;
+    ActionResult action; ///< Done: lo de save_block o export_conversation.
 };
 
-/// Lo que pasó con Session::send.
-enum class SendResult {
-    Sent,             ///< Se envió al modelo; al terminar llega OnFinished.
-    NotConfigured,    ///< Falta la key o el modelo (kSetupNotice).
-    Busy,             ///< Hay una respuesta en curso.
-    Empty,            ///< El texto (o la consulta de búsqueda) está vacío.
-    MissingSearchKey, ///< Búsqueda sin key (kMissingSearchKey).
+/// Guardar un bloque o exportar sin pasar por el historial, como los
+/// botones [Guardar] y [Exportar] (Session::save_code_block,
+/// Session::export_to_downloads).
+struct FileOutcome {
+    enum class Status {
+        Attempted, ///< Se intentó escribir: result dice si salió bien (y su path).
+        Invalid,   ///< Número de bloque que no existe, nombre inválido o sin pares.
+        NoFolder,  ///< No hay carpeta de descargas (no_download_dir_message).
+    };
+    Status status = Status::Attempted;
+    ActionResult result; ///< El aviso (Wording::Long) o el motivo; error si no se escribió.
 };
 
 /// La lógica de la app sin FTXUI: configuración vigente, cliente y runner,
@@ -119,6 +139,8 @@ public:
     [[nodiscard]] bool searching() const { return searching_; }
     /// Modelo del cliente; vacío sin configuración.
     [[nodiscard]] const std::string& model() const { return model_; }
+    /// La hora del entorno (para los grupos de la lista de conversaciones).
+    [[nodiscard]] std::time_t now() const { return env_.now(); }
     [[nodiscard]] const Config& config() const { return config_; }
     /// Las vigentes (vacías: sin mensaje de sistema).
     [[nodiscard]] const std::string& system_prompt() const { return system_prompt_; }
@@ -149,6 +171,14 @@ public:
     void cancel();
     /// Resultado de copiar (SubmitOutcome::Copy) al historial: aviso o error.
     void report(const ActionResult& result);
+
+    // --- Botones: no tocan el historial y funcionan con una respuesta en curso ---
+    /// save_block del bloque number (choose_code_block: sin número, el
+    /// último) con file_name (validate_file_name; vacío: bloque-<n>.<ext>).
+    [[nodiscard]] FileOutcome save_code_block(std::optional<int> number,
+                                              std::string_view file_name);
+    /// export_conversation de la conversación abierta.
+    [[nodiscard]] FileOutcome export_to_downloads();
 
     // --- Conversaciones: un error para la línea de estado, o nullopt ---
     [[nodiscard]] std::optional<std::string> new_conversation();
