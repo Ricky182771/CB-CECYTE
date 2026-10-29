@@ -19,6 +19,7 @@
 #include "session.h"
 
 #include "chatbot/config.h"
+#include "chatbot/curl_transport.h"
 #include "chatbot/error.h"
 #include "chatbot/platform.h"
 
@@ -188,8 +189,9 @@ int main() {
                                                        config.value(), std::move(session_post),
                                                        std::move(on_finished));
     };
-    Dispatcher dispatcher(std::move(info), make_session, post, write,
-                          [] { return std::chrono::steady_clock::now(); });
+    Dispatcher dispatcher(
+        std::move(info), make_session, [] { return std::make_unique<chatbot::CurlTransport>(); },
+        post, write, [] { return std::chrono::steady_clock::now(); });
 
     while (true) {
         std::optional<Event> event = queue.pop(dispatcher.next_deadline());
