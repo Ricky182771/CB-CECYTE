@@ -109,6 +109,21 @@ TEST_CASE("barra: nombre del grupo según los días", "[barra]") {
     CHECK(group_label({2025, 12, 15}, kToday) == "15 dic 2025");
 }
 
+TEST_CASE("barra: group_for, la regla de los grupos", "[barra]") {
+    using chatbot::cli::group_for;
+    std::vector<std::string> groups;
+    for (const ConversationSummary& summary : sample()) {
+        groups.push_back(group_for(summary, kToday));
+    }
+    CHECK(groups == std::vector<std::string>{"Hoy", "Ayer", "Últimos 7 días", "24 sep",
+                                             "15 dic 2025", "Sin fecha"});
+    CHECK(group_for(item("sin-fecha", ""), kToday) == Sidebar::kUndated);
+    CHECK(group_for(item("mala", "ayer"), kToday) == Sidebar::kUndated);
+    // Ilegible con fecha: sigue sin fecha, como en la barra.
+    CHECK(group_for(item("rota", "2026-10-04T10:00:00-06:00", false), kToday) ==
+          Sidebar::kUndated);
+}
+
 TEST_CASE("barra: cambio de día a medianoche", "[barra]") {
     Sidebar sidebar;
     sidebar.open({item("despues", "2026-10-04T00:01:00-06:00"),

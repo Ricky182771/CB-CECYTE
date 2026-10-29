@@ -35,6 +35,10 @@ struct CalendarDay {
 /// today: "15 dic 2025"). Un día posterior a today cuenta como "Hoy".
 [[nodiscard]] std::string group_label(CalendarDay day, CalendarDay today);
 
+/// Grupo de una conversación de la lista visto desde today: group_label de
+/// day_of(updated_at), o Sidebar::kUndated si es ilegible o no tiene fecha.
+[[nodiscard]] std::string group_for(const ConversationSummary& summary, CalendarDay today);
+
 /// Una fila de la barra lateral.
 struct SidebarRow {
     enum class Kind {
