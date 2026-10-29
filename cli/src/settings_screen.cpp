@@ -398,7 +398,7 @@ void SettingsScreen::request_models() {
         return;
     }
     if (!settings_->can_request_models()) {
-        status_ = "Escribe una URL base válida y la API key para pedir los modelos.";
+        status_ = std::string{kModelsNeedUrlAndKey};
         return;
     }
     status_.clear();
@@ -411,9 +411,7 @@ void SettingsScreen::request_models() {
                       if (result.is_ok()) {
                           settings_->models_loaded(result.value());
                       } else {
-                          settings_->models_failed(
-                              std::string{"["} + error_kind_label(result.error().kind) + "] " +
-                              result.error().message);
+                          settings_->models_failed(models_error_text(result.error()));
                       }
                   });
 }

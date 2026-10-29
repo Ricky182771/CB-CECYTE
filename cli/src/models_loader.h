@@ -3,6 +3,7 @@
 
 #include "chatbot/cancel_token.h"
 #include "chatbot/config.h"
+#include "chatbot/error.h"
 #include "chatbot/result.h"
 #include "chatbot/transport.h"
 
@@ -11,10 +12,18 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 namespace chatbot::cli {
+
+/// Aviso si no se pueden pedir los modelos (can_request_models() es false).
+inline constexpr std::string_view kModelsNeedUrlAndKey =
+    "Escribe una URL base válida y la API key para pedir los modelos.";
+
+/// El error de la lista de modelos como lo muestra F2: "[tipo] mensaje".
+[[nodiscard]] std::string models_error_text(const ChatError& error);
 
 /// Pide la lista de modelos (ChatClient::list_models) en un hilo de trabajo,
 /// sin conocer FTXUI, igual que RequestRunner. Se usa solo desde un hilo (el

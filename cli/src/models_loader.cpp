@@ -6,6 +6,10 @@
 
 namespace chatbot::cli {
 
+std::string models_error_text(const ChatError& error) {
+    return std::string{"["} + error_kind_label(error.kind) + "] " + error.message;
+}
+
 ModelsLoader::ModelsLoader(TransportFactory make_transport, Post post)
     : make_transport_(std::move(make_transport)), post_(std::move(post)),
       state_(std::make_shared<State>()) {}

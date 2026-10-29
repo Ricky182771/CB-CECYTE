@@ -113,3 +113,9 @@ TEST_CASE("ModelsLoader: una petición nueva reemplaza a la que sigue en curso",
     REQUIRE(result->is_ok());
     CHECK(old_calls == 0);
 }
+
+TEST_CASE("models_error_text: el texto de F2 para una lista que falló", "[modelos]") {
+    const chatbot::ChatError error{chatbot::ErrorKind::Network, 0, "No se pudo conectar",
+                                   std::nullopt};
+    CHECK(chatbot::cli::models_error_text(error) == "[error de red] No se pudo conectar");
+}
