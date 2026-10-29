@@ -125,6 +125,7 @@ Detalle: guias/06-nucleo.md
 - Apariencia sin entorno; valores desconocidos usan predeterminados con aviso. Símbolos siguen configurables con `NO_COLOR`.
 - Conversaciones versión 1: al menos un par user/assistant alternado completo, nunca `system` persistido. Guardar tras cada par, atómicamente, carpeta nueva 0700 y archivo 0600. Archivo ilegible o de versión desconocida se lista, nunca se sobrescribe ni borra. Cargar usa sistema vigente, búsqueda con nonce nuevo y fecha guardada.
 - Sin key de búsqueda, no enviar `/buscar` ni vaciar la caja. `CHAT_SEARCH_API_KEY` gana sobre credenciales, con la misma privacidad y validación.
+- `chatbot-rpc` escribe `config.json` y `credentials.json` **solo por `Session`**, con los mismos guardados que F2.
 - Solo la app escribe `addons.<addon>` en `config.json`; Telegram ausente queda desactivado. Versión mayor: F2 solo lectura; descartar llaves requiere confirmación; bot rechaza sección inválida. Secretos: §14.
 - Diagnósticos solo por entorno: `CHAT_DEBUG_SSE` nunca vuelca cabeceras, key ni petición; `CHAT_DEBUG_KEYS` nunca el texto de caracteres.
 

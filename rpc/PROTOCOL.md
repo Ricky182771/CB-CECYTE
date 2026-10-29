@@ -15,10 +15,11 @@ Versión del protocolo: **1**.
 | `chat.send` (con y sin `search`), `chat.cancel` | 6.4 | Implementado |
 | `commands.list`, `commands.run` | 6.5 | Implementado |
 | `blocks.list`, `blocks.get`, `blocks.save` | 6.6 | Implementado |
-| `settings.*`, `models.list` | 6.7 | Falta (`-32601`) |
+| `settings.provider.*`, `models.list`, `settings.system_prompt.*`, `settings.search.*`, `settings.gui.*` | 6.7 | Implementado |
 | `addons.*`, `service.*` | 6.8 | Falta (`-32601`) |
 | Eventos `conversation.entry_added`, `entry_delta`, `entry_updated`, `phase`, `saved`, `closed`; `chat.finished`; `conversations.changed` | 7 | Implementado |
-| Eventos `settings.changed`, `service.changed` | 7 | Falta |
+| Evento `settings.changed` (`provider`, `system_prompt`, `search`, `gui`) | 7 | Implementado |
+| Evento `service.changed`; `settings.changed` con `telegram` | 7 | Falta |
 | `CHAT_DEBUG_RPC` | 10 | Implementado |
 | Windows: stdio en modo binario | 2 | Implementado (sin probar en la CI con procesos) |
 
@@ -81,9 +82,11 @@ cliente                                  servidor
 - Antes de `initialize`, cualquier otra petición recibe `-32001 NotInitialized`, salvo `shutdown`, `exit` y `$/cancel`. Un segundo `initialize` recibe `-32600`.
 - Después de `shutdown`, todo lo que no sea `exit` recibe `-32600`.
 - `shutdown` (después de un `initialize` que funcionó) **siempre** manda `conversation.closed` (`reason: "shutdown"`) a la conversación abierta antes del resultado, haya o no una respuesta en curso. Si la hay, la cancela y espera al hilo. **Esa respuesta no manda `chat.finished`:** es la única excepción a "siempre un `chat.finished` por `chat.send`", porque el cliente se está yendo.
+- Un `models.list` pendiente al llegar `shutdown` o EOF se cancela y **no** se responde, igual que el `chat.finished` de arriba.
 - **EOF en stdin** (la GUI se cerró o se cayó): el servidor cancela lo que esté en curso, espera a los hilos y sale con 0. Si en **3 s** no ha terminado, sale con `_exit(0)`. La cancelación de curl ya mide menos de 2 s en todos los presets. Esto evita procesos huérfanos en Linux y en Windows: al morir el padre, el pipe se cierra.
 - `exit` sin `shutdown` previo: sale igual, con código 1. Si `exit` llega con `id`, primero responde `{}`.
 - Dos GUIs abiertas son dos procesos con la misma carpeta de conversaciones, igual que dos TUIs. No se agrega nada nuevo para ese caso.
+- **Limitación conocida:** si la TUI y la GUI (o dos de cualquiera) están abiertas y las dos guardan configuración, gana la última escritura: `config.json` se reescribe completo y sin candado. Es igual que con dos TUIs.
 
 ### `initialize`
 
@@ -138,7 +141,7 @@ Los códigos estándar de JSON-RPC más los de la aplicación, en el rango que J
 | -32601 | MethodNotFound | Método desconocido |
 | -32602 | InvalidParams | Faltan parámetros, sobran o tienen otro tipo (`data.fields`) |
 | -32603 | InternalError | Excepción atrapada en el despachador (no debería pasar) |
-| -32800 | RequestCancelled | La petición se canceló con `$/cancel` |
+| -32800 | RequestCancelled | La petición se canceló con `$/cancel`, o otro `models.list` la reemplazó |
 | -32001 | NotInitialized | Falta `initialize` |
 | -32002 | Busy | Hay una respuesta en curso y la operación la necesita libre |
 | -32003 | UnknownConversation | El handle no existe o ya se cerró |
@@ -165,7 +168,7 @@ El texto que la TUI muestra (`[error de autenticación] La key de búsqueda no e
 
 ### Cancelar peticiones largas
 
-`$/cancel` es una notificación con el id de la petición: `{"method":"$/cancel","params":{"id":7}}`. Esa petición responde `-32800`. Sirve para `models.list`, `service.*` y `addons.check_install`. Para cancelar una respuesta del modelo se usa `chat.cancel`, porque `chat.send` no es una petición larga. Mientras no exista ninguno de esos métodos, `$/cancel` se acepta y no hace nada (como petición, responde `{}`).
+`$/cancel` es una notificación con el id de la petición: `{"method":"$/cancel","params":{"id":7}}`. Si es el de un `models.list` pendiente, ese `models.list` responde `-32800` en ese momento y su resultado se descarta; con cualquier otro id no hace nada. `$/cancel` nunca recibe respuesta propia como notificación; si llega con `id`, responde `{}` (después del `-32800`). Con R4 también servirá para `service.*` y `addons.check_install`. Para cancelar una respuesta del modelo se usa `chat.cancel`, porque `chat.send` no es una petición larga.
 
 ### Notificaciones
 
@@ -322,9 +325,11 @@ La numeración es la de `collect_code_blocks`, la misma `#3 · cpp` de la TUI. L
 
 ### 6.7 Configuración (F2)
 
-Todo es **sin estado**: la GUI tiene su formulario y manda el borrador completo. Por dentro, el servidor arma un `ProviderSettings` (o `SearchSettings`, o `AddonForm`) nuevo por llamada, le aplica el borrador con sus setters y usa su `validate`, `file_values` y `credential_update`. Así las reglas no se copian a Dart.
+Todo es **sin estado**: la GUI tiene su formulario y manda el borrador completo. Por dentro, el servidor arma un `ProviderSettings` (o `SearchSettings`) nuevo por llamada con `Session::provider_form` (o `search_form`), le aplica el borrador con sus setters y usa su `validate`; guarda con los mismos métodos de `Session` que F2. Así las reglas no se copian a Dart.
 
-**Guardar no se permite con una respuesta en curso** (`-32002`), igual que F2, que no abre en ese caso. Al guardar, el servidor **aplica sin reiniciar**, como la TUI, y emite `settings.changed`.
+**Guardar proveedor, instrucciones o búsqueda no se permite con una respuesta en curso** (`-32002` con `kWaitOrCancel`), igual que F2, que no abre en ese caso. Las preferencias de la GUI sí, porque no tocan el chat. Al guardar, el servidor **aplica sin reiniciar**, como la TUI. **Orden:** la respuesta, `settings.changed {section}` y después los avisos que el guardado dejó en el historial (`conversation.entry_added`, `notice`), los mismos de F2.
+
+Si `config.json` o `credentials.json` no se pueden leer (JSON inválido, permisos abiertos), los `get`, `check`, `save` y `models.list` responden `-32007` con el mensaje.
 
 #### Proveedor de IA
 
@@ -334,41 +339,52 @@ Todo es **sin estado**: la GUI tiene su formulario y manda el borrador completo.
 {"providers":[{"id":"nvidia","name":"NVIDIA NIM",
                "base_url":"https://integrate.api.nvidia.com/v1","needs_key":true}, ...,
               {"id":"custom","name":"Personalizado…","base_url":"","needs_key":true}],
- "saved":{"provider":"nvidia","base_url":"...","model":"..."},
- "effective":{"base_url":"...","model":"..."},
+ "saved":{"provider":"nvidia","base_url":"...","model":"..."},   // config.json tal cual
+ "effective":{"base_url":"...","model":"..."},                   // lo que usa la sesión
  "locks":{"base_url":false,"model":false,"api_key":true},   // definidos por CHAT_*
- "key_status":"(definido por CHAT_API_KEY) …abcd"}
+ "key_status":"(definido por CHAT_API_KEY) …abcd"}             // key_status(), enmascarado
 ```
+
+`providers` es la tabla de `providers()`, en orden. Nunca devuelve una key.
+
+**El borrador** (`draft`) de `check`, `save` y `models.list`:
+
+```jsonc
+{"provider":"custom", "base_url":"https://mi-servidor", "model":"...", "api_key":"nvapi-…"?}
+```
+
+- Se aplica, en este orden, a un `ProviderSettings` nuevo: `select_provider(provider_index(provider))`, `set_base_url` (solo cambia algo en `custom`), `set_key` (si viene `api_key`) y `set_model`.
+- **Un campo fijado por `CHAT_*` que venga en el borrador se ignora**, igual que en F2, donde no se puede editar (la GUI lo sabe por `locks`). La `base_url` de un proveedor que no es `custom` también se ignora: se usa la de la tabla.
+- Sin `api_key` (o con `""`) se usa la guardada, igual que el campo vacío en F2.
+- `provider`, `base_url` y `model` son obligatorios. Un `provider` que no está en la tabla es `-32602` con `fields: ["draft.provider"]`: al leer `config.json` un id desconocido cae en `custom`, pero aquí es un error de la GUI. Los campos de más, de menos o de otro tipo también van como `draft.<campo>`.
 
 **`settings.provider.check`** `→ {draft}` `← {error, hint, can_request_models, dirty}`
 
 ```jsonc
-// draft
-{"provider":"custom", "base_url":"https://mi-servidor", "api_key":"nvapi-…"?, "model":"..."}
-// ←
-{"error":null,
- "hint":"...",                // base_url_hint; null si no hay
+{"error":null,                // validate(); null si se puede guardar
+ "hint":"...",                // base_url_hint(); null si no hay
  "can_request_models":true, "dirty":true}
 ```
 
-`error` y `hint` son los de `validate()` y `base_url_hint()`. Sin `api_key` en el borrador se usa la guardada, igual que el campo vacío en F2.
-
-**`settings.provider.save`** `→ {draft}` `← {saved: true}`
-- Escribe `config.json` (`save_config_file`) y, si hubo key, `credentials.json`.
-- Reconstruye `ChatClient` y `RequestRunner`. Las conversaciones abiertas no cambian.
-- Errores: `-32005` con `data.message`, `-32007`.
+**`settings.provider.save`** `→ {draft}` `← {ready}`
+- `Session::save_provider`: escribe `credentials.json` (si hubo key) y `config.json`, y reconstruye `ChatClient` y `RequestRunner`. La conversación abierta no cambia y recibe el aviso `Ahora se usa … de ….`
+- `ready`: si quedó configurado (el `ready` de `initialize`).
+- Errores, en este orden: `-32602` (borrador), `-32002` (respuesta en curso), `-32005` con el error de `validate()` en `data.message`, `-32007` si falla la escritura.
 
 **`models.list`** `→ {draft}` `← {models: ["..."]}` · *petición larga, cancelable*
-- `ModelsLoader` con `request_config(draft)`. Si el usuario cambia de proveedor, la GUI manda `$/cancel` de la anterior y pide otra.
-- Errores: `-32005` si `can_request_models` es false. Una falla del servidor llega como `-32005` con `data.message` ya formateado y sin la key, el mismo texto que F2 muestra en la lista. Con eso la GUI deja escribir el modelo a mano.
-- El filtro y el resaltado son de la GUI (`filtered_models` es trivial). El servidor da la lista completa.
+- `ModelsLoader` con `request_config` del borrador sobre la configuración vigente. Es la única petición cuya respuesta sale después, por un hilo de trabajo; todas las demás responden al momento.
+- **Toda petición recibe exactamente una respuesta:** la lista; `-32005` con el texto de F2 (`[error de red] …`, `models_error_text`, sin la key) si el servidor falla, para que la GUI deje escribir el modelo a mano; o `-32800` si se canceló.
+- `-32005` con `Escribe una URL base válida y la API key para pedir los modelos.` si `can_request_models` es false, sin pedir nada (no cancela uno pendiente).
+- Una sola a la vez: otro `models.list` (que sí se pide) reemplaza al pendiente, que responde `-32800` en ese momento. Si el usuario cambia de proveedor, la GUI puede mandar otro directamente o `$/cancel` del anterior.
+- `shutdown` o EOF con uno pendiente: se cancela y no se responde (sección 3).
+- El filtro y el resaltado son de la GUI (`filtered_models` es trivial). El servidor da la lista completa, ordenada.
 
 #### Instrucciones del sistema
 
 **`settings.system_prompt.get`** `→ {}` `←`
 
 ```jsonc
-{"mode":"custom",              // default | custom | none
+{"mode":"custom",              // default (llave ausente) | none ("") | custom (otro texto)
  "text":"Eres un tutor...",     // el texto vigente ("" con none)
  "default_text":"Eres un asistente útil. Responde en español, de forma clara y concisa.",
  "max_bytes":8000,
@@ -376,27 +392,33 @@ Todo es **sin estado**: la GUI tiene su formulario y manda el borrador completo.
 ```
 
 **`settings.system_prompt.check`** `→ {text}` `← {error, warning, bytes}`
+- `error` de `validate_system_prompt` y `warning` de `system_prompt_limit_warning`, los mismos textos que F2 muestra debajo del campo; `bytes` en UTF-8.
 
 **`settings.system_prompt.save`** `→ {text}` `← {mode}`
-- `text: null` = Restaurar predeterminado (borra la llave). `""` = sin mensaje de sistema.
-- Usa `validate_system_prompt` y `system_prompt_to_store`.
-- Se aplica a **todas** las conversaciones abiertas con `set_system_prompt`, desde su siguiente mensaje.
+- `text` es siempre una cadena (**sin `null`**). `""` = sin mensaje de sistema. **Restaurar** = mandar `default_text`: `system_prompt_to_store` convierte el predeterminado en "borrar la llave", igual que F2.
+- `Session::save_system_prompt_text`. Se aplica a la conversación abierta con `set_system_prompt`, desde su siguiente mensaje, con los avisos de F2 en el historial.
+- Errores: `-32002` (respuesta en curso), `-32005` con el texto de `validate_system_prompt`, `-32007` si falla la escritura.
 
 #### Búsqueda web
 
 **`settings.search.get`** `→ {}` `← {configured, locked, key_status}`
+- `configured`: hay key vigente (el `has_search_key` de `app.status`). `locked`: la fija `CHAT_SEARCH_API_KEY`. `key_status`: el de `SearchSettings`, enmascarado.
 
 **`settings.search.save`** `→ {api_key}` `← {saved: true}`
-- `plausible_key`, y luego `credentials.json` con `search:tavily`. Reemplaza el `SearchProvider` (el runner ya acepta el cambio en caliente).
+- `Session::save_search_key`: `credentials.json` con `search:tavily` y reemplaza el `SearchProvider` (el runner ya acepta el cambio en caliente). Desde ahí `app.status.has_search_key` es `true`. El aviso de F2 va al historial.
+- Errores, en este orden: `-32002` (respuesta en curso); `-32005` si `CHAT_SEARCH_API_KEY` la fija (`La key de búsqueda está definida por CHAT_SEARCH_API_KEY; no se puede cambiar aquí.`), si `validate()` la rechaza (el texto de F2) o si viene vacía (`Escribe la key de búsqueda.`); `-32007` si falla la escritura.
 
 #### Preferencias de la GUI
 
-La GUI necesita guardar sus propias cosas (tema claro u oscuro, ancho de la barra, tamaño de letra) y deben seguir el modo portable. Se guardan en `config.json` bajo la llave **`"gui"`**, con `load_config_section` y `save_config_section`, que ya existen.
+La GUI necesita guardar sus propias cosas (tema claro u oscuro, ancho de la barra, tamaño de letra) y deben seguir el modo portable. Se guardan en `config.json` bajo la llave **`"gui"`**, con `load_config_section` y `save_config_section` (`Session::gui_settings` y `save_gui_settings`).
 
 **`settings.gui.get`** `→ {}` `← {value: object | null}`
+- `null` si la llave no existe. El servidor no lo interpreta: devuelve lo que haya.
 
 **`settings.gui.set`** `→ {value: object | null}` `← {}`
-- Tiene que ser un objeto, de 64 KiB como máximo. El servidor no lo interpreta.
+- `value` tiene que ser un objeto, de **64 KiB** como máximo medido sobre el JSON compacto, o `null` para borrar la llave. Se guarda compacto, con sus llaves en el orden en que llegaron.
+- Funciona con una respuesta en curso: no toca la sesión del chat.
+- Errores: `-32602` sin `value`; `-32005` si no es objeto ni `null` o pasa de 64 KiB; `-32007` si falla la escritura.
 - **Solo** la llave `"gui"`: no hay un método genérico para escribir secciones, para que nadie se salte las validaciones de `addons` o `appearance`.
 
 `"appearance"` (tema, fondo y símbolos de la terminal) es solo de la TUI y no se expone.
@@ -477,7 +499,7 @@ Todas emiten `service.changed {addon}` al terminar.
 | `conversation.closed` | `{conversation, reason}` | `replaced` (`new`, `open`), `deleted`, o `shutdown`: siempre en `shutdown` si hay sesión, con o sin respuesta en curso |
 | `chat.finished` | ver abajo | Una vez por cada `chat.send` aceptado, salvo si antes llegó `shutdown` (sección 3) |
 | `conversations.changed` | `{}` | Se guardó, borró o creó un archivo: la GUI vuelve a pedir la lista |
-| `settings.changed` | `{section}` | `provider` / `system_prompt` / `search` / `gui` / `telegram` |
+| `settings.changed` | `{section}` | Se guardó: `provider` / `system_prompt` / `search` / `gui` (`telegram` llega en R4). Sale después de la respuesta y antes de los avisos en el historial |
 | `service.changed` | `{addon}` | Terminó una acción del servicio |
 
 ```jsonc
@@ -578,7 +600,7 @@ La primera entrada del asistente llega con `entry_added` (la crea el primer delt
 En el repositorio, `chatbot_rpc_tests` (sin red):
 
 1. **Puras:** `LineReader` (tope de 1 MiB, línea partida, `\r\n`, EOF), `diff_entries`, la codificación de `Entry`, `ChatError` y los errores, `check_params` y la redacción de `CHAT_DEBUG_RPC`.
-2. **`Dispatcher`** con la misma `Session` falsa que las pruebas de la TUI (`tests/session_fakes.hpp`) y un reloj falso: secuencias exactas de mensajes (el ejemplo de la sección 8, búsqueda, cancelar en cada fase, `Busy`, 429, `conversation.new`, guardado que falla, deltas agrupados, errores del protocolo).
+2. **`Dispatcher`** con la misma `Session` falsa que las pruebas de la TUI (`tests/session_fakes.hpp`) y un reloj falso: secuencias exactas de mensajes (el ejemplo de la sección 8, búsqueda, cancelar en cada fase, `Busy`, 429, `conversation.new`, guardado que falla, deltas agrupados, errores del protocolo), la configuración (`settings.*`, con y sin `CHAT_*` y con una respuesta en curso) y `models.list` con un transporte falso o bloqueante (lista, falla, cancelada, reemplazada, pendiente al `shutdown`); ninguna respuesta ni evento trae la key que se mandó.
 3. **Proceso real** (solo POSIX): `chatbot-rpc` con pipes y un entorno limpio, sin configuración: `initialize`, `chat.send` → `-32004`, `shutdown`, `exit` → 0; EOF → 0 en menos de 3 s; `exit` sin `shutdown` → 1; toda línea de stdout es JSON-RPC 2.0.
 4. Las tres corren también con `asan` y `tsan`.
 
