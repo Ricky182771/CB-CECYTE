@@ -24,7 +24,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client":{"name":"ci","version":"0"}}}'
-gui_set='{"jsonrpc":"2.0","id":2,"method":"settings.gui.set","params":{"value":{"año":"ñandú 👍"}}}'
+gui_value='{"año":"ñandú 👍"}'
+gui_set='{"jsonrpc":"2.0","id":2,"method":"settings.gui.set","params":{"value":'"$gui_value"'}}'
 gui_get='{"jsonrpc":"2.0","id":3,"method":"settings.gui.get","params":{}}'
 shutdown='{"jsonrpc":"2.0","id":9,"method":"shutdown","params":{}}'
 exit_msg='{"jsonrpc":"2.0","method":"exit"}'
@@ -37,6 +38,7 @@ fail() {
 # Revisa la salida de una corrida: ningún \r y toda línea es un mensaje JSON-RPC 2.0.
 check_output() {
     local out="$work/$1.out"
+    [ -s "$out" ] || fail "$1: stdout vacío"
     if grep -q $'\r' "$out"; then
         od -c "$out" | head -20
         fail "$1: la salida trae \\r"
@@ -47,10 +49,22 @@ check_output() {
     fi
 }
 
+# rpc_piped <nombre>: chatbot-rpc con un pipe en stdin y otro en stdout (no
+# archivos: en Windows ReadFile y WriteFile se portan distinto). El código de
+# salida queda en $work/<nombre>.status.
+rpc_piped() {
+    {
+        local code=0
+        timeout 10 "$rpc" 2> "$work/$1.err" || code=$?
+        echo "$code" > "$work/$1.status"
+    } | cat > "$work/$1.out"
+}
+
 # run <nombre> <código esperado>: stdin desde $work/<nombre>.in.
 run() {
-    local status=0
-    timeout 10 "$rpc" < "$work/$1.in" > "$work/$1.out" 2> "$work/$1.err" || status=$?
+    cat "$work/$1.in" | rpc_piped "$1"
+    local status
+    status=$(cat "$work/$1.status")
     if [ "$status" -ne "$2" ]; then
         cat "$work/$1.err"
         fail "$1: se esperaba el código $2 y salió $status"
@@ -83,16 +97,16 @@ grep -q '"jsonrpc":"2.0","id":9,"result":{}' "$work/crlf.out" || fail "crlf: shu
 printf '%s\n' "$init" "$gui_set" "$gui_get" "$shutdown" "$exit_msg" > "$work/utf8.in"
 run utf8 0
 grep -qxF '{"jsonrpc":"2.0","id":2,"result":{}}' "$work/utf8.out" || fail "utf8: settings.gui.set falló"
-expected='{"jsonrpc":"2.0","id":3,"result":{"value":{"año":"ñandú 👍"}}}'
+expected='{"jsonrpc":"2.0","id":3,"result":{"value":'"$gui_value"'}}'
 if ! grep -qxF "$expected" "$work/utf8.out"; then
     grep '"id":3' "$work/utf8.out" | od -c | head -10
     fail "utf8: settings.gui.get no regresó los mismos bytes"
 fi
 
 # 4. EOF a la mitad (sin exit): sale con 0 en menos de 3 s después de cerrar stdin.
-status=0
 begin=$(date +%s%N)
-(printf '%s\n' "$init"; sleep 1) | timeout 10 "$rpc" > "$work/eof.out" 2> "$work/eof.err" || status=$?
+(printf '%s\n' "$init"; sleep 1) | rpc_piped eof
+status=$(cat "$work/eof.status")
 elapsed_ms=$((($(date +%s%N) - begin) / 1000000 - 1000))
 [ "$status" -eq 0 ] || { cat "$work/eof.err"; fail "eof: salió con $status"; }
 [ "$elapsed_ms" -lt 3000 ] || fail "eof: tardó $elapsed_ms ms después de cerrar stdin"
