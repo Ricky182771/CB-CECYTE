@@ -31,6 +31,7 @@ add_executable(chatbot_tests
     test_addon_form.cpp
     test_child_process.cpp
     test_service_control.cpp
+    test_telegram_addon.cpp
     test_published_date.cpp
     test_redirect.cpp
     test_response.cpp

@@ -2,10 +2,12 @@
 #define CHATBOT_CLI_APP_STARTUP_H
 
 #include "session.h"
+#include "telegram_addon.h"
 
 #include "chatbot/config.h"
 #include "chatbot/result.h"
 
+#include <string>
 #include <string_view>
 
 namespace chatbot::cli {
@@ -26,6 +28,17 @@ namespace chatbot::cli {
 /// modo portable), el entorno del proceso, CurlTransport, TavilySearch, el
 /// reloj y la carpeta de descargas.
 [[nodiscard]] SessionEnvironment app_session_environment();
+
+/// AddonsEnvironment con el sistema real (F2 → Addons y chatbot-rpc).
+/// chatbot_path: la ruta de chatbot, el ExecStart de la unidad; el addon se
+/// busca junto a él y, fuera del modo portable, en PATH. La TUI pasa
+/// executable_path(); chatbot-rpc, sibling_chatbot_path(): así las dos
+/// escriben la misma unidad.
+[[nodiscard]] AddonsEnvironment addons_environment(ServiceWorker::Post post,
+                                                   std::string chatbot_path);
+
+/// La ruta de chatbot en la carpeta de executable (la de chatbot-rpc).
+[[nodiscard]] std::string sibling_chatbot_path(const std::string& executable);
 
 } // namespace chatbot::cli
 

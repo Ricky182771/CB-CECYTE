@@ -13,6 +13,7 @@
 #include "chatbot/credentials.h"
 
 #include "blocking_transport.hpp"
+#include "fake_system.hpp"
 #include "fake_transport.hpp"
 #include "no_color_guard.hpp"
 #include "temp_dir.hpp"
@@ -39,7 +40,7 @@ namespace {
 namespace settings = chatbot::addon_settings;
 
 constexpr const char* kToken = "123456789:AAFakeTokenForTestsOnly_abcdefghijk";
-constexpr const char* kExecutable = "/home/ana/CB/build/chatbot-telegram";
+constexpr const char* kExecutable = chatbot_test::kAddonExecutable;
 
 struct Position {
     int x = -1;
@@ -62,73 +63,8 @@ Position find(const ftxui::Screen& screen, const std::string& needle) {
     return {};
 }
 
-chatbot::cli::ProcessResult exited(int code, std::string out = {}) {
-    chatbot::cli::ProcessResult result;
-    result.status = chatbot::cli::ProcessResult::Status::Exited;
-    result.exit_code = code;
-    result.out = std::move(out);
-    return result;
-}
-
-/// Contesta según los argumentos y anota cada llamada; lo usa el hilo del
-/// ServiceWorker.
-class FakeSystem {
-public:
-    FakeSystem() {
-        answers_[std::string{kExecutable} + " --config-version"] = exited(0, "1\n");
-        set_active(true);
-        answers_["systemctl --user is-enabled chatbot-telegram.service"] = exited(0, "enabled\n");
-        answers_["systemctl --user show -p ExecMainStatus,Result chatbot-telegram.service"] =
-            exited(0, "ExecMainStatus=0\nResult=success\n");
-        answers_["loginctl show-user 1000 -p Linger --value"] = exited(0, "no\n");
-    }
-
-    void set_active(bool active) {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        answers_["systemctl --user is-active chatbot-telegram.service"] =
-            active ? exited(0, "active\n") : exited(3, "inactive\n");
-    }
-    void set_enabled(bool enabled) {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        answers_["systemctl --user is-enabled chatbot-telegram.service"] =
-            enabled ? exited(0, "enabled\n") : exited(1, "disabled\n");
-    }
-    void answer(const std::string& command, chatbot::cli::ProcessResult result) {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        answers_[command] = std::move(result);
-    }
-
-    chatbot::cli::ProcessRunner runner() {
-        return [this](const std::vector<std::string>& argv, const chatbot::cli::ProcessOptions&) {
-            std::string joined;
-            for (const std::string& part : argv) {
-                joined += (joined.empty() ? "" : " ") + part;
-            }
-            const std::lock_guard<std::mutex> lock(mutex_);
-            calls_.push_back(joined);
-            const auto found = answers_.find(joined);
-            return found != answers_.end() ? found->second : exited(0);
-        };
-    }
-
-    [[nodiscard]] std::vector<std::string> calls() const {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        return calls_;
-    }
-    [[nodiscard]] bool called(const std::string& command) const {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        return std::find(calls_.begin(), calls_.end(), command) != calls_.end();
-    }
-    void clear() {
-        const std::lock_guard<std::mutex> lock(mutex_);
-        calls_.clear();
-    }
-
-private:
-    mutable std::mutex mutex_;
-    std::map<std::string, chatbot::cli::ProcessResult> answers_;
-    std::vector<std::string> calls_;
-};
+using chatbot_test::exited;
+using chatbot_test::FakeSystem;
 
 struct Harness {
     chatbot_test::ScopedTempDir dir;
@@ -349,18 +285,7 @@ struct Harness {
 
     /// Las acciones sobre el servicio que se corrieron (sin las consultas).
     [[nodiscard]] std::vector<std::string> service_actions() const {
-        std::vector<std::string> actions;
-        constexpr std::string_view kPrefix = "systemctl --user ";
-        for (const std::string& call : system.calls()) {
-            for (const std::string_view verb :
-                 {"daemon-reload", "enable ", "disable ", "reload ", "restart "}) {
-                if (call.starts_with(std::string{kPrefix} + std::string{verb})) {
-                    actions.push_back(call);
-                    break;
-                }
-            }
-        }
-        return actions;
+        return chatbot_test::service_actions(system);
     }
 
 };
