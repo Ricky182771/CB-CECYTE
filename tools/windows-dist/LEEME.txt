@@ -132,5 +132,5 @@ límite de gasto diario.
 
 chatbot-rpc.exe es para la versión gráfica del chatbot, que viene después:
 ella lo abre sola, por detrás. No hay que abrirlo. Si le das doble clic por
-error, se abre una ventana negra que no hace nada: ciérrala y abre
-chatbot.exe.
+error, se abre una ventana negra con un aviso que dice esto mismo:
+ciérrala y abre chatbot.exe.
