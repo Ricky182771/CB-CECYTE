@@ -235,3 +235,13 @@ Para el hito 1, sin red, usando `FakeTransport`:
 - Systemd: no reemplazar unidad ajena sin preguntar; nunca ejecutar enable-linger. Guardar aplica el estado Activado. Preguntas con `yes_no_answer`; systemd no reinicia salidas 65/69/73/78.
 
 Detalle: guias/14-addons.md
+
+## 15. Subagentes
+
+Definidos en `.claude/agents/`, con modelos más baratos para bajar el consumo por sesión. El agente principal planea, decide y escribe el código delicado; delega lo demás:
+
+- **`explorer`** (haiku, solo lectura): antes de tocar un módulo, para encontrar dónde está algo y leer la guía de la tabla "Antes de tocar un módulo". Devuelve `archivo:línea` y un resumen corto.
+- **`test-runner`** (haiku, no edita): para verificar cualquier cambio. Compila y prueba el preset pedido con `-j2` y `ctest -j1`, sin `tools/smoke` ni API real.
+- **`reviewer`** (sonnet, no edita): antes de dar algo por terminado, revisa el diff contra este archivo y devuelve hallazgos bloqueantes o menores.
+
+El agente principal no corre builds ni lee salidas largas directamente si `test-runner` puede hacerlo. La regla 3 (mostrar la salida real) se cumple con las líneas que `test-runner` copia tal cual: comandos, códigos de salida, resumen de ctest, warnings, errores y reportes de sanitizador.
