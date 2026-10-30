@@ -21,7 +21,7 @@ Versión del protocolo: **1**.
 | Evento `settings.changed` (`provider`, `system_prompt`, `search`, `gui`) | 7 | Implementado |
 | Evento `service.changed`; `settings.changed` con `telegram` | 7 | Falta |
 | `CHAT_DEBUG_RPC` | 10 | Implementado |
-| Windows: stdio en modo binario | 2 | Implementado (sin probar en la CI con procesos) |
+| Windows: stdio en modo binario | 2 | Implementado, probado en la CI con pipes (`tools/check-rpc-pipes.sh`) |
 
 ---
 
@@ -64,6 +64,14 @@ Versión del protocolo: **1**.
 7. **Salida JSON:** `nlohmann::json::dump(-1, ' ', false, error_handler_t::replace)`. Si algo trae UTF-8 inválido, se sustituye en lugar de lanzar. Se hace `flush` después de cada mensaje.
 8. **SIGPIPE ignorada** en POSIX: si el cliente murió, la escritura falla y el servidor sale.
 9. **Sin sockets.** Nada de TCP ni HTTP local. Con stdio, solo el proceso que lanzó al servidor puede hablarle, así que no hace falta autenticación.
+
+### Windows
+
+- `chatbot-rpc.exe` es un **programa de consola** (sin `-mwindows`): desde CMD se ve su stderr. Viene en el ZIP junto a `chatbot.exe`.
+- El cliente lo crea **sin ventana**. Dart con `Process.start` en modo normal (con pipes) ya lo hace: usa `CREATE_NO_WINDOW` y solo la quita con `ProcessStartMode.inheritStdio`. Otros clientes deben pasar `CREATE_NO_WINDOW` a `CreateProcessW`.
+- stdin y stdout en modo binario: cada mensaje termina en `\n`, sin `\r`, y es UTF-8 (sin páginas de códigos de por medio). Una entrada con `\r\n` también se acepta.
+- No se lanza desde `cmd /c` ni con `runInShell: true`: la shell de por medio cambia el manejo de comillas y de la consola, y al matarla queda vivo el servidor.
+- Si stdin es una consola (doble clic en el `.exe`, o abierto desde CMD sin pipes), escribe en stderr, una sola vez, que es para otras interfaces y que para platicar se abre `chatbot`, y sigue funcionando igual. En Linux, lo mismo cuando stdin es una terminal.
 
 ---
 
@@ -601,8 +609,9 @@ En el repositorio, `chatbot_rpc_tests` (sin red):
 
 1. **Puras:** `LineReader` (tope de 1 MiB, línea partida, `\r\n`, EOF), `diff_entries`, la codificación de `Entry`, `ChatError` y los errores, `check_params` y la redacción de `CHAT_DEBUG_RPC`.
 2. **`Dispatcher`** con la misma `Session` falsa que las pruebas de la TUI (`tests/session_fakes.hpp`) y un reloj falso: secuencias exactas de mensajes (el ejemplo de la sección 8, búsqueda, cancelar en cada fase, `Busy`, 429, `conversation.new`, guardado que falla, deltas agrupados, errores del protocolo), la configuración (`settings.*`, con y sin `CHAT_*` y con una respuesta en curso) y `models.list` con un transporte falso o bloqueante (lista, falla, cancelada, reemplazada, pendiente al `shutdown`); ninguna respuesta ni evento trae la key que se mandó.
-3. **Proceso real** (solo POSIX): `chatbot-rpc` con pipes y un entorno limpio, sin configuración: `initialize`, `chat.send` → `-32004`, `shutdown`, `exit` → 0; EOF → 0 en menos de 3 s; `exit` sin `shutdown` → 1; toda línea de stdout es JSON-RPC 2.0.
-4. Las tres corren también con `asan` y `tsan`.
+3. **Proceso real** (solo POSIX): `chatbot-rpc` con pipes y un entorno limpio, sin configuración: `initialize`, `chat.send` → `-32004`, `shutdown`, `exit` → 0; EOF → 0 en menos de 3 s; `exit` sin `shutdown` → 1; toda línea de stdout es JSON-RPC 2.0; sin el aviso de stdin en terminal.
+4. **Windows, en la CI:** `tools/check-rpc-pipes.sh` sobre `chatbot-rpc.exe` con pipes de MSYS2, en una carpeta portable: el ciclo de vida, ningún `\r` en la salida, entrada con `\r\n`, UTF-8 de ida y vuelta con `settings.gui.*`, EOF y stdout solo del protocolo; y en el ZIP, sin MSYS2 en el `PATH`, con y sin `chatbot.portable`. También corre a mano en Linux.
+5. Las tres primeras corren también con `asan` y `tsan`.
 
 Probar a mano, sin GUI:
 

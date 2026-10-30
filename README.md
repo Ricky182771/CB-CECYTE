@@ -110,6 +110,7 @@ El ZIP `chatbot-windows-x64.zip` lo arma la CI en cada push y en cada pull reque
 Trae, sin carpeta de por medio:
 
 - `chatbot.exe` y las DLL de MSYS2 que necesita (no hace falta instalar MSYS2);
+- `chatbot-rpc.exe`, para la interfaz gráfica que viene después ([`chatbot-rpc`](#otras-interfaces-chatbot-rpc)): no se abre a mano;
 - `LEEME.txt`: instrucciones en español para quien nunca usó una terminal (abrirlo, poner la key, pegar, comandos, seleccionar texto, modo portable, símbolos);
 - `chatbot.portable.ejemplo`: se renombra a `chatbot.portable` para activar el [modo portable](#modo-portable);
 - `LICENSE.txt` (la licencia del proyecto, GPL v3) y `AVISOS-TERCEROS.txt` (las licencias de FTXUI, md4c, nlohmann/json, el runtime de GCC y mingw-w64, y de cada DLL).
