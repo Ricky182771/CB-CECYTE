@@ -118,6 +118,8 @@ bool stdio_is_terminal() { return is_console(STD_INPUT_HANDLE) && is_console(STD
 
 bool stdout_is_terminal() { return is_console(STD_OUTPUT_HANDLE); }
 
+bool stdin_is_terminal() { return is_console(STD_INPUT_HANDLE); }
+
 ConsoleCodePages set_console_utf8() {
     // Sin consola, las dos dan 0 y no hay nada que cambiar ni restaurar.
     const ConsoleCodePages previous{::GetConsoleCP(), ::GetConsoleOutputCP()};

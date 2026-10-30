@@ -34,6 +34,10 @@ enum class Os { Posix, Windows };
 /// Como stdio_is_terminal, pero solo stdout.
 [[nodiscard]] bool stdout_is_terminal();
 
+/// Como stdio_is_terminal, pero solo stdin (chatbot-rpc abierto con doble
+/// clic o desde una terminal, sin pipes).
+[[nodiscard]] bool stdin_is_terminal();
+
 /// Páginas de códigos de la consola de Windows (GetConsoleCP y
 /// GetConsoleOutputCP). 0: no había consola, no hay nada que restaurar.
 struct ConsoleCodePages {

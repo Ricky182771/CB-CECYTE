@@ -17,7 +17,9 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -154,6 +156,36 @@ TEST_CASE("write_file_atomic: permisos POSIX de cada FilePrivacy y FolderPrivacy
                                              FilePrivacy::Private, FolderPrivacy::PrivateIfNew)
                       .has_value());
     CHECK(mode_of(created) == 0700U);
+}
+#endif
+
+#ifndef _WIN32
+TEST_CASE("stdin_is_terminal: un pipe no; una pseudoterminal sí", "[plataforma]") {
+    const int saved = ::dup(STDIN_FILENO);
+    REQUIRE(saved >= 0);
+
+    int pipe_fds[2];
+    REQUIRE(::pipe(pipe_fds) == 0);
+    REQUIRE(::dup2(pipe_fds[0], STDIN_FILENO) == STDIN_FILENO);
+    const bool with_pipe = chatbot::stdin_is_terminal();
+    ::close(pipe_fds[0]);
+    ::close(pipe_fds[1]);
+
+    const int master = ::posix_openpt(O_RDWR | O_NOCTTY);
+    REQUIRE(master >= 0);
+    REQUIRE(::grantpt(master) == 0);
+    REQUIRE(::unlockpt(master) == 0);
+    const int slave = ::open(::ptsname(master), O_RDWR | O_NOCTTY);
+    REQUIRE(slave >= 0);
+    REQUIRE(::dup2(slave, STDIN_FILENO) == STDIN_FILENO);
+    const bool with_pty = chatbot::stdin_is_terminal();
+    ::close(slave);
+    ::close(master);
+
+    REQUIRE(::dup2(saved, STDIN_FILENO) == STDIN_FILENO);
+    ::close(saved);
+    CHECK_FALSE(with_pipe);
+    CHECK(with_pty);
 }
 #endif
 

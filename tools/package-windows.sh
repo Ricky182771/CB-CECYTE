@@ -8,7 +8,8 @@
 #   zip    ZIP de salida (por defecto, <build>/../chatbot-windows-x64.zip)
 #
 # El ZIP lleva, sin carpeta de por medio:
-#   chatbot.exe y las DLL de /ucrt64/bin que reporta ldd;
+#   chatbot.exe, chatbot-rpc.exe (para la interfaz gráfica) y las DLL de
+#     /ucrt64/bin que reporta ldd para cada uno;
 #   LICENSE.txt (el LICENSE del proyecto);
 #   AVISOS-TERCEROS.txt: las licencias de lo que va adentro, sacadas de los
 #     paquetes de MSYS2 (pacman -Qo dice de qué paquete es cada DLL) y de las
@@ -46,8 +47,10 @@ for tool in ldd pacman cmake gcc; do
     command -v "$tool" > /dev/null || die "falta $tool"
 done
 
-exe=$build/cli/chatbot.exe
-[[ -f $exe ]] || die "no existe $exe: compila antes con cmake --build --preset release"
+exes=("$build/cli/chatbot.exe" "$build/rpc/chatbot-rpc.exe")
+for exe in "${exes[@]}"; do
+    [[ -f $exe ]] || die "no existe $exe: compila antes con cmake --build --preset release"
+done
 
 # Ruta absoluta (se usa desde la carpeta de preparación) y sin el ZIP de
 # una corrida anterior, para que un error no deje uno viejo como si fuera nuevo.
@@ -59,20 +62,31 @@ stage=$build/package
 rm -rf "$stage"
 mkdir -p "$stage"
 
-# --- chatbot.exe y sus DLL ---------------------------------------------------
+# --- Los ejecutables y sus DLL ------------------------------------------------
 
-cp "$exe" "$stage/"
-deps=$(ldd "$exe")
-if grep -qi "not found" <<< "$deps"; then
-    die "ldd no encontró alguna DLL:"$'\n'"$deps"
-fi
-# Las de Windows (/c/Windows/...) vienen con el sistema; cualquier otra que no
-# sea de $prefix/bin (por ejemplo, de /usr/bin, de MSYS) no debería estar.
-others=$(awk -v p="$prefix/bin/" '$3 != "" && index($3, p) != 1 &&
-                                  tolower($3) !~ /^\/[a-z]\/windows\// { print $3 }' <<< "$deps")
-[[ -z $others ]] || die "chatbot.exe usa DLL fuera de $prefix/bin y de Windows:"$'\n'"$others"
-mapfile -t dlls < <(awk -v p="$prefix/bin/" 'index($3, p) == 1 { print $3 }' <<< "$deps" | sort -u)
-[[ ${#dlls[@]} -gt 0 ]] || die "ldd no reportó ninguna DLL de $prefix/bin"
+# dll_users[<DLL>]: los ejecutables que la usan, para AVISOS-TERCEROS.txt.
+declare -A dll_users=()
+for exe in "${exes[@]}"; do
+    name=${exe##*/}
+    cp "$exe" "$stage/"
+    deps=$(ldd "$exe")
+    if grep -qi "not found" <<< "$deps"; then
+        die "ldd no encontró alguna DLL de $name:"$'\n'"$deps"
+    fi
+    # Las de Windows (/c/Windows/...) vienen con el sistema; cualquier otra que
+    # no sea de $prefix/bin (por ejemplo, de /usr/bin, de MSYS) no debería estar.
+    others=$(awk -v p="$prefix/bin/" '$3 != "" && index($3, p) != 1 &&
+                                      tolower($3) !~ /^\/[a-z]\/windows\// { print $3 }' <<< "$deps")
+    [[ -z $others ]] || die "$name usa DLL fuera de $prefix/bin y de Windows:"$'\n'"$others"
+    mapfile -t exe_dlls < <(awk -v p="$prefix/bin/" 'index($3, p) == 1 { print $3 }' <<< "$deps" |
+        sort -u)
+    [[ ${#exe_dlls[@]} -gt 0 ]] || die "ldd no reportó ninguna DLL de $prefix/bin para $name"
+    for dll in "${exe_dlls[@]}"; do
+        dll_users[$dll]+="$name "
+    done
+    echo "$name usa: ${exe_dlls[*]##*/}"
+done
+mapfile -t dlls < <(printf '%s\n' "${!dll_users[@]}" | sort)
 cp "${dlls[@]}" "$stage/"
 
 # --- Licencias -----------------------------------------------------------------
@@ -162,11 +176,13 @@ package_section() {
 cat > "$notices" << EOF
 AVISOS DE TERCEROS - chatbot para Windows (x64)
 
-chatbot.exe es software libre bajo la Licencia Pública General de GNU,
-versión 3 (ver LICENSE.txt). Lleva enlazados de forma estática FTXUI, md4c,
-nlohmann/json y partes del runtime de GCC y de mingw-w64, y se distribuye
-con las DLL de MSYS2 (UCRT64) que necesita. Abajo está la licencia de cada
-uno, tal como la instala su paquete o como viene en sus fuentes.
+chatbot.exe y chatbot-rpc.exe son software libre bajo la Licencia Pública
+General de GNU, versión 3 (ver LICENSE.txt). Los dos llevan enlazados de
+forma estática md4c, nlohmann/json y partes del runtime de GCC y de
+mingw-w64; chatbot.exe, además, FTXUI. Se distribuyen con las DLL de MSYS2
+(UCRT64) que necesitan. Abajo está la licencia de cada uno, en qué
+ejecutables va, y su texto tal como lo instala su paquete o como viene en
+sus fuentes.
 
 Generado por tools/package-windows.sh.
 EOF
@@ -183,13 +199,14 @@ section "FTXUI ${ftxui_version:-(versión desconocida)}" \
 
 md4c_src=$build/_deps/md4c-src
 section "md4c 0.6.0" \
-    "Incluido como: enlazado estático en chatbot.exe (solo la biblioteca de parseo;"$'\n'"fuentes de FetchContent)" \
+    "Incluido como: enlazado estático en chatbot.exe y chatbot-rpc.exe"$'\n'"(solo la biblioteca de parseo; fuentes de FetchContent)" \
     "$(ls "$md4c_src"/LICENSE* 2> /dev/null || true)"
 
 # nlohmann/json es solo headers: el paquete dueño del header.
 json_package=$(pacman -Qqo "$prefix/include/nlohmann/json.hpp" 2> /dev/null) ||
     die "no se encontró el paquete de nlohmann/json ($prefix/include/nlohmann/json.hpp)"
-package_section "$json_package" "compilado dentro de chatbot.exe (biblioteca de solo headers)"
+package_section "$json_package" \
+    "compilado dentro de chatbot.exe y chatbot-rpc.exe (biblioteca de solo headers)"
 
 # Runtime de GCC enlazado estático (libgcc.a, crtbegin/crtend y el código de
 # las plantillas de libstdc++): GPL 3 con la GCC Runtime Library Exception.
@@ -216,7 +233,7 @@ for candidate in "$gcc_package" $stdcxx_package; do
     fi
 done
 section "Runtime de GCC ($gcc_package $(package_version "$gcc_package"))" \
-    "Incluido como: partes enlazadas estáticas en chatbot.exe"$'\n'"Licencia según pacman: $(package_licenses "$gcc_package")"$'\n'"Textos tomados del paquete: $gcc_from" \
+    "Incluido como: partes enlazadas estáticas en chatbot.exe y chatbot-rpc.exe"$'\n'"Licencia según pacman: $(package_licenses "$gcc_package")"$'\n'"Textos tomados del paquete: $gcc_from" \
     "$gcc_files"
 if [[ -n $gcc_files ]] && ! grep -q 'COPYING\.RUNTIME' <<< "$gcc_files"; then
     missing+=("GCC Runtime Library Exception (COPYING.RUNTIME)")
@@ -226,17 +243,18 @@ fi
 # libmingwex).
 crt_package=$(pacman -Qqo "$prefix/lib/crt2.o") || die "no se encontró el paquete de crt2.o"
 package_section "$crt_package" \
-    "partes enlazadas estáticas en chatbot.exe (arranque y CRT de mingw-w64)"
+    "partes enlazadas estáticas en chatbot.exe y chatbot-rpc.exe (arranque y CRT de"$'\n'"mingw-w64)"
 
-# Las DLL, agrupadas por paquete.
+# Las DLL, agrupadas por paquete, cada una con los ejecutables que la usan.
 declare -A package_dlls=()
 for dll in "${dlls[@]}"; do
     package=$(pacman -Qqo "$dll") || die "pacman no sabe de qué paquete es $dll"
-    package_dlls[$package]+="${dll##*/} "
+    users=${dll_users[$dll]% }
+    package_dlls[$package]+="${dll##*/} (en ${users// / y }), "
 done
 mapfile -t packages < <(printf '%s\n' "${!package_dlls[@]}" | sort)
 for package in "${packages[@]}"; do
-    package_section "$package" "${package_dlls[$package]% }"
+    package_section "$package" "${package_dlls[$package]%, }"
 done
 
 for warning in "${warnings[@]}"; do
@@ -267,7 +285,7 @@ for text in LICENSE.txt LEEME.txt AVISOS-TERCEROS.txt chatbot.portable.ejemplo; 
     sed -i 's/\r*$/\r/' "$stage/$text"
 done
 
-expected=(chatbot.exe "${dlls[@]##*/}" LICENSE.txt AVISOS-TERCEROS.txt LEEME.txt
+expected=(chatbot.exe chatbot-rpc.exe "${dlls[@]##*/}" LICENSE.txt AVISOS-TERCEROS.txt LEEME.txt
           chatbot.portable.ejemplo)
 (cd "$stage" && cmake -E tar cf "$zip" --format=zip -- "${expected[@]}")
 

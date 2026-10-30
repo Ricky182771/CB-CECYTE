@@ -92,6 +92,8 @@ TEST_CASE("chatbot-rpc sin configuración: initialize, chat.send, shutdown y exi
     CHECK(messages[2]["method"] == "conversation.closed");
     CHECK(messages[3]["id"] == 3);
     CHECK(messages[3].contains("result"));
+    // Con pipes, stdin no es una terminal: sin el aviso del doble clic.
+    CHECK(result.err.find("es para otras interfaces") == std::string::npos);
 
     // CHAT_DEBUG_RPC: lo que entró y lo que salió.
     std::ifstream file{log};

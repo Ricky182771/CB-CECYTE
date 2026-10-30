@@ -210,6 +210,18 @@ jobs:
       - name: Pruebas
         run: ctest --preset ${{ matrix.preset }} --output-on-failure
 
+      # chatbot-rpc.exe con pipes de Windows de verdad (MSYS2 se los conecta
+      # al .exe nativo): ciclo de vida, sin \r, \r\n en la entrada, UTF-8, EOF
+      # y stdout solo del protocolo (tools/check-rpc-pipes.sh). Una copia con
+      # chatbot.portable, para no tocar el AppData del runner.
+      - name: chatbot-rpc con pipes
+        run: |
+          rm -rf rpc-prueba
+          mkdir rpc-prueba
+          cp build/${{ matrix.preset }}/rpc/chatbot-rpc.exe rpc-prueba/
+          touch rpc-prueba/chatbot.portable
+          tools/check-rpc-pipes.sh rpc-prueba/chatbot-rpc.exe windows
+
       # Sin CHAT_API_KEY debe salir con código 1 y el error de configuración.
       # stdin es NUL: GetConsoleMode falla y no se abre la interfaz. El
       # timeout evita que la CI se cuelgue si algún día no fuera así.
@@ -226,8 +238,8 @@ jobs:
           grep -q "error de configuración" errores.txt
           grep -q "CHAT_API_KEY" errores.txt
 
-      # El ZIP de distribución (tools/package-windows.sh): chatbot.exe con
-      # las DLL de /ucrt64/bin que reporta ldd, LICENSE.txt,
+      # El ZIP de distribución (tools/package-windows.sh): chatbot.exe y
+      # chatbot-rpc.exe con las DLL de /ucrt64/bin que reporta ldd, LICENSE.txt,
       # AVISOS-TERCEROS.txt, LEEME.txt y chatbot.portable.ejemplo. El script
       # falla si falta el texto de alguna licencia o si el ZIP no trae
       # exactamente esos archivos.
@@ -238,6 +250,8 @@ jobs:
       # Desde la carpeta descomprimida y sin /ucrt64/bin en el PATH, como en
       # una PC sin MSYS2: sin key y sin terminal sale con 1 y el error de
       # configuración; con chatbot.portable, igual, pero crea datos/ ahí.
+      # chatbot-rpc.exe: initialize, shutdown y exit → 0; con chatbot.portable,
+      # tools/check-rpc-pipes.sh completo (portable:true y config en datos\).
       - name: Probar el ZIP
         if: matrix.preset == 'release'
         run: |
@@ -261,6 +275,22 @@ jobs:
             grep -q "CHAT_API_KEY" ../errores-zip.txt
           }
           arrancar
+          status=0
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}' \
+            '{"jsonrpc":"2.0","method":"exit"}' |
+            env -u CHAT_API_KEY -u CHAT_DATA_DIR PATH=/usr/bin:/c/Windows/System32:/c/Windows \
+              timeout 60 ./chatbot-rpc.exe 2> ../errores-rpc.txt | cat > ../salida-rpc.txt ||
+            status=$?
+          cat ../errores-rpc.txt
+          cut -c1-200 ../salida-rpc.txt
+          if [ "$status" -ne 0 ]; then
+            echo "chatbot-rpc.exe: se esperaba el código de salida 0 y fue $status"
+            exit 1
+          fi
+          grep -q '"portable":false' ../salida-rpc.txt
+          grep -q '"jsonrpc":"2.0","id":2,"result":{}' ../salida-rpc.txt
           test ! -e datos
           cp chatbot.portable.ejemplo chatbot.portable
           arrancar
@@ -269,6 +299,8 @@ jobs:
             echo "datos/ se podía escribir y aun así salió el error del modo portable"
             exit 1
           fi
+          PATH=/usr/bin:/c/Windows/System32:/c/Windows \
+            ../tools/check-rpc-pipes.sh ./chatbot-rpc.exe windows
 
       - name: Subir el artefacto
         if: matrix.preset == 'release'
