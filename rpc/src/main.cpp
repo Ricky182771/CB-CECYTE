@@ -17,6 +17,7 @@
 #include "conversation_store.h"
 #include "downloads.h"
 #include "session.h"
+#include "telegram_addon.h"
 
 #include "chatbot/config.h"
 #include "chatbot/curl_transport.h"
@@ -199,9 +200,16 @@ int main() {
                                                        config.value(), std::move(session_post),
                                                        std::move(on_finished));
     };
+    // El ExecStart de la unidad es chatbot (la TUI), no chatbot-rpc: el de
+    // la misma carpeta, así la GUI y la TUI escriben la misma unidad.
+    const auto make_addons = [](chatbot::cli::ServiceWorker::Post addons_post) {
+        return std::make_unique<chatbot::cli::TelegramAddon>(chatbot::cli::addons_environment(
+            std::move(addons_post),
+            chatbot::cli::sibling_chatbot_path(chatbot::executable_path().value_or(""))));
+    };
     Dispatcher dispatcher(
         std::move(info), make_session, [] { return std::make_unique<chatbot::CurlTransport>(); },
-        post, write, [] { return std::chrono::steady_clock::now(); });
+        make_addons, post, write, [] { return std::chrono::steady_clock::now(); });
 
     while (true) {
         std::optional<Event> event = queue.pop(dispatcher.next_deadline());
