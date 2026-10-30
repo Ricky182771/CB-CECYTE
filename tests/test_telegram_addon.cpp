@@ -102,6 +102,8 @@ nlohmann::json enabled_section() {
 
 } // namespace
 
+// invitados.json usa flock: solo POSIX (en Windows, "no disponible").
+#ifndef _WIN32
 TEST_CASE("TelegramAddon: lee la sección, los secretos enmascarables y los invitados",
           "[addons]") {
     Fixture fixture;
@@ -124,6 +126,7 @@ TEST_CASE("TelegramAddon: lee la sección, los secretos enmascarables y los invi
     CHECK_FALSE(addon.install().has_value());
     CHECK_FALSE(addon.service().has_value());
 }
+#endif
 
 TEST_CASE("TelegramAddon: solo lectura con una sección más nueva o un addon incompatible",
           "[addons]") {
@@ -205,6 +208,8 @@ TEST_CASE("TelegramAddon: reiniciar hace falta solo con el servicio activo", "[a
     CHECK_FALSE(addon.needs_restart(form));
 }
 
+// invitados.json usa flock: solo POSIX (en Windows, "no disponible").
+#ifndef _WIN32
 TEST_CASE("TelegramAddon: quitar un invitado recarga solo si el servicio está activo",
           "[addons]") {
     Fixture fixture;
@@ -234,6 +239,7 @@ TEST_CASE("TelegramAddon: quitar un invitado recarga solo si el servicio está a
         CHECK(fixture.system.calls().empty());
     }
 }
+#endif
 
 TEST_CASE("TelegramAddon: aplicar usa lo guardado y pregunta por una unidad ajena",
           "[addons]") {

@@ -1770,6 +1770,8 @@ TEST_CASE("RPC: addons.telegram.save", "[rpc][addons]") {
     }
 }
 
+// invitados.json usa flock: solo POSIX (en Windows, "no disponible").
+#ifndef _WIN32
 TEST_CASE("RPC: invitados", "[rpc][addons]") {
     Rpc rpc;
     write_section(rpc, enabled_bot());
@@ -1802,6 +1804,7 @@ TEST_CASE("RPC: invitados", "[rpc][addons]") {
         CHECK(only(rpc)["error"]["data"].dump() == R"({"fields":["user"]})");
     }
 }
+#endif
 
 TEST_CASE("RPC: service.status y service.apply", "[rpc][addons]") {
     Rpc rpc;

@@ -447,7 +447,7 @@ En Windows todos responden `-32006 Unsupported` y `capabilities` se queda en `ad
 Los parámetros `name` y `addon` solo aceptan un nombre de `known_addons` (`"telegram"`); otro da `-32602` con ese campo.
 
 **`addons.list`** `→ {}` `← {addons: [{name, installed, path, problem, config_version_ok}]}`
-- `installed` y `path` salen de buscar el programa junto a `chatbot` y, fuera del modo portable, en el `PATH` (`find_addon_executable`). No corre nada: `config_version_ok` es `null` hasta que `addons.check_install` (o `service.status`) lo pregunte, y entonces `problem` es el de `addon_install_problem` (`No instalado: …`, `Incompatible: …` o `""`).
+- `installed` y `path` salen de buscar el programa junto a `chatbot` (el de la carpeta de `chatbot-rpc`) y, fuera del modo portable, en el `PATH` (`find_addon_executable`). En el árbol de compilación `chatbot-rpc` está en `rpc/` y `chatbot-telegram` en `cli/`, así que ahí sale `installed: false` salvo que esté en el `PATH`. No corre nada: `config_version_ok` es `null` hasta que `addons.check_install` (o `service.status`) lo pregunte, y entonces `problem` es el de `addon_install_problem` (`No instalado: …`, `Incompatible: …` o `""`).
 
 **`addons.check_install`** `→ {name}` `← igual que un elemento de la lista` · *larga*
 - Corre `chatbot-telegram --config-version` (`parse_config_version`): `config_version_ok` ya es `true` o `false`. Un addon incompatible deja la sección en solo lectura.
