@@ -122,9 +122,15 @@ límite de gasto diario.
 ---------------------------
 
   chatbot.exe                el programa
-  *.dll                      bibliotecas que necesita chatbot.exe: no las
-                             borres ni las muevas
+  chatbot-rpc.exe            para la versión gráfica (ver abajo): no lo abras
+  *.dll                      bibliotecas que necesitan chatbot.exe y
+                             chatbot-rpc.exe: no las borres ni las muevas
   chatbot.portable.ejemplo   renómbralo para el modo portable (sección 7)
   LEEME.txt                  este archivo
   LICENSE.txt                la licencia del chatbot (GPL versión 3)
   AVISOS-TERCEROS.txt        las licencias de las bibliotecas incluidas
+
+chatbot-rpc.exe es para la versión gráfica del chatbot, que viene después:
+ella lo abre sola, por detrás. No hay que abrirlo. Si le das doble clic por
+error, se abre una ventana negra que no hace nada: ciérrala y abre
+chatbot.exe.
