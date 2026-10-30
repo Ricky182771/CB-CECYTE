@@ -92,7 +92,7 @@ jobs:
             '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}' \
             '{"jsonrpc":"2.0","method":"exit"}' \
             | env -u CHAT_API_KEY -u XDG_CONFIG_HOME -u XDG_DATA_HOME HOME="$RUNNER_TEMP/rpc-home" \
-              ./build/${{ matrix.preset }}/rpc/chatbot-rpc > salida-rpc.txt 2> errores-rpc.txt \
+              ./build/${{ matrix.preset }}/cli/chatbot-rpc > salida-rpc.txt 2> errores-rpc.txt \
             || status=$?
           cat salida-rpc.txt errores-rpc.txt
           if [ "$status" -ne 0 ]; then
@@ -218,7 +218,7 @@ jobs:
         run: |
           rm -rf rpc-prueba
           mkdir rpc-prueba
-          cp build/${{ matrix.preset }}/rpc/chatbot-rpc.exe rpc-prueba/
+          cp build/${{ matrix.preset }}/cli/chatbot-rpc.exe rpc-prueba/
           touch rpc-prueba/chatbot.portable
           tools/check-rpc-pipes.sh rpc-prueba/chatbot-rpc.exe windows
 

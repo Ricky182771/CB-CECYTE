@@ -447,7 +447,7 @@ En Windows todos responden `-32006 Unsupported` y `capabilities` se queda en `ad
 Los parámetros `name` y `addon` solo aceptan un nombre de `known_addons` (`"telegram"`); otro da `-32602` con ese campo.
 
 **`addons.list`** `→ {}` `← {addons: [{name, installed, path, problem, config_version_ok}]}`
-- `installed` y `path` salen de buscar el programa junto a `chatbot` (el de la carpeta de `chatbot-rpc`) y, fuera del modo portable, en el `PATH` (`find_addon_executable`). En el árbol de compilación `chatbot-rpc` está en `rpc/` y `chatbot-telegram` en `cli/`, así que ahí sale `installed: false` salvo que esté en el `PATH`. No corre nada: `config_version_ok` es `null` hasta que `addons.check_install` (o `service.status`) lo pregunte, y entonces `problem` es el de `addon_install_problem` (`No instalado: …`, `Incompatible: …` o `""`).
+- `installed` y `path` salen de buscar el programa junto a `chatbot` (el de la carpeta de `chatbot-rpc`) y, fuera del modo portable, en el `PATH` (`find_addon_executable`). No corre nada: `config_version_ok` es `null` hasta que `addons.check_install` (o `service.status`) lo pregunte, y entonces `problem` es el de `addon_install_problem` (`No instalado: …`, `Incompatible: …` o `""`).
 
 **`addons.check_install`** `→ {name}` `← igual que un elemento de la lista` · *larga*
 - Corre `chatbot-telegram --config-version` (`parse_config_version`): `config_version_ok` ya es `true` o `false`. Un addon incompatible deja la sección en solo lectura.
@@ -482,7 +482,7 @@ Lee los archivos en cada llamada. Los campos de secretos van vacíos (vacío = s
 - Si escribió: `{needs_restart}` y después `settings.changed {section: "telegram"}`. `needs_restart` es el criterio de F2: el cambio lo necesita (token o respuestas a la vez), está activado y el servicio está activo **según el último estado que trajo `service.status` o una acción**; por eso la GUI pide `service.status` al abrir la sección, como F2.
 - **No toca el servicio. Paso obligatorio después de `save`:** `service.apply`, como hace F2 al guardar. Con `needs_restart`, la GUI pregunta "Este cambio necesita reiniciar el bot y se borran las conversaciones en memoria. ¿Reiniciar ahora?" y manda `restart: true` si contesta que sí. Si no lo llama, el servicio sigue como estaba (F2 lo marca como "no coincide" la próxima vez).
 
-**`addons.telegram.invite_code`** `→ {}` `← {code}` (`generate_invite_code`; no guarda nada: va al campo `invite_code` del formulario). Si el sistema no da números al azar: `-32603` con `data.message`.
+**`addons.telegram.invite_code`** `→ {}` `← {invite_code}` (`generate_invite_code`; no guarda nada: va al campo `invite_code` del formulario). Si el sistema no da números al azar: `-32603` con `data.message`.
 
 **`addons.telegram.invited.list`** `→ {}` `← {users: ["123456789", ...]}`
 - `invitados.json` dañado o sin `HOME` → `-32007` con el texto de F2.
@@ -494,7 +494,7 @@ Lee los archivos en cada llamada. Los campos de secretos van vacíos (vacío = s
 
 Todas son *largas* y corren en el `ServiceWorker` de `TelegramAddon` (`systemctl --user`, `loginctl`, `journalctl` con argumentos fijos y su tope de 5 s cada uno), una a la vez y en orden, junto con `check_install` e `invited.remove`.
 
-La unidad que escribe `chatbot-rpc` es **byte por byte** la de la TUI: su `ExecStart` es **la ruta de `chatbot`** (la TUI, que hace `exec` del addon), no la de `chatbot-rpc`. `chatbot-rpc` usa el `chatbot` de su misma carpeta (`sibling_chatbot_path`), y busca el addon junto a él. Si ese archivo no existe (por ejemplo, en el árbol de compilación, donde están en carpetas distintas, o si no se supo la ruta de `chatbot-rpc`), todas las `service.*` responden `-32007` con `El servicio arranca chatbot, y no está junto a chatbot-rpc: <ruta>.` Sin `HOME` no hay dónde poner la unidad: `-32006` con `Sin HOME no hay dónde instalar el servicio.`
+La unidad que escribe `chatbot-rpc` es **byte por byte** la de la TUI: su `ExecStart` es **la ruta de `chatbot`** (la TUI, que hace `exec` del addon), no la de `chatbot-rpc`. `chatbot-rpc` usa el `chatbot` de su misma carpeta (`sibling_chatbot_path`), y busca el addon junto a él. En el árbol de compilación también están juntos (`build/<preset>/cli/`). Si ese archivo no existe (o no se supo la ruta de `chatbot-rpc`), todas las `service.*` responden `-32007` con `El servicio arranca chatbot, y no está junto a chatbot-rpc: <ruta>.` Sin `HOME` no hay dónde poner la unidad: `-32006` con `Sin HOME no hay dónde instalar el servicio.`
 
 **`service.status`** `→ {addon}` `←`
 
@@ -616,7 +616,7 @@ La primera entrada del asistente llega con `entry_added` (la crea el primer delt
 
 - Sin red local: solo stdio (sección 2).
 - Los secretos nunca salen del servidor (sección 4). Las pruebas lo vigilan: ninguna respuesta ni evento contiene la key que se mandó (ver 12).
-- **Registro de depuración:** `CHAT_DEBUG_RPC=/ruta` escribe cada línea que entra y sale, con los valores de `api_key`, `token`, `model_key`, `search_key` e `invite_code` (también dentro de `form.fields` de `addons.telegram.*`) reemplazados por `"•••"` **antes** de escribir; el `code` que devuelve `addons.telegram.invite_code` sí queda, como el resto del texto (igual va en claro a `config.json` al guardar). Igual que `CHAT_DEBUG_SSE`, contiene la conversación: solo para diagnosticar. Nunca está activo por defecto.
+- **Registro de depuración:** `CHAT_DEBUG_RPC=/ruta` escribe cada línea que entra y sale, con los valores de `api_key`, `token`, `model_key`, `search_key` e `invite_code` (también dentro de `form.fields` de `addons.telegram.*`) reemplazados por `"•••"` **antes** de escribir, también el que devuelve `addons.telegram.invite_code`. Igual que `CHAT_DEBUG_SSE`, contiene la conversación: solo para diagnosticar. Nunca está activo por defecto.
 - El servidor no ejecuta nada que mande el cliente. `service.*` solo corre `systemctl` con argumentos fijos, como F2.
 
 ---
@@ -649,10 +649,10 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":2,"method":"conversations.list","params":{}}' \
   '{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}' \
   '{"jsonrpc":"2.0","method":"exit"}' \
-| ./build/dev/rpc/chatbot-rpc | jq -c .
+| ./build/dev/cli/chatbot-rpc | jq -c .
 ```
 
-Para una sesión interactiva: `rlwrap ./build/dev/rpc/chatbot-rpc 2>rpc.log`.
+Para una sesión interactiva: `rlwrap ./build/dev/cli/chatbot-rpc 2>rpc.log`.
 
 ---
 

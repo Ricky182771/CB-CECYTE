@@ -969,7 +969,8 @@ void Dispatcher::addons(const std::string& method, const Json* params, const Jso
         if (code.is_error()) {
             fail(id, has_id, RpcError::InternalError, message_data(code.error().message));
         } else {
-            reply(id, has_id, {{"code", code.value()}});
+            // invite_code, no code: así CHAT_DEBUG_RPC lo tapa (debug_log.cpp).
+            reply(id, has_id, {{"invite_code", code.value()}});
         }
     } else if (method == "addons.telegram.invited.list") {
         if (bad_params(check_params(params, {}))) {

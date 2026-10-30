@@ -10,6 +10,7 @@
 #include "code_blocks.h"
 #include "conversation.h"
 #include "conversation_store.h"
+#include "debug_log.h"
 #include "downloads.h"
 #include "models_loader.h"
 #include "providers.h"
@@ -27,6 +28,7 @@
 #include "chatbot/addon_settings/paths.h"
 #include "chatbot/addon_settings/registry.h"
 #include "chatbot/addon_settings/systemd_unit.h"
+#include "chatbot/addon_settings/token.h"
 #include "chatbot/config.h"
 #include "chatbot/credentials.h"
 #include "chatbot/platform.h"
@@ -1988,3 +1990,27 @@ TEST_CASE("RPC: addons.* nunca devuelve un secreto", "[rpc][addons]") {
         CHECK(all.find(text.substr(text.find(':') + 1)) == std::string::npos);
     }
 }
+
+// generate_invite_code usa getrandom: solo POSIX (en Windows, "no disponible").
+#ifndef _WIN32
+TEST_CASE("RPC: el código de invitación no queda en CHAT_DEBUG_RPC", "[rpc][addons]") {
+    // Lo que escribe main: cada línea que sale pasa por DebugLog::outgoing.
+    Rpc rpc;
+    rpc.initialize();
+    rpc.call(2, "addons.telegram.invite_code");
+    const Json got = only(rpc);
+    REQUIRE(got["result"].size() == 1);
+    const std::string code = got["result"]["invite_code"];
+    CHECK(code.size() == chatbot::addon_settings::kGeneratedInviteCodeLength);
+    const std::string log_path = rpc.path("rpc.log");
+    {
+        chatbot::rpc::DebugLog log{log_path};
+        log.outgoing(got);
+    }
+    std::ifstream file{log_path, std::ios::binary};
+    const std::string written{std::istreambuf_iterator<char>{file},
+                              std::istreambuf_iterator<char>{}};
+    CHECK(written.find(code) == std::string::npos);
+    CHECK(written.find(R"("invite_code":"•••")") != std::string::npos);
+}
+#endif
