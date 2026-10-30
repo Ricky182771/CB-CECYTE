@@ -45,6 +45,9 @@ public:
     /// keys guardadas; env: las variables CHAT_* definidas.
     ProviderSettings(ConfigFileValues saved, Credentials credentials, SettingsEnv env);
 
+    /// Lo que hay en config.json, tal como se leyó.
+    [[nodiscard]] const ConfigFileValues& saved() const { return saved_; }
+
     // --- Proveedor ---
     [[nodiscard]] std::size_t provider() const { return provider_; }
     [[nodiscard]] const ProviderInfo& provider_info() const;

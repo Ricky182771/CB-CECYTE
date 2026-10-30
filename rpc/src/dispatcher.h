@@ -2,7 +2,9 @@
 #define CHATBOT_RPC_DISPATCHER_H
 
 #include "entry_diff.h"
+#include "models_loader.h"
 #include "protocol.h"
+#include "provider_settings.h"
 #include "session.h"
 
 #include <chrono>
@@ -52,8 +54,10 @@ public:
 
     /// post: el de main (mete la tarea en la cola del hilo principal); las
     /// tareas que lleguen después de destruir la sesión no se ejecutan.
-    Dispatcher(ServerInfo info, SessionFactory make_session, cli::Session::Post post, Write write,
-               Now now);
+    /// models_transport: el transporte de cada models.list.
+    Dispatcher(ServerInfo info, SessionFactory make_session,
+               cli::ModelsLoader::TransportFactory models_transport, cli::Session::Post post,
+               Write write, Now now);
     ~Dispatcher();
 
     Dispatcher(const Dispatcher&) = delete;
@@ -90,7 +94,7 @@ private:
 
     void initialize(const Json* params, const Json& id, bool has_id);
     void shutdown(const Json& id, bool has_id);
-    /// Cancela y destruye la sesión (join).
+    /// Cancela y destruye la sesión (join); un models.list pendiente no se responde.
     void close_session();
     /// El handle es el vigente; si no, responde UnknownConversation.
     [[nodiscard]] bool check_handle(const Json& params, const Json& id,
@@ -107,6 +111,16 @@ private:
     [[nodiscard]] Json command_list() const;
     void run_command(const std::string& text, const Json& id, bool has_id);
 
+    /// settings.* y models.list (rpc/PROTOCOL.md, sección 6.7).
+    void settings(const std::string& method, const Json* params, const Json& id, bool has_id);
+    /// provider_form con el borrador params.draft aplicado; si no se puede,
+    /// responde el error y nullopt.
+    [[nodiscard]] std::optional<cli::ProviderSettings> provider_draft(const Json& params,
+                                                                      const Json& id, bool has_id);
+    void models_list(const cli::ProviderSettings& form, const Json& id, bool has_id);
+    /// El models.list pendiente responde -32800.
+    void cancel_models();
+
     [[nodiscard]] Phase current_phase() const;
     [[nodiscard]] Json snapshot() const;
     [[nodiscard]] Json status() const;
@@ -118,6 +132,7 @@ private:
 
     ServerInfo info_;
     SessionFactory make_session_;
+    cli::ModelsLoader::TransportFactory models_transport_;
     cli::Session::Post post_;
     Write write_;
     Now now_;
@@ -126,6 +141,10 @@ private:
     /// Vive lo mismo que la sesión: las tareas de su post solo corren si sigue.
     std::shared_ptr<int> alive_;
     std::unique_ptr<cli::Session> session_;
+    /// Usa el post protegido de la sesión; se destruye antes que ella.
+    std::unique_ptr<cli::ModelsLoader> models_;
+    /// id del models.list pendiente (nullopt si no hay o fue notificación).
+    std::optional<Json> models_id_;
     std::optional<cli::Session::Finished> finished_; ///< Llegó en la última tarea.
     int handle_number_ = 0;
     std::string handle_;

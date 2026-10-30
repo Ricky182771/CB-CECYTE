@@ -3,8 +3,11 @@
 #include "block_actions.h"
 #include "code_blocks.h"
 #include "commands.h"
+#include "providers.h"
 #include "search_settings.h"
 #include "sidebar.h"
+
+#include "chatbot/system_prompt.h"
 
 #include <cstdint>
 #include <exception>
@@ -19,6 +22,9 @@ constexpr std::string_view kServerName = "chatbot-rpc";
 constexpr std::string_view kEmptyMessage = "El mensaje está vacío.";
 constexpr std::string_view kAlreadyInitialized = "initialize ya se llamó.";
 constexpr std::string_view kAlreadyShutDown = "El servidor ya se apagó: solo queda exit.";
+constexpr std::string_view kSearchKeyLocked =
+    "La key de búsqueda está definida por CHAT_SEARCH_API_KEY; no se puede cambiar aquí.";
+constexpr std::string_view kSearchKeyEmpty = "Escribe la key de búsqueda.";
 
 Json optional_string(const std::optional<std::string>& value) {
     return value.has_value() ? Json(*value) : Json(nullptr);
@@ -56,6 +62,14 @@ std::string_view reason_name(const cli::CodeBlock& block) {
     return "none";
 }
 
+/// mode de settings.system_prompt.*: la llave ausente usa las predeterminadas.
+std::string_view prompt_mode(const cli::Session& session) {
+    if (!session.system_prompt_stored()) {
+        return "default";
+    }
+    return session.system_prompt().empty() ? "none" : "custom";
+}
+
 /// El number de blocks.*, o nullopt si no cabe en un int.
 std::optional<int> block_number(const Json& params) {
     const Json& number = params.at("number");
@@ -72,9 +86,11 @@ std::optional<int> block_number(const Json& params) {
 
 } // namespace
 
-Dispatcher::Dispatcher(ServerInfo info, SessionFactory make_session, cli::Session::Post post,
-                       Write write, Now now)
-    : info_(std::move(info)), make_session_(std::move(make_session)), post_(std::move(post)),
+Dispatcher::Dispatcher(ServerInfo info, SessionFactory make_session,
+                       cli::ModelsLoader::TransportFactory models_transport,
+                       cli::Session::Post post, Write write, Now now)
+    : info_(std::move(info)), make_session_(std::move(make_session)),
+      models_transport_(std::move(models_transport)), post_(std::move(post)),
       write_(std::move(write)), now_(std::move(now)) {}
 
 Dispatcher::~Dispatcher() { close_session(); }
@@ -160,12 +176,16 @@ void Dispatcher::dispatch(const std::string& method, const Json* params, const J
         return;
     }
     if (method == "$/cancel") {
-        // Sin peticiones largas en esta versión: no hay nada que cancelar.
+        // Solo models.list es larga; con otro id no hace nada.
         if (const auto bad = check_params(params, {{"id", Param::Type::IntegerOrString}})) {
             fail(id, has_id, RpcError::InvalidParams, *bad);
-        } else {
-            reply(id, has_id, Json::object());
+            return;
         }
+        if (models_id_.has_value() && *models_id_ == params->at("id")) {
+            models_->cancel();
+            cancel_models();
+        }
+        reply(id, has_id, Json::object());
         return;
     }
     if (method == "initialize") {
@@ -355,8 +375,272 @@ void Dispatcher::dispatch(const std::string& method, const Json* params, const J
                {"language", choice.block->info},
                {"complete", choice.block->complete},
                {"reason", std::string{reason_name(*choice.block)}}});
+    } else if (method.starts_with("settings.") || method == "models.list") {
+        settings(method, params, id, has_id);
     } else {
         fail(id, has_id, RpcError::MethodNotFound);
+    }
+}
+
+void Dispatcher::settings(const std::string& method, const Json* params, const Json& id,
+                          bool has_id) {
+    const auto changed = [this](std::string_view section) {
+        write_(notification("settings.changed", {{"section", std::string{section}}}));
+    };
+    // Los guardados que tocan el chat no van con una respuesta en curso
+    // (F2 no abre); gui sí.
+    const auto busy = [&] {
+        if (!session_->busy()) {
+            return false;
+        }
+        fail(id, has_id, RpcError::Busy, message_data(cli::kWaitOrCancel));
+        return true;
+    };
+    if (method == "settings.provider.get") {
+        if (const auto bad = check_params(params, {})) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return;
+        }
+        const Result<cli::ProviderSettings> form = session_->provider_form();
+        if (form.is_error()) {
+            fail(id, has_id, RpcError::StorageError, message_data(form.error().message));
+            return;
+        }
+        const cli::ProviderSettings& f = form.value();
+        Json providers = Json::array();
+        for (const cli::ProviderInfo& provider : cli::providers()) {
+            providers.push_back({{"id", std::string{provider.id}},
+                                 {"name", std::string{provider.name}},
+                                 {"base_url", std::string{provider.base_url}},
+                                 {"needs_key", provider.needs_key}});
+        }
+        reply(id, has_id,
+              {{"providers", std::move(providers)},
+               {"saved",
+                {{"provider", f.saved().provider},
+                 {"base_url", f.saved().base_url},
+                 {"model", f.saved().model}}},
+               {"effective",
+                {{"base_url", session_->config().base_url}, {"model", session_->config().model}}},
+               {"locks",
+                {{"base_url", f.base_url_locked()},
+                 {"model", f.model_locked()},
+                 {"api_key", f.key_locked()}}},
+               {"key_status", f.key_status()}});
+    } else if (method == "settings.provider.check" || method == "settings.provider.save" ||
+               method == "models.list") {
+        if (const auto bad = check_params(params, {{"draft", Param::Type::Object}})) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return;
+        }
+        const std::optional<cli::ProviderSettings> form = provider_draft(*params, id, has_id);
+        if (!form.has_value()) {
+            return;
+        }
+        if (method == "settings.provider.check") {
+            reply(id, has_id,
+                  {{"error", optional_string(form->validate())},
+                   {"hint", optional_string(form->base_url_hint())},
+                   {"can_request_models", form->can_request_models()},
+                   {"dirty", form->dirty()}});
+        } else if (method == "models.list") {
+            models_list(*form, id, has_id);
+        } else if (!busy()) {
+            if (const std::optional<std::string> error = form->validate()) {
+                fail(id, has_id, RpcError::ValidationFailed, message_data(*error));
+            } else if (const std::optional<std::string> failed = session_->save_provider(*form)) {
+                fail(id, has_id, RpcError::StorageError, message_data(*failed));
+            } else {
+                reply(id, has_id, {{"ready", session_->configured()}});
+                changed("provider");
+            }
+        }
+    } else if (method == "settings.system_prompt.get") {
+        if (const auto bad = check_params(params, {})) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return;
+        }
+        const std::string& text = session_->system_prompt();
+        reply(id, has_id,
+              {{"mode", std::string{prompt_mode(*session_)}},
+               {"text", text},
+               {"default_text", std::string{kDefaultSystemPrompt}},
+               {"max_bytes", kMaxSystemPromptBytes},
+               {"warning", optional_string(system_prompt_limit_warning(
+                               text, session_->config().history_limit_bytes))}});
+    } else if (method == "settings.system_prompt.check" ||
+               method == "settings.system_prompt.save") {
+        if (const auto bad = check_params(params, {{"text"}})) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return;
+        }
+        const std::string text = params->at("text").get<std::string>();
+        const std::optional<std::string> error = validate_system_prompt(text);
+        if (method == "settings.system_prompt.check") {
+            reply(id, has_id,
+                  {{"error", optional_string(error)},
+                   {"warning", optional_string(system_prompt_limit_warning(
+                                   text, session_->config().history_limit_bytes))},
+                   {"bytes", text.size()}});
+        } else if (!busy()) {
+            if (error.has_value()) {
+                fail(id, has_id, RpcError::ValidationFailed, message_data(*error));
+            } else if (const std::optional<std::string> failed =
+                           session_->save_system_prompt_text(text)) {
+                fail(id, has_id, RpcError::StorageError, message_data(*failed));
+            } else {
+                reply(id, has_id, {{"mode", std::string{prompt_mode(*session_)}}});
+                changed("system_prompt");
+            }
+        }
+    } else if (method == "settings.search.get" || method == "settings.search.save") {
+        const bool save = method == "settings.search.save";
+        if (const auto bad = save ? check_params(params, {{"api_key"}}) : check_params(params, {})) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return;
+        }
+        if (save && busy()) {
+            return;
+        }
+        const Result<cli::SearchSettings> form = session_->search_form();
+        if (form.is_error()) {
+            fail(id, has_id, RpcError::StorageError, message_data(form.error().message));
+            return;
+        }
+        cli::SearchSettings f = form.value();
+        if (!save) {
+            reply(id, has_id,
+                  {{"configured", session_->has_search_key()},
+                   {"locked", f.key_locked()},
+                   {"key_status", f.key_status()}});
+            return;
+        }
+        if (f.key_locked()) {
+            fail(id, has_id, RpcError::ValidationFailed, message_data(kSearchKeyLocked));
+            return;
+        }
+        (void)f.set_key(params->at("api_key").get<std::string>());
+        if (const std::optional<std::string> error = f.validate()) {
+            fail(id, has_id, RpcError::ValidationFailed, message_data(*error));
+            return;
+        }
+        const auto update = f.credential_update();
+        if (!update.has_value()) { // Vacía: en F2 no se guarda nada.
+            fail(id, has_id, RpcError::ValidationFailed, message_data(kSearchKeyEmpty));
+            return;
+        }
+        if (const std::optional<std::string> failed = session_->save_search_key(update->second)) {
+            fail(id, has_id, RpcError::StorageError, message_data(*failed));
+            return;
+        }
+        reply(id, has_id, {{"saved", true}});
+        changed("search");
+    } else if (method == "settings.gui.get") {
+        if (const auto bad = check_params(params, {})) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return;
+        }
+        const Result<std::optional<std::string>> value = session_->gui_settings();
+        if (value.is_error()) {
+            fail(id, has_id, RpcError::StorageError, message_data(value.error().message));
+            return;
+        }
+        reply(id, has_id,
+              {{"value", value.value().has_value() ? Json::parse(*value.value()) : Json(nullptr)}});
+    } else if (method == "settings.gui.set") {
+        if (const auto bad = check_params(params, {{"value", Param::Type::Any}})) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return;
+        }
+        const Json& value = params->at("value");
+        std::optional<std::string> json;
+        if (!value.is_null()) {
+            json = value.dump();
+            if (const std::optional<std::string> problem = cli::gui_settings_problem(*json)) {
+                fail(id, has_id, RpcError::ValidationFailed, message_data(*problem));
+                return;
+            }
+        }
+        if (const std::optional<std::string> failed = session_->save_gui_settings(json)) {
+            fail(id, has_id, RpcError::StorageError, message_data(*failed));
+            return;
+        }
+        reply(id, has_id, Json::object());
+        changed("gui");
+    } else {
+        fail(id, has_id, RpcError::MethodNotFound);
+    }
+}
+
+std::optional<cli::ProviderSettings> Dispatcher::provider_draft(const Json& params, const Json& id,
+                                                                bool has_id) {
+    const Json& draft = params.at("draft");
+    std::optional<Json> bad = check_params(&draft, {{"provider"},
+                                                    {"base_url"},
+                                                    {"model"},
+                                                    {"api_key", Param::Type::String, false}});
+    std::size_t index = 0;
+    if (!bad.has_value()) {
+        const std::string provider = draft.at("provider").get<std::string>();
+        index = cli::provider_index(provider);
+        if (cli::providers()[index].id != provider) {
+            // Al leer config.json un id desconocido cae en custom; aquí es un error de la GUI.
+            bad = Json{{"fields", Json::array({"provider"})}};
+        }
+    }
+    if (bad.has_value()) {
+        Json fields = Json::array();
+        for (const Json& field : bad->at("fields")) {
+            fields.push_back("draft." + field.get<std::string>());
+        }
+        fail(id, has_id, RpcError::InvalidParams, {{"fields", std::move(fields)}});
+        return std::nullopt;
+    }
+    const Result<cli::ProviderSettings> loaded = session_->provider_form();
+    if (loaded.is_error()) {
+        fail(id, has_id, RpcError::StorageError, message_data(loaded.error().message));
+        return std::nullopt;
+    }
+    // Como F2: un campo fijado por CHAT_* (o la URL de un proveedor conocido)
+    // no se edita, y sus setters no cambian nada.
+    cli::ProviderSettings form = loaded.value();
+    form.select_provider(index);
+    (void)form.set_base_url(draft.at("base_url").get<std::string>());
+    if (const auto key = draft.find("api_key"); key != draft.end()) {
+        (void)form.set_key(key->get<std::string>());
+    }
+    (void)form.set_model(draft.at("model").get<std::string>());
+    return form;
+}
+
+void Dispatcher::models_list(const cli::ProviderSettings& form, const Json& id, bool has_id) {
+    if (!form.can_request_models()) {
+        fail(id, has_id, RpcError::ValidationFailed, message_data(cli::kModelsNeedUrlAndKey));
+        return;
+    }
+    cancel_models(); // start descarta la anterior sin llamar a su on_done.
+    if (has_id) {
+        models_id_ = id;
+    }
+    models_->start(form.request_config(session_->config()),
+                   [this](const Result<std::vector<std::string>>& result) {
+                       if (!models_id_.has_value()) {
+                           return; // Era notificación.
+                       }
+                       sync(true); // El delta pendiente sale antes que la respuesta.
+                       const Json request = *std::exchange(models_id_, std::nullopt);
+                       if (result.is_ok()) {
+                           reply(request, true, {{"models", result.value()}});
+                       } else {
+                           fail(request, true, RpcError::ValidationFailed,
+                                message_data(cli::models_error_text(result.error())));
+                       }
+                   });
+}
+
+void Dispatcher::cancel_models() {
+    if (models_id_.has_value()) {
+        fail(*std::exchange(models_id_, std::nullopt), true, RpcError::RequestCancelled);
     }
 }
 
@@ -511,6 +795,7 @@ void Dispatcher::initialize(const Json* params, const Json& id, bool has_id) {
             }
         });
     };
+    models_ = std::make_unique<cli::ModelsLoader>(models_transport_, guarded);
     session_ = make_session_(std::move(guarded), [this](cli::Session::Finished finished) {
         finished_ = std::move(finished);
     });
@@ -548,7 +833,9 @@ void Dispatcher::shutdown(const Json& id, bool has_id) {
 
 void Dispatcher::close_session() {
     alive_.reset();
-    session_.reset(); // Cancela y hace join.
+    models_id_.reset(); // Pendiente al apagar o en EOF: sin respuesta, como chat.send.
+    models_.reset();    // Cancela y hace join, antes que la sesión.
+    session_.reset();   // Cancela y hace join.
     finished_.reset();
     pending_since_.reset();
 }

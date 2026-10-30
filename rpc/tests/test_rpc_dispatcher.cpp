@@ -10,6 +10,8 @@
 #include "conversation.h"
 #include "conversation_store.h"
 #include "downloads.h"
+#include "models_loader.h"
+#include "providers.h"
 #include "search_settings.h"
 #include "session.h"
 #include "sidebar.h"
@@ -18,8 +20,10 @@
 #include "fake_transport.hpp"
 #include "session_fakes.hpp"
 
+#include "chatbot/config.h"
 #include "chatbot/platform.h"
 #include "chatbot/search_context.h"
+#include "chatbot/system_prompt.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -27,6 +31,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -68,6 +73,10 @@ struct Rpc : chatbot_test::SessionFakes {
     Dispatcher::TimePoint now{};
     chatbot::rpc::ServerInfo info = test_info();
     chatbot::Config config = chatbot_test::test_config();
+    /// El transporte de cada models.list.
+    std::function<std::unique_ptr<chatbot::Transport>()> models_transport = [] {
+        return std::make_unique<chatbot_test::FakeTransport>();
+    };
     std::unique_ptr<Dispatcher> dispatcher; ///< Al último: se destruye primero (join).
 
     void start() {
@@ -77,6 +86,7 @@ struct Rpc : chatbot_test::SessionFakes {
                 return std::make_unique<chatbot::cli::Session>(environment(), config,
                                                                std::move(post), std::move(done));
             },
+            [this] { return models_transport(); },
             [this](chatbot::cli::RequestRunner::Task task) {
                 queue.post([this, task = std::move(task)] {
                     task();
@@ -140,6 +150,8 @@ std::string summary(const Json& message) {
                 params["reason"].get<std::string>();
     } else if (method == "chat.finished") {
         text += " " + params["outcome"].get<std::string>();
+    } else if (method == "settings.changed") {
+        text += " " + params["section"].get<std::string>();
     }
     return text;
 }
@@ -717,10 +729,10 @@ TEST_CASE("RPC: ciclo de vida y errores del protocolo", "[rpc]") {
         const std::vector<Json> got = rpc.take();
         CHECK(summaries(got) == std::vector<std::string>{"#2 result"});
     }
-    SECTION("un método de R3 en adelante: MethodNotFound; el id puede ser cadena") {
+    SECTION("un método de R4 o uno desconocido: MethodNotFound; el id puede ser cadena") {
         rpc.initialize();
-        rpc.call("a", "models.list");
-        rpc.call("b", "settings.provider.get");
+        rpc.call("a", "addons.list");
+        rpc.call("b", "settings.appearance.get");
         const std::vector<Json> got = rpc.take();
         CHECK(summaries(got) ==
               std::vector<std::string>{R"(#"a" error -32601)", R"(#"b" error -32601)"});
@@ -1129,3 +1141,358 @@ TEST_CASE("RPC: blocks.list, blocks.get, blocks.save y conversation.export", "[r
         REQUIRE(rpc.finish());
     }
 }
+
+namespace {
+
+constexpr const char* kModelKey = "nvapi-clave-ficticia-del-modelo-9876";
+
+/// Borrador de NVIDIA con key y modelo.
+Json nvidia_draft(const std::string& model = "m1") {
+    return {{"provider", "nvidia"}, {"base_url", ""}, {"model", model}, {"api_key", kModelKey}};
+}
+
+chatbot::HttpResponse models_response(int status, std::string body) {
+    chatbot::HttpResponse response;
+    response.status = status;
+    response.body = std::move(body);
+    return response;
+}
+
+/// Cada models.list responde con response.
+void models_reply(Rpc& rpc, const chatbot::HttpResponse& response) {
+    rpc.models_transport = [response] {
+        auto transport = std::make_unique<chatbot_test::FakeTransport>();
+        transport->responses = {response};
+        return transport;
+    };
+}
+
+/// Cada models.list se queda esperando la cancelación; blocking apunta al último.
+void models_block(Rpc& rpc, BlockingTransport*& blocking) {
+    rpc.models_transport = [&blocking] {
+        auto transport = std::make_unique<BlockingTransport>(BlockingTransport::Mode::Block);
+        blocking = transport.get();
+        return transport;
+    };
+}
+
+/// Ejecuta tareas hasta que llegue la respuesta a id.
+bool run_until_reply(Rpc& rpc, const Json& id) {
+    return rpc.queue.run_until([&] {
+        for (const Json& message : rpc.out) {
+            if (message.contains("id") && message["id"] == id) {
+                return true;
+            }
+        }
+        return false;
+    });
+}
+
+/// Unos instantes de tareas, para ver que no llega nada más.
+void settle(Rpc& rpc) {
+    (void)rpc.queue.run_until([] { return false; }, std::chrono::milliseconds{150});
+}
+
+} // namespace
+
+TEST_CASE("RPC: settings.provider.get", "[rpc][settings]") {
+    Rpc rpc;
+    SECTION("sin CHAT_*") {
+        rpc.config = rpc.load();
+        rpc.initialize();
+        rpc.call(2, "settings.provider.get");
+        const Json result = only(rpc)["result"];
+        REQUIRE(result["providers"].size() == chatbot::cli::providers().size());
+        CHECK(result["providers"][0]["id"] == std::string{chatbot::cli::providers()[0].id});
+        CHECK(result["providers"].back()["id"] == "custom");
+        CHECK(result["locks"].dump() == R"({"base_url":false,"model":false,"api_key":false})");
+        CHECK(result["saved"].contains("provider"));
+        CHECK(result["effective"]["model"] == "");
+    }
+    SECTION("con CHAT_API_KEY y CHAT_MODEL") {
+        rpc.env.values["CHAT_API_KEY"] = kModelKey;
+        rpc.env.values["CHAT_MODEL"] = "modelo-del-entorno";
+        rpc.config = rpc.load();
+        rpc.initialize();
+        rpc.call(2, "settings.provider.get");
+        const Json result = only(rpc)["result"];
+        CHECK(result["locks"].dump() == R"({"base_url":false,"model":true,"api_key":true})");
+        CHECK(result["effective"]["model"] == "modelo-del-entorno");
+        CHECK(result["key_status"] == "(definido por CHAT_API_KEY) …9876");
+        CHECK(result.dump().find(kModelKey) == std::string::npos);
+    }
+}
+
+TEST_CASE("RPC: settings.provider.check y save", "[rpc][settings]") {
+    Rpc rpc;
+    rpc.config = rpc.load(); // Sin configuración: ready false.
+    rpc.initialize();
+    SECTION("check: el error de validate, sin hint") {
+        rpc.call(2, "settings.provider.check",
+                 {{"draft", {{"provider", "nvidia"}, {"base_url", ""}, {"model", ""}}}});
+        const Json result = only(rpc)["result"];
+        CHECK(result["error"].is_string());
+        CHECK(result["hint"].is_null());
+        CHECK(result["can_request_models"] == false);
+    }
+    SECTION("check: el hint de una URL sin ruta en custom") {
+        rpc.call(2, "settings.provider.check",
+                 {{"draft",
+                   {{"provider", "custom"}, {"base_url", "https://mi-servidor"}, {"model", "m"},
+                    {"api_key", kModelKey}}}});
+        const Json result = only(rpc)["result"];
+        CHECK(result["error"].is_null());
+        CHECK(result["hint"].is_string());
+        CHECK(result["can_request_models"] == true);
+        CHECK(result["dirty"] == true);
+    }
+    SECTION("save: ready, settings.changed y el aviso al historial") {
+        rpc.call(2, "settings.provider.save", {{"draft", nvidia_draft()}});
+        const std::vector<Json> got = rpc.take();
+        CHECK(summaries(got) == std::vector<std::string>{"#2 result", "settings.changed provider",
+                                                         "conversation.entry_added 0 notice"});
+        CHECK(got[0]["result"].dump() == R"({"ready":true})");
+        CHECK(got[2]["params"]["entry"]["text"] == "Ahora se usa m1 de NVIDIA NIM.");
+        CHECK(rpc.clients == 1);
+        rpc.call(3, "settings.provider.get");
+        const Json result = only(rpc)["result"];
+        CHECK(result["saved"]["provider"] == "nvidia");
+        CHECK(result["effective"]["model"] == "m1");
+        CHECK(result["key_status"] == "guardada: …9876");
+    }
+    SECTION("save inválido: -32005 sin escribir") {
+        rpc.call(2, "settings.provider.save",
+                 {{"draft", {{"provider", "nvidia"}, {"base_url", ""}, {"model", ""}}}});
+        CHECK(only(rpc)["error"]["code"] == -32005);
+        CHECK_FALSE(std::filesystem::exists(rpc.config_path()));
+    }
+    SECTION("un provider que no está en la tabla, o un campo de menos: -32602") {
+        Json draft = nvidia_draft();
+        draft["provider"] = "otro";
+        rpc.call(2, "settings.provider.check", {{"draft", draft}});
+        CHECK(only(rpc)["error"]["data"].dump() == R"({"fields":["draft.provider"]})");
+        draft = nvidia_draft();
+        draft.erase("model");
+        draft["sobra"] = 1;
+        rpc.call(3, "models.list", {{"draft", draft}});
+        CHECK(only(rpc)["error"]["data"].dump() == R"({"fields":["draft.sobra","draft.model"]})");
+    }
+}
+
+TEST_CASE("RPC: los guardados con una respuesta en curso → Busy; gui sí", "[rpc][settings]") {
+    Rpc rpc;
+    BlockingTransport* blocking = nullptr;
+    rpc.block(blocking);
+    rpc.initialize();
+    rpc.call(2, "chat.send", {{"conversation", "c1"}, {"text", "hola"}});
+    REQUIRE(blocking->started.wait_for(kThreadTimeout));
+    (void)rpc.take();
+    rpc.call(3, "settings.provider.save", {{"draft", nvidia_draft()}});
+    check_error(only(rpc), -32002, std::string{chatbot::cli::kWaitOrCancel});
+    rpc.call(4, "settings.system_prompt.save", {{"text", ""}});
+    check_error(only(rpc), -32002, std::string{chatbot::cli::kWaitOrCancel});
+    rpc.call(5, "settings.search.save", {{"api_key", chatbot_test::kSearchKey}});
+    check_error(only(rpc), -32002, std::string{chatbot::cli::kWaitOrCancel});
+    CHECK_FALSE(std::filesystem::exists(rpc.config_path()));
+    CHECK_FALSE(std::filesystem::exists(rpc.credentials_path()));
+    rpc.call(6, "settings.gui.set", {{"value", {{"tema", "oscuro"}}}});
+    CHECK(summaries(rpc.take()) == std::vector<std::string>{"#6 result", "settings.changed gui"});
+    rpc.call(7, "chat.cancel", {{"conversation", "c1"}});
+    REQUIRE(rpc.finish());
+}
+
+TEST_CASE("RPC: models.list", "[rpc][settings]") {
+    Rpc rpc;
+    SECTION("bien") {
+        models_reply(rpc, models_response(200, R"({"data":[{"id":"b"},{"id":"a"}]})"));
+        rpc.initialize();
+        rpc.call(2, "models.list", {{"draft", nvidia_draft()}});
+        CHECK(rpc.out.empty()); // Sale después, por post.
+        REQUIRE(run_until_reply(rpc, 2));
+        CHECK(only(rpc)["result"].dump() == R"({"models":["a","b"]})");
+    }
+    SECTION("falla del servidor: -32005 con el texto de F2") {
+        const chatbot::HttpResponse denied =
+            models_response(401, R"({"error":{"message":"La key no sirve"}})");
+        models_reply(rpc, denied);
+        rpc.initialize();
+        rpc.call(2, "models.list", {{"draft", nvidia_draft()}});
+        REQUIRE(run_until_reply(rpc, 2));
+        const Json got = only(rpc);
+        CHECK(got["error"]["code"] == -32005);
+        CHECK(got["error"]["data"]["message"].get<std::string>().starts_with(
+            "[error de autenticación] "));
+    }
+    SECTION("sin URL ni key: -32005 sin pedir nada") {
+        rpc.initialize();
+        rpc.call(2, "models.list",
+                 {{"draft", {{"provider", "nvidia"}, {"base_url", ""}, {"model", ""}}}});
+        check_error(only(rpc), -32005, std::string{chatbot::cli::kModelsNeedUrlAndKey});
+    }
+    SECTION("$/cancel: -32800 al momento y nada después") {
+        BlockingTransport* blocking = nullptr;
+        models_block(rpc, blocking);
+        rpc.initialize();
+        rpc.call(2, "models.list", {{"draft", nvidia_draft()}});
+        REQUIRE(blocking->started.wait_for(kThreadTimeout));
+        rpc.notify("$/cancel", {{"id", 99}}); // Otro id: nada.
+        CHECK(rpc.out.empty());
+        rpc.call(3, "$/cancel", {{"id", 2}});
+        CHECK(summaries(rpc.take()) == std::vector<std::string>{"#2 error -32800", "#3 result"});
+        settle(rpc);
+        CHECK(rpc.out.empty());
+    }
+    SECTION("otro models.list reemplaza al pendiente, que responde -32800") {
+        BlockingTransport* blocking = nullptr;
+        models_block(rpc, blocking);
+        rpc.initialize();
+        rpc.call("a", "models.list", {{"draft", nvidia_draft()}});
+        REQUIRE(blocking->started.wait_for(kThreadTimeout));
+        models_reply(rpc, models_response(200, R"({"data":[{"id":"x"}]})"));
+        rpc.call("b", "models.list", {{"draft", nvidia_draft()}});
+        CHECK(summaries(rpc.take()) == std::vector<std::string>{R"(#"a" error -32800)"});
+        REQUIRE(run_until_reply(rpc, "b"));
+        CHECK(only(rpc)["result"].dump() == R"({"models":["x"]})");
+        settle(rpc);
+        CHECK(rpc.out.empty());
+    }
+    SECTION("pendiente al shutdown: sin respuesta") {
+        BlockingTransport* blocking = nullptr;
+        models_block(rpc, blocking);
+        rpc.initialize();
+        rpc.call(2, "models.list", {{"draft", nvidia_draft()}});
+        REQUIRE(blocking->started.wait_for(kThreadTimeout));
+        rpc.call(3, "shutdown");
+        CHECK(summaries(rpc.take()) ==
+              std::vector<std::string>{"conversation.closed c1 shutdown", "#3 result"});
+        settle(rpc);
+        CHECK(rpc.out.empty());
+    }
+}
+
+TEST_CASE("RPC: settings.system_prompt.*", "[rpc][settings]") {
+    Rpc rpc;
+    rpc.initialize();
+    const std::string default_text{chatbot::kDefaultSystemPrompt};
+    rpc.call(2, "settings.system_prompt.get");
+    CHECK(only(rpc)["result"].dump() ==
+          Json({{"mode", "default"},
+                {"text", default_text},
+                {"default_text", default_text},
+                {"max_bytes", chatbot::kMaxSystemPromptBytes},
+                {"warning", nullptr}})
+              .dump());
+
+    rpc.call(3, "settings.system_prompt.save", {{"text", ""}});
+    std::vector<Json> got = rpc.take();
+    CHECK(summaries(got) == std::vector<std::string>{"#3 result", "settings.changed system_prompt",
+                                                     "conversation.entry_added 0 notice"});
+    CHECK(got[0]["result"].dump() == R"({"mode":"none"})");
+    CHECK(got[2]["params"]["entry"]["text"] ==
+          "Sin instrucciones del sistema desde el siguiente mensaje.");
+    rpc.call(4, "settings.system_prompt.get");
+    CHECK(only(rpc)["result"]["mode"] == "none");
+
+    rpc.call(5, "settings.system_prompt.save", {{"text", "Eres un tutor."}});
+    CHECK(rpc.take()[0]["result"].dump() == R"({"mode":"custom"})");
+    rpc.call(6, "settings.system_prompt.get");
+    const Json custom = only(rpc)["result"];
+    CHECK(custom["mode"] == "custom");
+    CHECK(custom["text"] == "Eres un tutor.");
+
+    // Restaurar: mandar default_text borra la llave.
+    rpc.call(7, "settings.system_prompt.save", {{"text", default_text}});
+    CHECK(rpc.take()[0]["result"].dump() == R"({"mode":"default"})");
+    CHECK(chatbot::load_system_prompt_value(rpc.config_path()).value() == std::nullopt);
+
+    rpc.call(8, "settings.system_prompt.check", {{"text", "ñ"}});
+    CHECK(only(rpc)["result"].dump() == R"({"error":null,"warning":null,"bytes":2})");
+    const std::string bad = "a\x01" "b";
+    rpc.call(9, "settings.system_prompt.check", {{"text", bad}});
+    CHECK(only(rpc)["result"]["error"] == chatbot::validate_system_prompt(bad).value());
+    rpc.call(10, "settings.system_prompt.save", {{"text", bad}});
+    check_error(only(rpc), -32005, chatbot::validate_system_prompt(bad).value());
+    rpc.call(11, "settings.system_prompt.save", {{"text", nullptr}});
+    CHECK(only(rpc)["error"]["code"] == -32602);
+}
+
+TEST_CASE("RPC: settings.search.*", "[rpc][settings]") {
+    Rpc rpc;
+    SECTION("get y save") {
+        rpc.initialize();
+        rpc.call(2, "settings.search.get");
+        CHECK(only(rpc)["result"].dump() ==
+              R"({"configured":false,"locked":false,"key_status":"sin configurar"})");
+        rpc.call(3, "settings.search.save", {{"api_key", "$TAVILY"}});
+        CHECK(only(rpc)["error"]["code"] == -32005);
+        rpc.call(4, "settings.search.save", {{"api_key", ""}});
+        check_error(only(rpc), -32005, "Escribe la key de búsqueda.");
+        rpc.call(5, "settings.search.save", {{"api_key", chatbot_test::kSearchKey}});
+        CHECK(summaries(rpc.take()) == std::vector<std::string>{"#5 result",
+                                                                "settings.changed search",
+                                                                "conversation.entry_added 0 notice"});
+        rpc.call(6, "app.status");
+        CHECK(only(rpc)["result"]["has_search_key"] == true);
+        rpc.call(7, "settings.search.get");
+        CHECK(only(rpc)["result"]["configured"] == true);
+    }
+    SECTION("con CHAT_SEARCH_API_KEY: locked, y save → -32005") {
+        rpc.env.values["CHAT_SEARCH_API_KEY"] = chatbot_test::kSearchKey;
+        rpc.initialize();
+        rpc.call(2, "settings.search.get");
+        const Json result = only(rpc)["result"];
+        CHECK(result["locked"] == true);
+        CHECK(result["configured"] == true);
+        rpc.call(3, "settings.search.save", {{"api_key", "tvly-otra-clave-ficticia-de-busqueda"}});
+        CHECK(only(rpc)["error"]["code"] == -32005);
+        CHECK_FALSE(std::filesystem::exists(rpc.credentials_path()));
+    }
+}
+
+TEST_CASE("RPC: settings.gui.*", "[rpc][settings]") {
+    Rpc rpc;
+    rpc.initialize();
+    rpc.call(2, "settings.gui.get");
+    CHECK(only(rpc)["result"].dump() == R"({"value":null})");
+    rpc.call(3, "settings.gui.set", {{"value", {{"tema", "oscuro"}, {"ancho", 280}}}});
+    CHECK(summaries(rpc.take()) == std::vector<std::string>{"#3 result", "settings.changed gui"});
+    rpc.call(4, "settings.gui.get");
+    CHECK(only(rpc)["result"].dump() == R"({"value":{"tema":"oscuro","ancho":280}})");
+    rpc.call(5, "settings.gui.set", {{"value", nullptr}});
+    (void)rpc.take();
+    rpc.call(6, "settings.gui.get");
+    CHECK(only(rpc)["result"].dump() == R"({"value":null})");
+
+    rpc.call(7, "settings.gui.set", {{"value", 5}});
+    CHECK(only(rpc)["error"]["code"] == -32005);
+    rpc.call(8, "settings.gui.set", {{"value", Json::array()}});
+    CHECK(only(rpc)["error"]["code"] == -32005);
+    rpc.call(9, "settings.gui.set",
+             {{"value", {{"x", std::string(chatbot::cli::kMaxGuiSettingsBytes, 'a')}}}});
+    CHECK(only(rpc)["error"]["code"] == -32005);
+    rpc.call(10, "settings.gui.set");
+    CHECK(only(rpc)["error"]["data"].dump() == R"({"fields":["value"]})");
+}
+
+TEST_CASE("RPC: ninguna respuesta ni evento trae la key que se mandó", "[rpc][settings]") {
+    Rpc rpc;
+    models_reply(rpc, models_response(401, R"({"error":{"message":"no"}})"));
+    rpc.config = rpc.load();
+    rpc.initialize();
+    rpc.call(2, "settings.provider.check", {{"draft", nvidia_draft()}});
+    rpc.call(3, "models.list", {{"draft", nvidia_draft()}});
+    REQUIRE(run_until_reply(rpc, 3));
+    rpc.call(4, "settings.provider.save", {{"draft", nvidia_draft()}});
+    rpc.call(5, "settings.provider.get");
+    rpc.call(6, "settings.search.save", {{"api_key", chatbot_test::kSearchKey}});
+    rpc.call(7, "settings.search.get");
+    rpc.call(8, "app.status");
+    std::string all;
+    for (const Json& message : rpc.take()) {
+        all += message.dump() + "\n";
+    }
+    CHECK(all.find(kModelKey) == std::string::npos);
+    CHECK(all.find(chatbot_test::kSearchKey) == std::string::npos);
+    CHECK(all.find("\"id\":8") != std::string::npos);
+}
+

@@ -488,6 +488,97 @@ TEST_CASE("Session guarda la key de búsqueda", "[session]") {
     REQUIRE(h.finish());
 }
 
+TEST_CASE("Session no guarda la configuración con una respuesta en curso", "[session]") {
+    Harness h;
+    BlockingTransport* blocking = nullptr;
+    h.block(blocking);
+    h.start();
+    chatbot::cli::ProviderSettings form = h.session->provider_form().value();
+    REQUIRE(form.set_key("sk-clave-secreta-de-prueba-1234"));
+    REQUIRE(form.set_model("m2"));
+    REQUIRE(h.session->submit("hola").type == Type::Started);
+    REQUIRE(blocking->started.wait_for(kThreadTimeout));
+    const std::optional<std::string> wait{std::string{chatbot::cli::kWaitOrCancel}};
+    CHECK(h.session->save_provider(form) == wait);
+    CHECK(h.session->save_system_prompt(std::string{"otras"}) == wait);
+    CHECK(h.session->save_system_prompt_text("otras") == wait);
+    CHECK(h.session->save_search_key(kSearchKey) == wait);
+    CHECK_FALSE(std::filesystem::exists(h.config_path()));
+    CHECK_FALSE(std::filesystem::exists(h.credentials_path()));
+    // Las preferencias de la GUI no tocan el chat: sí se guardan.
+    CHECK(h.session->save_gui_settings(R"({"tema":"oscuro"})") == std::nullopt);
+    h.session->cancel();
+    REQUIRE(h.finish());
+}
+
+TEST_CASE("Session::save_provider valida el formulario antes de escribir", "[session]") {
+    Harness h;
+    h.start();
+    chatbot::cli::ProviderSettings form = h.session->provider_form().value();
+    form.select_provider(0); // Un proveedor con key obligatoria, sin key ni modelo.
+    const std::optional<std::string> error = form.validate();
+    REQUIRE(error.has_value());
+    CHECK(h.session->save_provider(form) == error);
+    CHECK_FALSE(std::filesystem::exists(h.config_path()));
+}
+
+TEST_CASE("Session: si las instrucciones del sistema están en config.json", "[session]") {
+    Harness h;
+    SECTION("ausentes, vacías o propias") {
+        h.start();
+        CHECK_FALSE(h.session->system_prompt_stored());
+        REQUIRE(h.session->save_system_prompt_text("") == std::nullopt);
+        CHECK(h.session->system_prompt_stored());
+        CHECK(h.session->system_prompt().empty());
+        REQUIRE(h.session->save_system_prompt_text("Eres un tutor.") == std::nullopt);
+        CHECK(h.session->system_prompt_stored());
+        CHECK(h.session->system_prompt() == "Eres un tutor.");
+        // Restaurar: mandar las predeterminadas borra la llave.
+        REQUIRE(h.session->save_system_prompt_text(std::string{chatbot::kDefaultSystemPrompt}) ==
+                std::nullopt);
+        CHECK_FALSE(h.session->system_prompt_stored());
+        CHECK(h.session->system_prompt() == chatbot::kDefaultSystemPrompt);
+        CHECK(chatbot::load_system_prompt_value(h.config_path()).value() == std::nullopt);
+    }
+    SECTION("vacías al arrancar") {
+        std::ofstream{h.config_path()} << R"({"system_prompt": ""})";
+        h.start();
+        CHECK(h.session->system_prompt_stored());
+        CHECK(h.session->system_prompt().empty());
+    }
+    SECTION("inválidas: no se guardan") {
+        h.start();
+        const std::string bad = "a\x01" "b";
+        const std::optional<std::string> error = chatbot::validate_system_prompt(bad);
+        REQUIRE(error.has_value());
+        CHECK(h.session->save_system_prompt_text(bad) == error);
+        CHECK_FALSE(std::filesystem::exists(h.config_path()));
+    }
+}
+
+TEST_CASE("Session: preferencias de la GUI", "[session]") {
+    Harness h;
+    h.start();
+    CHECK(h.session->gui_settings().value() == std::nullopt);
+    REQUIRE(h.session->save_gui_settings(R"({ "z": 1, "a": [true] })") == std::nullopt);
+    CHECK(h.session->gui_settings().value() == R"({"z":1,"a":[true]})");
+    REQUIRE(h.session->save_gui_settings(std::nullopt) == std::nullopt); // Borra la llave.
+    CHECK(h.session->gui_settings().value() == std::nullopt);
+
+    const std::string not_object = "Las preferencias de la GUI tienen que ser un objeto JSON.";
+    CHECK(h.session->save_gui_settings("5") == not_object);
+    CHECK(h.session->save_gui_settings("[1]") == not_object);
+    CHECK(h.session->save_gui_settings("{") == not_object);
+    // Se mide compacto: los espacios no cuentan.
+    const std::string fits = R"({"x":")" + std::string(chatbot::cli::kMaxGuiSettingsBytes - 8, 'a') +
+                             R"("}   )";
+    CHECK(h.session->save_gui_settings(fits) == std::nullopt);
+    const std::string big = R"({"x":")" + std::string(chatbot::cli::kMaxGuiSettingsBytes, 'a') +
+                            R"("})";
+    CHECK(h.session->save_gui_settings(big) == "Las preferencias de la GUI pasan de 64 KiB.");
+    CHECK(h.session->gui_settings().value()->size() == chatbot::cli::kMaxGuiSettingsBytes);
+}
+
 TEST_CASE("Session: avisos de arranque", "[session]") {
     Harness h;
     std::ofstream{h.config_path()} << R"({"system_prompt": 5})";

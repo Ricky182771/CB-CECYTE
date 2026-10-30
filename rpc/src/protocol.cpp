@@ -198,6 +198,9 @@ std::optional<Json> check_params(const Json* params,
         case Param::Type::IntegerOrString:
             ok = found->is_number_integer() || found->is_string();
             break;
+        case Param::Type::Any: // Lo revisa el método.
+            ok = true;
+            break;
         }
         if (!ok) {
             fields.emplace_back(param.name);
