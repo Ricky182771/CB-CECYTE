@@ -119,12 +119,17 @@ void read_input(EventQueue& queue) {
 /// Cierra la sesión (cancela y hace join) y sale con code, con un reloj de
 /// seguridad por si el cierre se atora. std::_Exit: el hilo lector sigue
 /// bloqueado en read y no se puede unir; todo lo escrito ya salió (write sin búfer).
-[[noreturn]] void quit(Dispatcher& dispatcher, int code) {
-    std::thread([code] {
+/// Antes de salir restaura las páginas de códigos de la consola (_Exit no
+/// corre destructores).
+[[noreturn]] void quit(Dispatcher& dispatcher, int code,
+                       const chatbot::ConsoleCodePages& console) {
+    std::thread([code, console] {
         std::this_thread::sleep_for(kExitWatchdog);
+        chatbot::restore_console_code_pages(console);
         std::_Exit(code);
     }).detach();
     dispatcher.on_eof();
+    chatbot::restore_console_code_pages(console);
     std::_Exit(code);
 }
 
@@ -148,6 +153,16 @@ int main() {
     if (protocol < 0) {
         std::cerr << "chatbot-rpc: no se pudo preparar stdout para el protocolo\n";
         return 1;
+    }
+    // Sin pipes (doble clic o desde una terminal) nadie le va a hablar: se
+    // avisa una vez y sigue igual. La consola de Windows, en UTF-8 para los
+    // acentos; en POSIX no hace nada.
+    chatbot::ConsoleCodePages console{};
+    if (chatbot::stdin_is_terminal()) {
+        console = chatbot::set_console_utf8();
+        std::cerr << "chatbot-rpc es para otras interfaces (la gráfica); para platicar, abre "
+                     "chatbot.\nEscribe mensajes JSON-RPC, uno por línea, o cierra esta "
+                     "ventana.\n";
     }
     chatbot::rpc::DebugLog log{std::string{chatbot::cli::process_env("CHAT_DEBUG_RPC")}};
 
@@ -218,10 +233,10 @@ int main() {
         dispatcher.flush_due();
         // Sin cliente (EOF o no se pudo escribir): se cancela todo y sale con 0.
         if (eof || write_failed) {
-            quit(dispatcher, 0);
+            quit(dispatcher, 0, console);
         }
         if (const std::optional<int> code = dispatcher.exit_code()) {
-            quit(dispatcher, *code);
+            quit(dispatcher, *code, console);
         }
     }
 }

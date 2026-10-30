@@ -85,6 +85,8 @@ bool stdio_is_terminal() {
 
 bool stdout_is_terminal() { return ::isatty(STDOUT_FILENO) == 1; }
 
+bool stdin_is_terminal() { return ::isatty(STDIN_FILENO) == 1; }
+
 std::optional<std::string> executable_path() {
     // readlink no termina la cadena y trunca sin avisar: se repite con un
     // búfer más grande mientras lo llene completo.
