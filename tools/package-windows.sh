@@ -47,7 +47,7 @@ for tool in ldd pacman cmake gcc; do
     command -v "$tool" > /dev/null || die "falta $tool"
 done
 
-exes=("$build/cli/chatbot.exe" "$build/rpc/chatbot-rpc.exe")
+exes=("$build/cli/chatbot.exe" "$build/cli/chatbot-rpc.exe")
 for exe in "${exes[@]}"; do
     [[ -f $exe ]] || die "no existe $exe: compila antes con cmake --build --preset release"
 done

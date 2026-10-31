@@ -3,12 +3,7 @@
 #include "input_style.h"
 #include "list_style.h"
 
-#include "chatbot/addon_settings/invited.h"
-#include "chatbot/addon_settings/paths.h"
-#include "chatbot/addon_settings/secrets.h"
 #include "chatbot/addon_settings/time_zone.h"
-#include "chatbot/addon_settings/token.h"
-#include "chatbot/credentials.h"
 #include "chatbot/markdown/markdown.h"
 
 #include <ftxui/component/component_options.hpp>
@@ -193,7 +188,7 @@ AddonsPanel::AddonsPanel(const Palette& palette, Notice notice, std::function<vo
         "Quitar",
         [this] {
             form_.at(AddonField::ModelKey).clear();
-            form_.remove_model_key = !secrets_.model_key.empty();
+            form_.remove_model_key = !telegram_->secrets().model_key.empty();
             refresh_placeholders();
         },
         button_option(palette_));
@@ -201,14 +196,14 @@ AddonsPanel::AddonsPanel(const Palette& palette, Notice notice, std::function<vo
         "Quitar",
         [this] {
             form_.at(AddonField::SearchKey).clear();
-            form_.remove_search_key = !secrets_.search_key.empty();
+            form_.remove_search_key = !telegram_->secrets().search_key.empty();
             refresh_placeholders();
         },
         button_option(palette_));
     generate_code_ = ftxui::Button(
         "Generar",
         [this] {
-            Result<std::string> code = settings::generate_invite_code();
+            Result<std::string> code = TelegramAddon::invite_code();
             if (code.is_error()) {
                 notice_(code.error().message);
                 return;
@@ -221,29 +216,22 @@ AddonsPanel::AddonsPanel(const Palette& palette, Notice notice, std::function<vo
     ftxui::ButtonOption restart_option = button_option(palette_);
     restart_option.transform = [this](const ftxui::EntryState& state) {
         const ftxui::Element element = button_label(state.label, state.focused, palette_);
-        return saved_form_.enabled || state.focused
+        return (telegram_ && telegram_->saved_form().enabled) || state.focused
                    ? element
                    : element | palette_.ink(&Theme::input_placeholder);
     };
     restart_button_ = ftxui::Button(
         "Reiniciar",
         [this] {
-            if (!worker_) {
+            if (!telegram_ || !telegram_->has_service()) {
                 return;
             }
-            if (!saved_form_.enabled) {
+            if (!telegram_->saved_form().enabled) {
                 notice_(std::string{kRestartNeedsEnabled});
                 return;
             }
             notice_("Reiniciando el bot…");
-            worker_->push([this, params = unit_params()](const CancelToken& cancel) {
-                const ServiceAction action = control_->restart(&cancel);
-                const ServiceStatus status = control_->status(params, &cancel);
-                return std::function<void()>{[this, action, status] {
-                    service_ = status;
-                    notice_(action.message);
-                }};
-            });
+            telegram_->restart([this](const ServiceAction& action) { notice_(action.message); });
         },
         std::move(restart_option));
     refresh_button_ =
@@ -282,82 +270,26 @@ AddonsPanel::AddonsPanel(const Palette& palette, Notice notice, std::function<vo
 AddonsPanel::~AddonsPanel() = default;
 
 void AddonsPanel::set_environment(AddonsEnvironment environment) {
-    environment_ = std::move(environment);
-    if (environment_->os == Os::Windows || !environment_->unit_path.has_value()) {
-        return; // Sin procesos.
-    }
-    control_ = std::make_unique<ServiceControl>(addon_, *environment_->unit_path,
-                                                environment_->uid, environment_->run);
-    worker_ = std::make_unique<ServiceWorker>(environment_->post);
+    telegram_ = std::make_unique<TelegramAddon>(std::move(environment));
 }
 
-bool AddonsPanel::available() const {
-    return environment_.has_value() && environment_->os != Os::Windows;
-}
+bool AddonsPanel::available() const { return telegram_ && telegram_->available(); }
 
-bool AddonsPanel::read_only() const {
-    return !load_error_.empty() || read_.newer() ||
-           (install_.has_value() && install_->path.has_value() &&
-            !addon_install_problem(addon_, *install_, environment_->portable).empty());
-}
-
-settings::UnitParams AddonsPanel::unit_params() const {
-    return settings::UnitParams{environment_->chatbot_path, std::string{addon_.name},
-                                std::string{addon_.description}, environment_->xdg_config_home,
-                                environment_->xdg_data_home};
-}
+bool AddonsPanel::read_only() const { return telegram_->read_only(); }
 
 void AddonsPanel::open(const std::string& app_model) {
     question_.reset();
     discard_confirmed_ = false;
     status_requested_ = false;
-    install_.reset();
-    service_.reset();
-    load_error_.clear();
-    read_ = {};
-    secrets_ = {};
     if (!available()) {
         return;
     }
     app_model_ = clean(app_model);
-    Result<settings::TelegramSectionRead> read =
-        settings::read_telegram_section(environment_->config_path);
-    if (read.is_error()) {
-        load_error_ = read.error().message;
-    } else {
-        read_ = read.value();
-    }
-    Result<Credentials> credentials = load_credentials(environment_->credentials_path);
-    if (credentials.is_error()) {
-        load_error_ = credentials.error().message;
-    } else {
-        secrets_.token = settings::credential(credentials.value(), settings::kTokenCredentialsKey);
-        secrets_.model_key =
-            settings::credential(credentials.value(), settings::kBotApiKeyCredentialsKey);
-        secrets_.search_key =
-            settings::credential(credentials.value(), settings::kBotSearchKeyCredentialsKey);
-    }
-    form_ = form_from_section(read_.values);
-    saved_form_ = form_;
+    telegram_->forget_status();
+    telegram_->load();
+    form_ = telegram_->saved_form();
     refresh_placeholders();
-
-    invited_error_.clear();
-    if (!environment_->data_dir.has_value()) {
-        invited_error_ = "No se sabe dónde guarda sus datos el bot (falta HOME).";
-        set_invited({});
-        return;
-    }
-    const std::string path = settings::invited_file_path(*environment_->data_dir);
-    Result<std::vector<std::int64_t>> invited = settings::load_invited(path);
-    if (invited.is_error()) {
-        // Dañado: lo mismo que dice el estado con la salida 65.
-        invited_error_ = invited.error().kind == ErrorKind::BadResponse
-                             ? exit_status_message(65, addon_.executable, *environment_->data_dir)
-                             : invited.error().message;
-        set_invited({});
-        return;
-    }
-    set_invited(invited.value());
+    set_invited(telegram_->invited());
 }
 
 void AddonsPanel::show() {
@@ -368,32 +300,16 @@ void AddonsPanel::show() {
 }
 
 void AddonsPanel::refresh_placeholders() {
-    token_placeholder_ = addon_secret_status(secrets_.token, false);
-    model_key_placeholder_ = addon_secret_status(secrets_.model_key, form_.remove_model_key);
-    search_key_placeholder_ = addon_secret_status(secrets_.search_key, form_.remove_search_key);
+    const AddonSecrets& secrets = telegram_->secrets();
+    token_placeholder_ = addon_secret_status(secrets.token, false);
+    model_key_placeholder_ = addon_secret_status(secrets.model_key, form_.remove_model_key);
+    search_key_placeholder_ = addon_secret_status(secrets.search_key, form_.remove_search_key);
 }
 
 void AddonsPanel::refresh_status() {
-    if (!worker_) {
-        return;
+    if (available() && telegram_->has_service()) {
+        telegram_->refresh([] {});
     }
-    worker_->push([this, params = unit_params()](const CancelToken& cancel) {
-        AddonInstall install;
-        install.path = environment_->locate(addon_);
-        if (install.path.has_value()) {
-            ProcessOptions options;
-            options.timeout = kServiceCommandTimeout;
-            options.cancel = &cancel;
-            install.config_version =
-                parse_config_version(environment_->run({*install.path, "--config-version"},
-                                                       options));
-        }
-        const ServiceStatus status = control_->status(params, &cancel);
-        return std::function<void()>{[this, install, status] {
-            install_ = install;
-            service_ = status;
-        }};
-    });
 }
 
 void AddonsPanel::set_invited(std::vector<std::int64_t> users) {
@@ -407,15 +323,11 @@ void AddonsPanel::set_invited(std::vector<std::int64_t> users) {
 }
 
 bool AddonsPanel::dirty() const {
-    return available() && !read_only() && form_ != saved_form_;
+    return available() && !read_only() && telegram_->changed(form_);
 }
 
 std::string AddonsPanel::out_of_sync() const {
-    if (!available() || read_only() || !service_.has_value() || !install_.has_value() ||
-        !install_->path.has_value()) {
-        return {};
-    }
-    return service_mismatch(*service_, form_.enabled);
+    return available() ? telegram_->out_of_sync(form_.enabled) : std::string{};
 }
 
 bool AddonsPanel::pending() const { return dirty() || !out_of_sync().empty(); }
@@ -424,18 +336,18 @@ std::optional<std::string> AddonsPanel::check() const {
     if (!pending()) {
         return std::nullopt;
     }
-    return addon_form_error(form_, secrets_);
+    return addon_form_error(form_, telegram_->secrets());
 }
 
 bool AddonsPanel::ask_before_saving() {
-    if (!dirty() || read_.discarded.empty() || discard_confirmed_) {
+    if (!dirty() || discard_confirmed_) {
         return false;
     }
-    std::string keys;
-    for (const std::string& key : read_.discarded) {
-        keys += (keys.empty() ? "" : ", ") + clean(key);
+    std::string text = telegram_->discard_question();
+    if (text.empty()) {
+        return false;
     }
-    question_ = Question{"Se descartarán: " + keys + ". ¿Guardar? (s/n)",
+    question_ = Question{std::move(text),
                          [this] {
                              discard_confirmed_ = true;
                              retry_save_();
@@ -452,55 +364,12 @@ std::optional<std::string> AddonsPanel::commit() {
         }
         return std::nullopt;
     }
-    // Primero los secretos: si fallan, la sección no apunta a un token que no está.
-    const std::vector<CredentialChange> changes = addon_credential_changes(form_);
-    if (!changes.empty()) {
-        Result<Credentials> loaded = load_credentials(environment_->credentials_path);
-        if (loaded.is_error()) {
-            return loaded.error().message;
-        }
-        Credentials credentials = loaded.value();
-        for (const auto& [key, value] : changes) {
-            if (value.has_value()) {
-                credentials.keys[key] = *value;
-            } else {
-                credentials.keys.erase(key);
-            }
-        }
-        if (const std::optional<ChatError> error =
-                save_credentials(environment_->credentials_path, credentials)) {
-            return error->message;
-        }
+    // Antes de guardar: después, lo guardado ya es form_.
+    const bool restart = telegram_->needs_restart(form_);
+    if (std::optional<std::string> error = telegram_->save(form_)) {
+        return error;
     }
-    if (const std::optional<ChatError> error =
-            settings::write_telegram_section(environment_->config_path, section_from_form(form_))) {
-        return error->message;
-    }
-    const bool restart = addon_needs_restart(saved_form_, secrets_, form_) && form_.enabled &&
-                         service_.has_value() && service_->active == "active";
-    // Lo escrito pasa a ser lo guardado.
-    if (!form_.at(AddonField::Token).empty()) {
-        secrets_.token = form_.at(AddonField::Token);
-    }
-    if (form_.remove_model_key) {
-        secrets_.model_key.clear();
-    } else if (!form_.at(AddonField::ModelKey).empty()) {
-        secrets_.model_key = form_.at(AddonField::ModelKey);
-    }
-    if (form_.remove_search_key) {
-        secrets_.search_key.clear();
-    } else if (!form_.at(AddonField::SearchKey).empty()) {
-        secrets_.search_key = form_.at(AddonField::SearchKey);
-    }
-    for (const AddonField field : {AddonField::Token, AddonField::ModelKey, AddonField::SearchKey}) {
-        form_.at(field).clear();
-    }
-    form_.remove_model_key = false;
-    form_.remove_search_key = false;
-    form_ = form_from_section(section_from_form(form_)); // Como se lee al abrir.
-    saved_form_ = form_;
-    read_.discarded.clear();
-    read_.version = settings::kTelegramConfigVersion;
+    form_ = telegram_->saved_form();
     refresh_placeholders();
 
     if (restart) {
@@ -516,36 +385,25 @@ std::optional<std::string> AddonsPanel::commit() {
 }
 
 void AddonsPanel::apply_service(bool restart, bool replace_foreign) {
-    if (!worker_) {
+    if (!telegram_->has_service()) {
         notice_("Guardado.");
         return;
     }
-    // Lo que dice la casilla, no si cambió: apply mira cómo está el servicio ahora.
-    const bool enabled = form_.enabled;
-    notice_(enabled ? "Guardado. Aplicando al servicio…" : "Guardado. Deteniendo el servicio…");
-    worker_->push([this, enabled, restart, replace_foreign,
-                   params = unit_params()](const CancelToken& cancel) -> std::function<void()> {
-        ServiceAction action;
-        std::string skipped;
-        if (enabled && !environment_->locate(addon_).has_value()) {
-            skipped = addon_install_problem(addon_, AddonInstall{}, environment_->portable);
-        } else {
-            action = control_->apply(params, enabled, replace_foreign, restart, &cancel);
+    notice_(telegram_->saved_form().enabled ? "Guardado. Aplicando al servicio…"
+                                            : "Guardado. Deteniendo el servicio…");
+    const auto done = [this, restart](const TelegramAddon::Applied& applied) {
+        if (applied.action.kind == ServiceAction::Kind::Confirm) {
+            question_ = Question{applied.action.message,
+                                 [this, restart] { apply_service(restart, true); },
+                                 [this] { notice_("Guardado. No se tocó el servicio existente."); },
+                                 "Cancelado: se guardó, pero no se tocó el servicio existente."};
+            return;
         }
-        const ServiceStatus status = control_->status(params, &cancel);
-        return [this, action, skipped, status, restart] {
-            service_ = status;
-            if (action.kind == ServiceAction::Kind::Confirm) {
-                question_ = Question{
-                    action.message, [this, restart] { apply_service(restart, true); },
-                    [this] { notice_("Guardado. No se tocó el servicio existente."); },
-                    "Cancelado: se guardó, pero no se tocó el servicio existente."};
-                return;
-            }
-            const std::string& detail = skipped.empty() ? action.message : skipped;
-            notice_(detail.empty() ? "Guardado." : "Guardado. " + detail);
-        };
-    });
+        const std::string& detail =
+            applied.skipped.empty() ? applied.action.message : applied.skipped;
+        notice_(detail.empty() ? "Guardado." : "Guardado. " + detail);
+    };
+    telegram_->apply(restart, replace_foreign, done);
 }
 
 void AddonsPanel::answer(bool yes) {
@@ -568,31 +426,17 @@ void AddonsPanel::cancel_question() {
 }
 
 void AddonsPanel::ask_remove_invited() {
-    if (invited_names_.empty() || !environment_->data_dir.has_value()) {
+    if (invited_names_.empty() || !telegram_->environment().data_dir.has_value()) {
         return;
     }
     const std::int64_t user = invited_[static_cast<std::size_t>(invited_selected_)];
     question_ = Question{
         "¿Quitar " + std::to_string(user) + " ahora? No espera a Guardar. (s/n)",
         [this, user] {
-            Result<std::vector<std::int64_t>> left = settings::remove_invited(
-                settings::invited_file_path(*environment_->data_dir), user);
-            if (left.is_error()) {
-                notice_(left.error().message);
-                return;
-            }
-            set_invited(left.value());
-            const std::string done = "Se quitó " + std::to_string(user) + ".";
-            if (!worker_ || !service_.has_value() || service_->active != "active") {
-                notice_(done);
-                return;
-            }
-            // Si no, el bot lo dejaría entrar hasta reiniciar.
-            worker_->push([this, done](const CancelToken& cancel) {
-                const ServiceAction action = control_->reload_if_active(&cancel);
-                return std::function<void()>{
-                    [this, done, action] { notice_(done + " " + action.message); }};
+            telegram_->remove_invited(user, [this](const TelegramAddon::Removal& removal) {
+                notice_(removal.error.value_or(removal.message));
             });
+            set_invited(telegram_->invited()); // Ya, sin esperar a la recarga.
         },
         {},
         "Cancelado: no se quitó a nadie."};
@@ -643,40 +487,43 @@ ftxui::Element AddonsPanel::render_block() const {
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
     const ftxui::Decorator error = palette_.ink(&Theme::error);
     ftxui::Elements rows;
-    if (!install_.has_value()) {
+    const std::optional<AddonInstall>& install = telegram_->install();
+    const std::optional<ServiceStatus>& service = telegram_->service();
+    const AddonsEnvironment& environment = telegram_->environment();
+    if (!install.has_value()) {
         rows.push_back(ftxui::text("Buscando " + std::string{addon_.executable} + "…") | notice);
     } else if (const std::string problem =
-                   addon_install_problem(addon_, *install_, environment_->portable);
+                   addon_install_problem(addon_, *install, environment.portable);
                !problem.empty()) {
         rows.push_back(ftxui::paragraph(clean(problem)) | error);
     } else {
         rows.push_back(ftxui::hbox(
             {ftxui::text("Instalado: "),
-             std::make_shared<TailText>(clean(with_tilde(*install_->path, environment_->home)))}));
+             std::make_shared<TailText>(clean(with_tilde(*install->path, environment.home)))}));
     }
-    if (!control_) {
+    if (!telegram_->has_service()) {
         rows.push_back(ftxui::text("Servicio: sin HOME no hay dónde instalarlo") | notice);
-    } else if (!service_.has_value()) {
+    } else if (!service.has_value()) {
         rows.push_back(ftxui::text("Servicio: consultando…") | notice);
     } else {
-        rows.push_back(ftxui::text(clean(service_summary(*service_))));
+        rows.push_back(ftxui::text(clean(service_summary(*service))));
         if (const std::string mismatch = out_of_sync(); !mismatch.empty()) {
             rows.push_back(ftxui::paragraph(mismatch) | error);
         }
-        const std::string problem = service_problem(*service_, addon_.executable,
-                                                    environment_->data_dir.value_or(""));
+        const std::string problem = service_problem(*service, addon_.executable,
+                                                    environment.data_dir.value_or(""));
         if (!problem.empty()) {
             rows.push_back(ftxui::paragraph(clean(problem)) | error);
         }
     }
     rows.push_back(ftxui::hbox(
         {restart_button_->Render(), ftxui::text(" "), refresh_button_->Render()}));
-    if (service_.has_value() && service_->linger == false) {
+    if (service.has_value() && service->linger == false) {
         rows.push_back(ftxui::text(std::string{palette_.glyph(Glyph::Warning)} +
                                    " Sin linger: " + std::string{kLingerCommand}) |
                        error);
     }
-    if (control_) {
+    if (telegram_->has_service()) {
         rows.push_back(ftxui::text("Registro: " + journal_command(addon_)) | notice);
     }
     // Lo de abajo (el registro, después el linger) es lo primero que se pierde.
@@ -710,7 +557,8 @@ ftxui::Element AddonsPanel::render_field(AddonField field) const {
     ftxui::Elements rows{ftxui::hbox(
         {label(addon_field_label(field), input->Focused(), palette_), value | ftxui::flex})};
     if (!read_only()) {
-        if (const std::optional<std::string> error = addon_field_error(form_, secrets_, field)) {
+        if (const std::optional<std::string> error =
+                addon_field_error(form_, telegram_->secrets(), field)) {
             rows.push_back(indented_note(clean(*error)) | palette_.ink(&Theme::error));
         }
     }
@@ -719,13 +567,14 @@ ftxui::Element AddonsPanel::render_field(AddonField field) const {
 
 ftxui::Element AddonsPanel::render_invited() const {
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
+    const std::string& invited_error = telegram_->invited_error();
     ftxui::Elements rows{
-        ftxui::text("Invitados" + (invited_error_.empty()
+        ftxui::text("Invitados" + (invited_error.empty()
                                        ? " (" + std::to_string(invited_.size()) + ")"
                                        : std::string{})) |
         ftxui::bold};
-    if (!invited_error_.empty()) {
-        rows.push_back(ftxui::paragraph(clean(invited_error_)) | palette_.ink(&Theme::error));
+    if (!invited_error.empty()) {
+        rows.push_back(ftxui::paragraph(clean(invited_error)) | palette_.ink(&Theme::error));
     } else if (invited_.empty()) {
         rows.push_back(ftxui::text("  Nadie ha entrado con el código.") | notice);
     } else {
@@ -738,20 +587,16 @@ ftxui::Element AddonsPanel::render_invited() const {
 ftxui::Element AddonsPanel::render_fields() const {
     const ftxui::Decorator notice = palette_.ink(&Theme::notice);
     ftxui::Elements rows;
-    if (service_.has_value() && service_->linger == false) {
+    const std::optional<ServiceStatus>& service = telegram_->service();
+    if (service.has_value() && service->linger == false) {
         rows.push_back(ftxui::paragraph(std::string{kNoLinger}) | notice);
     }
-    if (const std::string note = addon_env_note(environment_->env_defined); !note.empty()) {
+    if (const std::string note = addon_env_note(telegram_->environment().env_defined);
+        !note.empty()) {
         rows.push_back(ftxui::paragraph(note) | notice);
     }
-    if (!load_error_.empty()) {
-        rows.push_back(ftxui::paragraph(clean(load_error_) + " Solo lectura.") |
-                       palette_.ink(&Theme::error));
-    } else if (read_.newer()) {
-        rows.push_back(ftxui::paragraph("La sección es de una versión más nueva (" +
-                                        std::to_string(*read_.version) +
-                                        ") de la configuración: solo lectura.") |
-                       palette_.ink(&Theme::error));
+    if (const std::string problem = telegram_->section_problem(); !problem.empty()) {
+        rows.push_back(ftxui::paragraph(clean(problem)) | palette_.ink(&Theme::error));
     }
     rows.push_back(read_only()
                        ? ftxui::text(std::string{form_.enabled ? "[x]" : "[ ]"} + " Activado") |

@@ -71,6 +71,7 @@ add_library(chatbot_cli_lib STATIC
     src/session.cpp
     src/service_control.cpp
     src/sidebar.cpp
+    src/telegram_addon.cpp
     src/terminal_reply.cpp)
 target_compile_features(chatbot_cli_lib PUBLIC cxx_std_20)
 target_include_directories(chatbot_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

@@ -239,6 +239,13 @@ TEST_CASE("CHAT_DEBUG_RPC tapa los secretos a cualquier profundidad", "[rpc]") {
     CHECK(redacted["params"]["draft"]["api_key"] == chatbot::rpc::kRedacted);
     CHECK(redacted["params"]["draft"]["model"] == "m");
     CHECK(redacted["params"]["text"] == "api_key no es una llave aquí");
+    // addons.telegram.save: los secretos y el código, dentro de form.fields.
+    const Json save = chatbot::rpc::redact_secrets(Json::parse(
+        R"({"params":{"form":{"fields":{"token":"123:ABC","invite_code":"codigo-secreto",)"
+        R"("model":"m"}}}})"));
+    CHECK(save["params"]["form"]["fields"]["token"] == chatbot::rpc::kRedacted);
+    CHECK(save["params"]["form"]["fields"]["invite_code"] == chatbot::rpc::kRedacted);
+    CHECK(save["params"]["form"]["fields"]["model"] == "m");
 
     // El archivo: entra tapado; lo que no es JSON solo con su tamaño.
     const chatbot_test::ScopedTempDir dir;

@@ -94,7 +94,7 @@ chatbot/
 
 - `chatbot_core` (namespace `chatbot`) no depende de FTXUI ni addons, ni usa la terminal. `chatbot_markdown` (`chatbot::markdown`, namespace `chatbot::md`) no depende de core ni FTXUI; md4c en privado. El dibujo de markdown también usa `chatbot::md`.
 - `chatbot_cli_lib` solo depende de `chatbot::core`, `chatbot::markdown`, `chatbot::addon_settings` y nlohmann/json privado; sin FTXUI ni includes de `core/src`.
-- RPC solo depende de `chatbot_cli_lib` y nlohmann/json; nunca FTXUI, `chatbot_cli_ui` ni addons. Siempre se compila, también en Windows y sin addons. **Todo cambio de protocolo se documenta en `rpc/PROTOCOL.md` en el mismo PR**, incluida su tabla de estado.
+- RPC solo depende de `chatbot_cli_lib` (con su `chatbot::addon_settings`, como `cli/`) y nlohmann/json; nunca FTXUI, `chatbot_cli_ui` ni addons (`chatbot::bot`, Telegram). Siempre se compila, también en Windows y sin addons. **Todo cambio de protocolo se documenta en `rpc/PROTOCOL.md` en el mismo PR**, incluida su tabla de estado.
 - `chatbot_cli_ui`: `chatbot_cli_lib`, `ftxui::dom` y `ftxui::screen`; dibuja sin terminal. Solo `chatbot` y `chatbot_ui_tests` enlazan `ftxui::component`.
 - **Lo nuevo que no dependa de FTXUI va en `Session`, no en `main.cpp`.** Solo desde el hilo de interfaz, con entorno inyectado. TUI y RPC comparten arranque. `Session` se destruye antes de `screen`.
 - Plataforma elegida por CMake, sin `#ifdef` en lógica; `<windows.h>` solo en `.cpp` de Windows. Strings UTF-8, llamadas Win32 W; escritura atómica común.
@@ -125,8 +125,8 @@ Detalle: guias/06-nucleo.md
 - Apariencia sin entorno; valores desconocidos usan predeterminados con aviso. Símbolos siguen configurables con `NO_COLOR`.
 - Conversaciones versión 1: al menos un par user/assistant alternado completo, nunca `system` persistido. Guardar tras cada par, atómicamente, carpeta nueva 0700 y archivo 0600. Archivo ilegible o de versión desconocida se lista, nunca se sobrescribe ni borra. Cargar usa sistema vigente, búsqueda con nonce nuevo y fecha guardada.
 - Sin key de búsqueda, no enviar `/buscar` ni vaciar la caja. `CHAT_SEARCH_API_KEY` gana sobre credenciales, con la misma privacidad y validación.
-- `chatbot-rpc` escribe `config.json` y `credentials.json` **solo por `Session`**, con los mismos guardados que F2.
-- Solo la app escribe `addons.<addon>` en `config.json`; Telegram ausente queda desactivado. Versión mayor: F2 solo lectura; descartar llaves requiere confirmación; bot rechaza sección inválida. Secretos: §14.
+- `chatbot-rpc` escribe `config.json` y `credentials.json` **solo por `Session`** (y `addons.<addon>` por `TelegramAddon`), con los mismos guardados que F2.
+- Solo la app escribe `addons.<addon>` en `config.json`; Telegram ausente queda desactivado. Versión mayor: F2 y `chatbot-rpc` solo lectura; descartar llaves requiere confirmación (en el RPC, `-32008`); bot rechaza sección inválida. Secretos: §14.
 - Diagnósticos solo por entorno: `CHAT_DEBUG_SSE` nunca vuelca cabeceras, key ni petición; `CHAT_DEBUG_KEYS` nunca el texto de caracteres.
 
 Detalle: guias/07-configuracion.md
@@ -230,7 +230,7 @@ Para el hito 1, sin red, usando `FakeTransport`:
 - **No cambiar sin preguntar:** conversaciones solo en memoria con caducidad o `/nuevo`; acceso denegado por defecto, solo IDs permitidos o invitados por código; invitados guardados solo por ID; registros sin mensajes, consultas, nombres, código de invitación, token ni keys. Errores detallados solo con `log_error_details`, truncados y sin secretos.
 - Una respuesta por chat; tope diario por usuario y fecha local; concurrencia global con FIFO. Búsqueda fallida/vacía devuelve cupo. Historial solo pares completos; cancelación no guarda el par. Apagado cancela, descarta fila y une hilos en < 2 s.
 - Telegram: long polling, HTTPS de salida, chats privados, markdown saneado por lista blanca y respaldo plano partido a 4096; vista previa con Detener. Enteros de updates validados; token redactado en todo error, sin mostrar `redirect_url`.
-- Solo TUI escribe configuración central, sin `telegram.json` ni `--config`. Bot solo lee entorno de secretos: token `CHAT_TELEGRAM_TOKEN` > `telegram`; modelo `CHAT_API_KEY` > `telegram:api_key` > app; búsqueda `CHAT_SEARCH_API_KEY` > `telegram:search_key` > `search:tavily`.
+- Solo la app (la TUI o `chatbot-rpc`, con el mismo código) escribe configuración central, sin `telegram.json` ni `--config`. Bot solo lee entorno de secretos: token `CHAT_TELEGRAM_TOKEN` > `telegram`; modelo `CHAT_API_KEY` > `telegram:api_key` > app; búsqueda `CHAT_SEARCH_API_KEY` > `telegram:search_key` > `search:tavily`.
 - Invitados: lectura/cambio/escritura bajo `flock`, atómica 0600, carpeta 0700; archivo dañado se conserva. SIGHUP inválido conserva configuración; token y concurrencia requieren reinicio; respuesta en curso conserva su runtime.
 - Systemd: no reemplazar unidad ajena sin preguntar; nunca ejecutar enable-linger. Guardar aplica el estado Activado. Preguntas con `yes_no_answer`; systemd no reinicia salidas 65/69/73/78.
 

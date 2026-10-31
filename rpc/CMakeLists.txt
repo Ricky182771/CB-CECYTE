@@ -29,6 +29,9 @@ target_link_libraries(chatbot-rpc PRIVATE chatbot_rpc_lib)
 target_compile_definitions(chatbot-rpc PRIVATE CHATBOT_VERSION="${PROJECT_VERSION}")
 chatbot_set_warnings(chatbot-rpc)
 chatbot_windows_manifest(chatbot-rpc)
+# Junto a chatbot, como en el ZIP: el servicio arranca ese chatbot y el addon
+# se busca junto a él (rpc/PROTOCOL.md, sección 6.8).
+set_target_properties(chatbot-rpc PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:chatbot>)
 
 if(CHATBOT_BUILD_TESTS)
     add_subdirectory(tests)

@@ -8,8 +8,9 @@ namespace chatbot::rpc {
 
 namespace {
 
-constexpr std::array<std::string_view, 4> kSecretKeys{"api_key", "token", "model_key",
-                                                      "search_key"};
+// invite_code: el código de invitación del bot (form.fields de addons.telegram.*).
+constexpr std::array<std::string_view, 5> kSecretKeys{"api_key", "token", "model_key",
+                                                      "search_key", "invite_code"};
 
 bool is_secret(const std::string& key) {
     for (const std::string_view secret : kSecretKeys) {

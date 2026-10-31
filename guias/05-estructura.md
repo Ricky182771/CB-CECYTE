@@ -104,7 +104,8 @@ chatbot/
 │       ├── child_process_windows.cpp  # lo mínimo para compilar (no lanza nada); solo Windows
 │       ├── service_control.h/.cpp     # systemctl --user, loginctl, journalctl; ServiceWorker (sin FTXUI)
 │       ├── addon_form.h/.cpp          # lógica de F2 → Addons: errores, sección, credenciales, estado (sin FTXUI)
-│       ├── addons_panel.h/.cpp        # F2 → Addons (ejecutable chatbot y chatbot_ui_tests, ftxui::component)
+│       ├── telegram_addon.h/.cpp      # TelegramAddon: leer, revisar y guardar la sección, invitados y servicio; AddonsEnvironment (sin FTXUI; F2 y chatbot-rpc)
+│       ├── addons_panel.h/.cpp        # F2 → Addons: dibujo, foco y preguntas sobre TelegramAddon (ejecutable chatbot y chatbot_ui_tests, ftxui::component)
 │       ├── conversation.h/.cpp        # lógica de la conversación (sin FTXUI ni hilos)
 │       ├── conversation_store.h/.cpp  # archivos de conversación (sin FTXUI)
 │       ├── conversation_list.h/.cpp   # lógica de la lista de conversaciones (sin FTXUI)
@@ -112,7 +113,7 @@ chatbot/
 │       ├── sidebar.h/.cpp             # barra de conversaciones: grupos por fecha, navegación (sin FTXUI)
 │       ├── request_runner.h/.cpp      # hilo de trabajo de la petición (sin FTXUI)
 │       ├── session.h/.cpp             # Session: la lógica de la app sin FTXUI (estado, enviar, comandos, conversaciones, F2)
-│       ├── app_startup.h/.cpp         # arranque común de la TUI y chatbot-rpc: load_startup_config, app_session_environment (sin FTXUI)
+│       ├── app_startup.h/.cpp         # arranque común de la TUI y chatbot-rpc: load_startup_config, app_session_environment, addons_environment, sibling_chatbot_path (sin FTXUI)
 │       ├── providers.h/.cpp           # tabla de proveedores compatibles con OpenAI (sin FTXUI)
 │       ├── provider_settings.h/.cpp   # lógica del formulario "Proveedor de IA" (sin FTXUI)
 │       ├── models_loader.h/.cpp       # hilo de trabajo de GET /models (sin FTXUI)

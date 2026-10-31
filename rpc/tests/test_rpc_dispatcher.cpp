@@ -6,32 +6,46 @@
 #include "dispatcher.h"
 #include "protocol.h"
 
+#include "app_startup.h"
 #include "code_blocks.h"
 #include "conversation.h"
 #include "conversation_store.h"
+#include "debug_log.h"
 #include "downloads.h"
 #include "models_loader.h"
 #include "providers.h"
 #include "search_settings.h"
 #include "session.h"
 #include "sidebar.h"
+#include "telegram_addon.h"
 
 #include "blocking_transport.hpp"
+#include "fake_system.hpp"
 #include "fake_transport.hpp"
 #include "session_fakes.hpp"
 
+#include "chatbot/addon_settings/invited.h"
+#include "chatbot/addon_settings/paths.h"
+#include "chatbot/addon_settings/registry.h"
+#include "chatbot/addon_settings/systemd_unit.h"
+#include "chatbot/addon_settings/token.h"
 #include "chatbot/config.h"
+#include "chatbot/credentials.h"
 #include "chatbot/platform.h"
 #include "chatbot/search_context.h"
 #include "chatbot/system_prompt.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+#include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -77,9 +91,44 @@ struct Rpc : chatbot_test::SessionFakes {
     std::function<std::unique_ptr<chatbot::Transport>()> models_transport = [] {
         return std::make_unique<chatbot_test::FakeTransport>();
     };
+    /// addons.* y service.*: procesos falsos; el addon "instalado" y chatbot
+    /// junto a chatbot-rpc, en la carpeta temporal.
+    chatbot_test::FakeSystem system;
+    bool installed = true;
+    chatbot::Os addons_os = chatbot::Os::Posix;
     std::unique_ptr<Dispatcher> dispatcher; ///< Al último: se destruye primero (join).
 
+    [[nodiscard]] std::string bot_data_dir() const { return path("telegram"); }
+    [[nodiscard]] std::string unit_path() const {
+        return (dir.path() / "systemd" / "chatbot-telegram.service").string();
+    }
+    /// Lo que main pasa: el chatbot de la carpeta de chatbot-rpc.
+    [[nodiscard]] std::string chatbot_path() const {
+        return chatbot::cli::sibling_chatbot_path(path("chatbot-rpc"));
+    }
+
+    std::unique_ptr<chatbot::cli::TelegramAddon>
+    make_addons(chatbot::cli::ServiceWorker::Post post) {
+        chatbot::cli::AddonsEnvironment environment;
+        environment.os = addons_os;
+        environment.post = std::move(post);
+        environment.run = system.runner();
+        environment.locate = [this](const chatbot::addon_settings::AddonInfo&) {
+            return installed ? std::optional<std::string>{chatbot_test::kAddonExecutable}
+                             : std::nullopt;
+        };
+        environment.config_path = config_path();
+        environment.credentials_path = credentials_path();
+        environment.data_dir = bot_data_dir();
+        environment.unit_path = unit_path();
+        environment.uid = 1000;
+        environment.chatbot_path = chatbot_path();
+        environment.home = "/home/ana";
+        return std::make_unique<chatbot::cli::TelegramAddon>(std::move(environment));
+    }
+
     void start() {
+        std::ofstream{chatbot_path(), std::ios::binary} << "#!/bin/sh\n";
         dispatcher = std::make_unique<Dispatcher>(
             info,
             [this](chatbot::cli::Session::Post post, chatbot::cli::Session::OnFinished done) {
@@ -87,6 +136,7 @@ struct Rpc : chatbot_test::SessionFakes {
                                                                std::move(post), std::move(done));
             },
             [this] { return models_transport(); },
+            [this](chatbot::cli::ServiceWorker::Post post) { return make_addons(std::move(post)); },
             [this](chatbot::cli::RequestRunner::Task task) {
                 queue.post([this, task = std::move(task)] {
                     task();
@@ -152,6 +202,8 @@ std::string summary(const Json& message) {
         text += " " + params["outcome"].get<std::string>();
     } else if (method == "settings.changed") {
         text += " " + params["section"].get<std::string>();
+    } else if (method == "service.changed") {
+        CHECK(params.dump() == R"({"addon":"telegram"})");
     }
     return text;
 }
@@ -198,7 +250,7 @@ TEST_CASE("RPC: el ejemplo completo de PROTOCOL.md (sección 8)", "[rpc]") {
             "server":{"name":"chatbot-rpc","version":"0.1.0"},"platform":"linux","portable":false,
             "conversation":"c1","paths":{"config":"/tmp/config.json",
             "conversations":"/tmp/conversations","downloads":null},"ready":true,"problem":null,
-            "warnings":[],"capabilities":{"search":true,"addons":[],"service":null}}})"),
+            "warnings":[],"capabilities":{"search":true,"addons":["telegram"],"service":"systemd"}}})"),
         Json::parse(R"({"jsonrpc":"2.0","id":2,"result":{"conversation":"c1","rev":0,"id":null,
             "title":"","created_at":null,"last_model":"","phase":"idle","entries":[]}})"),
         Json::parse(R"({"jsonrpc":"2.0","id":3,"result":{"accepted":true}})"),
@@ -729,9 +781,9 @@ TEST_CASE("RPC: ciclo de vida y errores del protocolo", "[rpc]") {
         const std::vector<Json> got = rpc.take();
         CHECK(summaries(got) == std::vector<std::string>{"#2 result"});
     }
-    SECTION("un método de R4 o uno desconocido: MethodNotFound; el id puede ser cadena") {
+    SECTION("un método desconocido, también de addons: MethodNotFound; el id puede ser cadena") {
         rpc.initialize();
-        rpc.call("a", "addons.list");
+        rpc.call("a", "addons.telegram.borrar");
         rpc.call("b", "settings.appearance.get");
         const std::vector<Json> got = rpc.take();
         CHECK(summaries(got) ==
@@ -1496,3 +1548,469 @@ TEST_CASE("RPC: ninguna respuesta ni evento trae la key que se mandó", "[rpc][s
     CHECK(all.find("\"id\":8") != std::string::npos);
 }
 
+
+// ---------------------------------------------------------------------------
+// addons.* y service.* (sección 6.8): TelegramAddon con procesos falsos
+// (FakeSystem) y la carpeta temporal de la Session; nunca systemctl de verdad.
+
+namespace {
+
+constexpr const char* kBotToken = "123456789:AAFakeTokenForTestsOnly_abcdefghijk";
+constexpr const char* kOtherBotToken = "987654321:AAOtherFakeTokenForTests_abcdefghij";
+constexpr const char* kBotModelKey = "nvapi-key-propia-del-bot-ficticia-0123456789";
+
+/// La sección de Telegram en el config.json de la prueba (con lo que ya tenga).
+void write_section(Rpc& rpc, const nlohmann::json& telegram) {
+    nlohmann::json app = nlohmann::json::object();
+    if (std::filesystem::exists(rpc.config_path())) {
+        std::ifstream file{rpc.config_path(), std::ios::binary};
+        app = nlohmann::json::parse(file);
+    }
+    app["addons"]["telegram"] = telegram;
+    std::ofstream{rpc.config_path(), std::ios::binary | std::ios::trunc} << app.dump(2);
+}
+
+void write_bot_token(Rpc& rpc) {
+    chatbot::Credentials credentials;
+    credentials.keys["telegram"] = kBotToken;
+    REQUIRE_FALSE(chatbot::save_credentials(rpc.credentials_path(), credentials));
+}
+
+nlohmann::json enabled_bot() {
+    return {{"version", 1}, {"enabled", true}, {"allowed_users", {111111111}}};
+}
+
+/// El form de addons.telegram.get.
+Json bot_form(Rpc& rpc) {
+    rpc.call("f", "addons.telegram.get");
+    const Json got = only(rpc);
+    REQUIRE(got.contains("result"));
+    return got["result"]["form"];
+}
+
+/// Una petición larga: espera su respuesta y lo que siguió.
+std::vector<Json> long_call(Rpc& rpc, const Json& id, const std::string& method,
+                            const Json& params) {
+    rpc.call(id, method, params);
+    REQUIRE(run_until_reply(rpc, id));
+    settle(rpc);
+    return rpc.take();
+}
+
+std::string unit_on_disk(const Rpc& rpc) {
+    std::ifstream unit{rpc.unit_path(), std::ios::binary};
+    return std::string{std::istreambuf_iterator<char>{unit}, std::istreambuf_iterator<char>{}};
+}
+
+} // namespace
+
+TEST_CASE("RPC: capabilities de addons según la plataforma", "[rpc][addons]") {
+    Rpc rpc;
+    const bool windows = GENERATE(false, true);
+    rpc.addons_os = windows ? chatbot::Os::Windows : chatbot::Os::Posix;
+    rpc.start();
+    rpc.call(1, "initialize", {{"protocol_version", 1}});
+    const Json capabilities = only(rpc)["result"]["capabilities"];
+    if (windows) {
+        CHECK(capabilities.dump() == R"({"search":true,"addons":[],"service":null})");
+        for (const char* method : {"addons.list", "addons.telegram.get", "service.status"}) {
+            rpc.call(2, method, {{"addon", "telegram"}});
+            check_error(only(rpc), -32006,
+                        std::string{chatbot::addon_settings::kAddonsUnavailableOnWindows});
+        }
+        CHECK(rpc.system.calls().empty());
+    } else {
+        CHECK(capabilities.dump() == R"({"search":true,"addons":["telegram"],"service":"systemd"})");
+    }
+}
+
+TEST_CASE("RPC: addons.list y addons.check_install", "[rpc][addons]") {
+    Rpc rpc;
+    rpc.initialize();
+    rpc.call(2, "addons.list");
+    CHECK(only(rpc)["result"].dump() ==
+          Json::parse(std::string{R"({"addons":[{"name":"telegram","installed":true,"path":")"} +
+                      chatbot_test::kAddonExecutable +
+                      R"(","problem":"","config_version_ok":null}]})")
+              .dump());
+    const std::vector<Json> got = long_call(rpc, 3, "addons.check_install", {{"name", "telegram"}});
+    REQUIRE(summaries(got) == std::vector<std::string>{"#3 result"});
+    CHECK(got[0]["result"]["config_version_ok"] == true);
+    rpc.call(4, "addons.check_install", {{"name", "whatsapp"}});
+    CHECK(only(rpc)["error"]["data"].dump() == R"({"fields":["name"]})");
+
+    rpc.installed = false;
+    rpc.call(5, "addons.list");
+    const Json missing = only(rpc)["result"]["addons"][0];
+    CHECK(missing["installed"] == false);
+    CHECK(missing["problem"].get<std::string>().starts_with("No instalado: copia chatbot-telegram"));
+}
+
+TEST_CASE("RPC: addons.telegram.get y check", "[rpc][addons]") {
+    Rpc rpc;
+    write_section(rpc, {{"version", 1}, {"enabled", true}, {"daily_message_limit", 20}});
+    write_bot_token(rpc);
+    rpc.initialize();
+    rpc.call(2, "addons.telegram.get");
+    const Json result = only(rpc)["result"];
+    CHECK(result["form"]["enabled"] == true);
+    CHECK(result["form"]["fields"]["daily_limit"] == "20");
+    CHECK(result["form"]["fields"]["token"] == "");
+    CHECK(result["secrets"]["token"] == chatbot::cli::addon_secret_status(kBotToken, false));
+    CHECK(result["secrets"]["model_key"] == chatbot::cli::addon_secret_status("", false));
+    CHECK(result["labels"]["daily_limit"] ==
+          std::string{chatbot::cli::addon_field_label(chatbot::cli::AddonField::DailyLimit)});
+    CHECK(result["read_only"] == false);
+    CHECK(result["read_only_reason"].is_null());
+    CHECK(result["discarded"] == Json::array());
+    CHECK(result["load_error"].is_null());
+
+    Json form = result["form"];
+    rpc.call(3, "addons.telegram.check", {{"form", form}});
+    CHECK(only(rpc)["result"].dump() ==
+          R"({"field_errors":{},"form_error":null,"needs_restart":false})");
+    form["fields"]["daily_limit"] = "cero";
+    form["fields"]["token"] = "no-es-un-token";
+    rpc.call(4, "addons.telegram.check", {{"form", form}});
+    const Json check = only(rpc)["result"];
+    CHECK(check["field_errors"].size() == 2);
+    CHECK(check["field_errors"].contains("daily_limit"));
+    CHECK(check["form_error"].get<std::string>().starts_with("Token: "));
+    CHECK(check.dump().find("no-es-un-token") == std::string::npos);
+
+    form.erase("remove_model_key");
+    form["fields"].erase("time_zone");
+    form["fields"]["extra"] = "";
+    rpc.call(5, "addons.telegram.check", {{"form", form}});
+    CHECK(only(rpc)["error"]["data"].dump() == R"({"fields":["form.remove_model_key"]})");
+    form["remove_model_key"] = false;
+    rpc.call(6, "addons.telegram.check", {{"form", form}});
+    CHECK(only(rpc)["error"]["data"].dump() ==
+          R"({"fields":["form.fields.extra","form.fields.time_zone"]})");
+}
+
+TEST_CASE("RPC: addons.telegram.save", "[rpc][addons]") {
+    Rpc rpc;
+    write_section(rpc, enabled_bot());
+    write_bot_token(rpc);
+    rpc.initialize();
+
+    SECTION("bien: secretos, sección, settings.changed y sin tocar el servicio") {
+        Json form = bot_form(rpc);
+        form["fields"]["daily_limit"] = "7";
+        form["fields"]["model_key"] = kBotModelKey;
+        rpc.call(2, "addons.telegram.save", {{"form", form}});
+        const std::vector<Json> got = rpc.take();
+        CHECK(summaries(got) ==
+              std::vector<std::string>{"#2 result", "settings.changed telegram"});
+        CHECK(got[0]["result"].dump() == R"({"needs_restart":false})");
+        CHECK(rpc.system.calls().empty()); // El servicio, con service.apply.
+        const chatbot::Result<chatbot::Credentials> saved =
+            chatbot::load_credentials(rpc.credentials_path());
+        REQUIRE(saved.is_ok());
+        CHECK(saved.value().keys.at("telegram:api_key") == kBotModelKey);
+        std::ifstream file{rpc.config_path(), std::ios::binary};
+        CHECK(nlohmann::json::parse(file)["addons"]["telegram"]["daily_message_limit"] == 7);
+        rpc.call(3, "addons.telegram.get");
+        const Json after = only(rpc)["result"];
+        CHECK(after["form"]["fields"]["model_key"] == ""); // Vacío: se conserva.
+        CHECK(after["secrets"]["model_key"] ==
+              chatbot::cli::addon_secret_status(kBotModelKey, false));
+        // Sin cambios no escribe ni avisa.
+        rpc.call(4, "addons.telegram.save", {{"form", after["form"]}});
+        CHECK(summaries(rpc.take()) == std::vector<std::string>{"#4 result"});
+    }
+    SECTION("cambiar el token con el servicio activo necesita reiniciar") {
+        (void)long_call(rpc, 2, "service.status", {{"addon", "telegram"}});
+        Json form = bot_form(rpc);
+        form["fields"]["token"] = kOtherBotToken;
+        rpc.call(3, "addons.telegram.check", {{"form", form}});
+        CHECK(only(rpc)["result"]["needs_restart"] == true);
+        rpc.call(4, "addons.telegram.save", {{"form", form}});
+        CHECK(rpc.take()[0]["result"].dump() == R"({"needs_restart":true})");
+    }
+    SECTION("llaves que se descartarían: -32008 y luego con discard_confirmed") {
+        nlohmann::json section = enabled_bot();
+        section["rara"] = 1;
+        write_section(rpc, section);
+        Json form = bot_form(rpc);
+        form["fields"]["daily_limit"] = "9";
+        rpc.call(2, "addons.telegram.save", {{"form", form}});
+        check_error(only(rpc), -32008, "Se descartarán: rara. ¿Guardar? (s/n)");
+        rpc.call(3, "addons.telegram.save", {{"form", form}, {"discard_confirmed", true}});
+        CHECK(summaries(rpc.take()) ==
+              std::vector<std::string>{"#3 result", "settings.changed telegram"});
+        std::ifstream file{rpc.config_path(), std::ios::binary};
+        CHECK_FALSE(nlohmann::json::parse(file)["addons"]["telegram"].contains("rara"));
+    }
+    SECTION("solo lectura: una sección más nueva") {
+        write_section(rpc, {{"version", 2}, {"enabled", true}});
+        const Json form = bot_form(rpc);
+        rpc.call(2, "addons.telegram.save", {{"form", form}});
+        check_error(only(rpc), -32005,
+                    "La sección es de una versión más nueva (2) de la configuración: solo "
+                    "lectura.");
+    }
+    SECTION("errores de campo: -32005 con field_errors") {
+        Json form = bot_form(rpc);
+        form["fields"]["concurrent"] = "-3";
+        const std::string before = [&] {
+            std::ifstream file{rpc.config_path(), std::ios::binary};
+            return std::string{std::istreambuf_iterator<char>{file},
+                               std::istreambuf_iterator<char>{}};
+        }();
+        rpc.call(2, "addons.telegram.save", {{"form", form}});
+        const Json error = only(rpc)["error"];
+        CHECK(error["code"] == -32005);
+        CHECK(error["data"]["message"].get<std::string>().starts_with(
+            std::string{chatbot::cli::addon_field_label(chatbot::cli::AddonField::Concurrent)} +
+            ": "));
+        CHECK(error["data"]["field_errors"].contains("concurrent"));
+        std::ifstream file{rpc.config_path(), std::ios::binary};
+        CHECK(std::string{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}} ==
+              before);
+    }
+}
+
+// invitados.json usa flock: solo POSIX (en Windows, "no disponible").
+#ifndef _WIN32
+TEST_CASE("RPC: invitados", "[rpc][addons]") {
+    Rpc rpc;
+    write_section(rpc, enabled_bot());
+    write_bot_token(rpc);
+    const std::string path = chatbot::addon_settings::invited_file_path(rpc.bot_data_dir());
+    REQUIRE(chatbot::addon_settings::add_invited(path, 42).is_ok());
+    REQUIRE(chatbot::addon_settings::add_invited(path, 9007199254740993).is_ok()); // > 2^53
+    rpc.initialize();
+    rpc.call(2, "addons.telegram.invited.list");
+    CHECK(only(rpc)["result"].dump() == R"({"users":["42","9007199254740993"]})");
+
+    const bool active = GENERATE(false, true);
+    rpc.system.set_active(active);
+    (void)long_call(rpc, 3, "service.status", {{"addon", "telegram"}});
+    rpc.system.clear();
+    const std::vector<Json> got =
+        long_call(rpc, 4, "addons.telegram.invited.remove", {{"user", "42"}});
+    REQUIRE(summaries(got) == std::vector<std::string>{"#4 result", "service.changed"});
+    CHECK(got[0]["result"]["users"] == Json::array({"9007199254740993"}));
+    if (active) {
+        CHECK(got[0]["result"]["message"] == "Se quitó 42. Configuración aplicada al bot.");
+        CHECK(chatbot_test::service_actions(rpc.system) ==
+              std::vector<std::string>{"systemctl --user reload chatbot-telegram.service"});
+    } else {
+        CHECK(got[0]["result"]["message"] == "Se quitó 42.");
+        CHECK(rpc.system.calls().empty());
+    }
+    for (const char* user : {"-1", "0", "4x", " 4", "99999999999999999999"}) {
+        rpc.call(5, "addons.telegram.invited.remove", {{"user", user}});
+        CHECK(only(rpc)["error"]["data"].dump() == R"({"fields":["user"]})");
+    }
+}
+#endif
+
+TEST_CASE("RPC: service.status y service.apply", "[rpc][addons]") {
+    Rpc rpc;
+    write_section(rpc, enabled_bot());
+    write_bot_token(rpc);
+    rpc.initialize();
+
+    SECTION("status") {
+        const std::vector<Json> got = long_call(rpc, 2, "service.status", {{"addon", "telegram"}});
+        REQUIRE(summaries(got) == std::vector<std::string>{"#2 result"}); // Sin service.changed.
+        const Json status = got[0]["result"];
+        CHECK(status["systemd"] == true);
+        CHECK(status["active"] == "active");
+        CHECK(status["unit"] == "missing");
+        CHECK(status["linger"] == false);
+        CHECK(status["exit_status"].is_null());
+        CHECK(status["journal_command"] ==
+              chatbot::cli::journal_command(*chatbot::addon_settings::find_addon("telegram")));
+    }
+    SECTION("apply escribe la unidad de la TUI, byte por byte") {
+        const std::vector<Json> got = long_call(rpc, 2, "service.apply", {{"addon", "telegram"}});
+        REQUIRE(summaries(got) == std::vector<std::string>{"#2 result", "service.changed"});
+        CHECK(got[0]["result"]["ok"] == true);
+        // La de test_addons_panel.cpp: ExecStart = el chatbot de la TUI.
+        const chatbot::addon_settings::AddonInfo& addon =
+            *chatbot::addon_settings::find_addon("telegram");
+        CHECK(unit_on_disk(rpc) ==
+              chatbot::addon_settings::unit_text({rpc.chatbot_path(), std::string{addon.name},
+                                                  std::string{addon.description}, std::nullopt,
+                                                  std::nullopt}));
+    }
+    SECTION("unidad ajena: -32008 y luego con replace_foreign") {
+        std::filesystem::create_directories(std::filesystem::path{rpc.unit_path()}.parent_path());
+        std::ofstream{rpc.unit_path(), std::ios::binary} << "[Service]\nExecStart=/bin/true\n";
+        std::vector<Json> got = long_call(rpc, 2, "service.apply", {{"addon", "telegram"}});
+        REQUIRE(summaries(got) == std::vector<std::string>{"#2 error -32008", "service.changed"});
+        check_error(got[0], -32008, std::string{chatbot::cli::kReplaceForeignUnit});
+        CHECK(unit_on_disk(rpc) == "[Service]\nExecStart=/bin/true\n");
+        got = long_call(rpc, 3, "service.apply",
+                        {{"addon", "telegram"}, {"replace_foreign", true}});
+        REQUIRE(summaries(got) == std::vector<std::string>{"#3 result", "service.changed"});
+        CHECK(unit_on_disk(rpc).starts_with(chatbot::addon_settings::kUnitMarker));
+    }
+    SECTION("sin systemd de usuario: -32006") {
+        rpc.system.answer("systemctl --user is-active chatbot-telegram.service",
+                          chatbot_test::exited(1, "", "Failed to connect to bus: No medium found"));
+        const std::vector<Json> got = long_call(rpc, 2, "service.apply", {{"addon", "telegram"}});
+        check_error(got[0], -32006, std::string{chatbot::cli::kNoUserSystemd});
+    }
+    SECTION("addon sin instalar: el problema, sin tocar el servicio") {
+        rpc.installed = false;
+        const std::vector<Json> got = long_call(rpc, 2, "service.apply", {{"addon", "telegram"}});
+        REQUIRE(summaries(got) == std::vector<std::string>{"#2 result", "service.changed"});
+        CHECK(got[0]["result"]["ok"] == false);
+        CHECK(got[0]["result"]["message"].get<std::string>().starts_with("No instalado: "));
+        CHECK(chatbot_test::service_actions(rpc.system).empty());
+    }
+    SECTION("sin chatbot junto a chatbot-rpc: -32007 sin correr nada") {
+        std::filesystem::remove(rpc.chatbot_path());
+        rpc.call(2, "service.status", {{"addon", "telegram"}});
+        check_error(only(rpc), -32007,
+                    "El servicio arranca chatbot, y no está junto a chatbot-rpc: " +
+                        rpc.chatbot_path() + ".");
+        CHECK(rpc.system.calls().empty());
+    }
+}
+
+TEST_CASE("RPC: service.restart, disable y reload", "[rpc][addons]") {
+    Rpc rpc;
+    write_section(rpc, enabled_bot());
+    write_bot_token(rpc);
+    rpc.initialize();
+    std::vector<Json> got = long_call(rpc, 2, "service.restart", {{"addon", "telegram"}});
+    REQUIRE(summaries(got) == std::vector<std::string>{"#2 result", "service.changed"});
+    CHECK(got[0]["result"].dump() == R"({"message":"Bot reiniciado.","ok":true})");
+    got = long_call(rpc, 3, "service.reload", {{"addon", "telegram"}});
+    CHECK(got[0]["result"].dump() == R"({"message":"Configuración aplicada al bot.","ok":true})");
+    got = long_call(rpc, 4, "service.disable", {{"addon", "telegram"}});
+    CHECK(got[0]["result"].dump() == R"({"message":"Servicio desactivado.","ok":true})");
+    CHECK(chatbot_test::service_actions(rpc.system) ==
+          std::vector<std::string>{"systemctl --user restart chatbot-telegram.service",
+                                   "systemctl --user reload chatbot-telegram.service",
+                                   "systemctl --user disable --now chatbot-telegram.service"});
+
+    write_section(rpc, {{"version", 1}, {"enabled", false}});
+    rpc.call(5, "service.restart", {{"addon", "telegram"}});
+    check_error(only(rpc), -32005, std::string{chatbot::cli::kRestartNeedsEnabled});
+}
+
+TEST_CASE("RPC: peticiones largas pendientes", "[rpc][addons]") {
+    Rpc rpc;
+    write_section(rpc, enabled_bot());
+    write_bot_token(rpc);
+    const std::string restart = "systemctl --user restart chatbot-telegram.service";
+
+    SECTION("$/cancel: -32800 al momento; la operación termina y avisa service.changed") {
+        rpc.system.hold(restart);
+        rpc.initialize();
+        rpc.call(2, "service.restart", {{"addon", "telegram"}});
+        REQUIRE(rpc.system.wait_held());
+        CHECK(rpc.out.empty());
+        rpc.call(3, "$/cancel", {{"id", 2}});
+        CHECK(summaries(rpc.take()) == std::vector<std::string>{"#2 error -32800", "#3 result"});
+        rpc.system.release();
+        REQUIRE(rpc.run_until_method("service.changed"));
+        settle(rpc);
+        CHECK(summaries(rpc.take()) == std::vector<std::string>{"service.changed"});
+        CHECK(rpc.system.called(restart)); // No se interrumpió.
+    }
+    SECTION("dos a la vez: models.list y service.status") {
+        BlockingTransport* blocking = nullptr;
+        models_block(rpc, blocking);
+        rpc.system.hold("systemctl --user is-active chatbot-telegram.service");
+        rpc.initialize();
+        rpc.call("m", "models.list", {{"draft", nvidia_draft()}});
+        rpc.call("s", "service.status", {{"addon", "telegram"}});
+        REQUIRE(blocking->started.wait_for(kThreadTimeout));
+        REQUIRE(rpc.system.wait_held());
+        CHECK(rpc.out.empty());
+        rpc.system.release();
+        REQUIRE(run_until_reply(rpc, "s"));
+        CHECK(summaries(rpc.take()) == std::vector<std::string>{R"(#"s" result)"});
+        rpc.call(3, "$/cancel", {{"id", "m"}});
+        CHECK(summaries(rpc.take()) ==
+              std::vector<std::string>{R"(#"m" error -32800)", "#3 result"});
+        settle(rpc);
+        CHECK(rpc.out.empty());
+    }
+    SECTION("como notificación: sin respuesta, pero con service.changed") {
+        rpc.initialize();
+        rpc.notify("service.restart", {{"addon", "telegram"}});
+        rpc.notify("addons.telegram.invited.remove", {{"user", "42"}});
+        REQUIRE(rpc.queue.run_until([&] { return rpc.out.size() >= 2; }));
+        settle(rpc);
+        CHECK(summaries(rpc.take()) ==
+              std::vector<std::string>{"service.changed", "service.changed"});
+        CHECK(rpc.system.called(restart));
+    }
+    SECTION("shutdown con pendientes: sin respuesta, y sale en menos de 2 s") {
+        rpc.system.hold(restart);
+        rpc.initialize();
+        rpc.call(2, "service.restart", {{"addon", "telegram"}});
+        rpc.call(3, "addons.check_install", {{"name", "telegram"}});
+        REQUIRE(rpc.system.wait_held());
+        const auto start = std::chrono::steady_clock::now();
+        rpc.call(4, "shutdown");
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        WARN("shutdown con un systemctl en curso: "
+             << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << " ms");
+        CHECK(elapsed < std::chrono::seconds{2});
+        CHECK(summaries(rpc.take()) ==
+              std::vector<std::string>{"conversation.closed c1 shutdown", "#4 result"});
+        settle(rpc);
+        CHECK(rpc.out.empty());
+    }
+}
+
+TEST_CASE("RPC: addons.* nunca devuelve un secreto", "[rpc][addons]") {
+    Rpc rpc;
+    write_section(rpc, enabled_bot());
+    write_bot_token(rpc);
+    rpc.initialize();
+    Json form = bot_form(rpc);
+    form["fields"]["token"] = kOtherBotToken;
+    form["fields"]["model_key"] = kBotModelKey;
+    form["fields"]["daily_limit"] = "x";
+    rpc.call(2, "addons.telegram.check", {{"form", form}});
+    rpc.call(3, "addons.telegram.save", {{"form", form}});
+    form["fields"]["daily_limit"] = "5";
+    rpc.call(4, "addons.telegram.save", {{"form", form}});
+    rpc.call(5, "addons.telegram.get");
+    std::string all;
+    for (const Json& message : rpc.take()) {
+        all += message.dump() + "\n";
+    }
+    CHECK(all.find("\"id\":5") != std::string::npos);
+    for (const char* secret : {kBotToken, kOtherBotToken, kBotModelKey}) {
+        CHECK(all.find(secret) == std::string::npos);
+        // Ni la parte secreta del token.
+        const std::string text = secret;
+        CHECK(all.find(text.substr(text.find(':') + 1)) == std::string::npos);
+    }
+}
+
+// generate_invite_code usa getrandom: solo POSIX (en Windows, "no disponible").
+#ifndef _WIN32
+TEST_CASE("RPC: el código de invitación no queda en CHAT_DEBUG_RPC", "[rpc][addons]") {
+    // Lo que escribe main: cada línea que sale pasa por DebugLog::outgoing.
+    Rpc rpc;
+    rpc.initialize();
+    rpc.call(2, "addons.telegram.invite_code");
+    const Json got = only(rpc);
+    REQUIRE(got["result"].size() == 1);
+    const std::string code = got["result"]["invite_code"];
+    CHECK(code.size() == chatbot::addon_settings::kGeneratedInviteCodeLength);
+    const std::string log_path = rpc.path("rpc.log");
+    {
+        chatbot::rpc::DebugLog log{log_path};
+        log.outgoing(got);
+    }
+    std::ifstream file{log_path, std::ios::binary};
+    const std::string written{std::istreambuf_iterator<char>{file},
+                              std::istreambuf_iterator<char>{}};
+    CHECK(written.find(code) == std::string::npos);
+    CHECK(written.find(R"("invite_code":"•••")") != std::string::npos);
+}
+#endif

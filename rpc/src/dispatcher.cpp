@@ -7,11 +7,18 @@
 #include "search_settings.h"
 #include "sidebar.h"
 
+#include "chatbot/addon_settings/registry.h"
+#include "chatbot/addon_settings/systemd_unit.h"
 #include "chatbot/system_prompt.h"
 
+#include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <limits>
+#include <system_error>
 #include <utility>
 
 namespace chatbot::rpc {
@@ -84,13 +91,168 @@ std::optional<int> block_number(const Json& params) {
                : std::nullopt;
 }
 
+constexpr std::string_view kNoHomeForService = "Sin HOME no hay dónde instalar el servicio.";
+
+/// El nombre de cada campo en el protocolo (AddonField en snake_case).
+constexpr std::array<std::string_view, cli::kAddonFieldCount> kFieldNames{
+    "token",        "model",          "model_key",   "search_key",
+    "allowed_users", "invite_code",   "daily_limit", "concurrent",
+    "idle_minutes", "stale_minutes",  "draft_ms",    "time_zone"};
+
+std::string_view field_name(cli::AddonField field) {
+    return kFieldNames[static_cast<std::size_t>(field)];
+}
+
+Json form_json(const cli::AddonForm& form) {
+    Json fields = Json::object();
+    for (std::size_t i = 0; i < cli::kAddonFieldCount; ++i) {
+        fields[std::string{kFieldNames[i]}] = form.text[i];
+    }
+    return {{"enabled", form.enabled},
+            {"log_error_details", form.log_error_details},
+            {"fields", std::move(fields)},
+            {"remove_model_key", form.remove_model_key},
+            {"remove_search_key", form.remove_search_key}};
+}
+
+/// El form de check y save, con todas sus llaves. Si falta o sobra algo, el
+/// data de -32602 con "form.…" y "form.fields.…".
+std::optional<Json> parse_form(const Json& json, std::optional<cli::AddonForm>& form) {
+    std::optional<Json> bad = check_params(&json, {{"enabled", Param::Type::Boolean},
+                                                   {"log_error_details", Param::Type::Boolean},
+                                                   {"fields", Param::Type::Object},
+                                                   {"remove_model_key", Param::Type::Boolean},
+                                                   {"remove_search_key", Param::Type::Boolean}});
+    std::string prefix = "form.";
+    if (!bad.has_value()) {
+        const Json& fields = json.at("fields");
+        bad = check_params(&fields, {{kFieldNames[0]},
+                                     {kFieldNames[1]},
+                                     {kFieldNames[2]},
+                                     {kFieldNames[3]},
+                                     {kFieldNames[4]},
+                                     {kFieldNames[5]},
+                                     {kFieldNames[6]},
+                                     {kFieldNames[7]},
+                                     {kFieldNames[8]},
+                                     {kFieldNames[9]},
+                                     {kFieldNames[10]},
+                                     {kFieldNames[11]}});
+        prefix = "form.fields.";
+    }
+    if (bad.has_value()) {
+        Json fields = Json::array();
+        for (const Json& field : bad->at("fields")) {
+            fields.push_back(prefix + field.get<std::string>());
+        }
+        return Json{{"fields", std::move(fields)}};
+    }
+    cli::AddonForm parsed;
+    parsed.enabled = json.at("enabled").get<bool>();
+    parsed.log_error_details = json.at("log_error_details").get<bool>();
+    for (std::size_t i = 0; i < cli::kAddonFieldCount; ++i) {
+        parsed.text[i] = json.at("fields").at(std::string{kFieldNames[i]}).get<std::string>();
+    }
+    parsed.remove_model_key = json.at("remove_model_key").get<bool>();
+    parsed.remove_search_key = json.at("remove_search_key").get<bool>();
+    form = std::move(parsed);
+    return std::nullopt;
+}
+
+/// Un elemento de addons.list: lo que se sabe del programa en path (la
+/// versión, solo si check_install o service.status ya la preguntó ahí).
+Json install_json(const cli::TelegramAddon& addon, const std::optional<std::string>& path) {
+    const bool portable = addon.environment().portable;
+    const std::optional<cli::AddonInstall>& known = addon.install();
+    std::string problem;
+    Json version_ok = nullptr;
+    if (!path.has_value()) {
+        problem = cli::addon_install_problem(addon.info(), cli::AddonInstall{}, portable);
+    } else if (known.has_value() && known->path == path) {
+        problem = cli::addon_install_problem(addon.info(), *known, portable);
+        version_ok = problem.empty();
+    }
+    return {{"name", std::string{addon.info().name}},
+            {"installed", path.has_value()},
+            {"path", optional_string(path)},
+            {"problem", problem},
+            {"config_version_ok", std::move(version_ok)}};
+}
+
+/// Por qué no se puede guardar: la sección (al leer, versión) o el addon
+/// incompatible; "" si se puede.
+std::string read_only_reason(const cli::TelegramAddon& addon) {
+    if (std::string problem = addon.section_problem(); !problem.empty()) {
+        return problem;
+    }
+    if (addon.read_only()) { // Instalado e incompatible.
+        return cli::addon_install_problem(addon.info(), *addon.install(),
+                                          addon.environment().portable);
+    }
+    return {};
+}
+
+std::string_view unit_state_name(addon_settings::UnitState state) {
+    switch (state) {
+    case addon_settings::UnitState::Missing:
+        return "missing";
+    case addon_settings::UnitState::Foreign:
+        return "foreign";
+    case addon_settings::UnitState::Current:
+        return "current";
+    case addon_settings::UnitState::Stale:
+        return "stale";
+    }
+    return "missing";
+}
+
+/// service.status, con el último estado (refresh).
+Json status_json(const cli::TelegramAddon& addon) {
+    const cli::ServiceStatus& status = *addon.service();
+    return {{"systemd", status.systemd},
+            {"active", status.active},
+            {"enabled", status.enabled},
+            {"exit_status", status.exit_status.has_value() ? Json(*status.exit_status)
+                                                           : Json(nullptr)},
+            {"unit", std::string{unit_state_name(status.unit)}},
+            {"linger", status.linger.has_value() ? Json(*status.linger) : Json(nullptr)},
+            {"last_error", status.last_error},
+            {"summary", cli::service_summary(status)},
+            {"problem", cli::service_problem(status, addon.info().executable,
+                                             addon.environment().data_dir.value_or(""))},
+            {"mismatch", addon.out_of_sync(addon.saved_form().enabled)},
+            {"journal_command", cli::journal_command(addon.info())}};
+}
+
+/// Los IDs de Telegram como cadenas decimales (sección 4).
+Json user_list(const std::vector<std::int64_t>& users) {
+    Json list = Json::array();
+    for (const std::int64_t user : users) {
+        list.push_back(std::to_string(user));
+    }
+    return list;
+}
+
+/// Un ID de Telegram en cadena decimal: un entero positivo de 64 bits, sin
+/// signo ni espacios.
+std::optional<std::int64_t> parse_user(const std::string& text) {
+    std::int64_t value = 0;
+    const char* end = text.data() + text.size();
+    const auto [stop, error] = std::from_chars(text.data(), end, value);
+    if (text.empty() || text.front() == '-' || error != std::errc{} || stop != end || value <= 0) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 } // namespace
 
 Dispatcher::Dispatcher(ServerInfo info, SessionFactory make_session,
                        cli::ModelsLoader::TransportFactory models_transport,
-                       cli::Session::Post post, Write write, Now now)
+                       AddonsFactory make_addons, cli::Session::Post post, Write write, Now now)
     : info_(std::move(info)), make_session_(std::move(make_session)),
-      models_transport_(std::move(models_transport)), post_(std::move(post)),
+      models_transport_(std::move(models_transport)), make_addons_(std::move(make_addons)),
+      post_(std::move(post)),
       write_(std::move(write)), now_(std::move(now)) {}
 
 Dispatcher::~Dispatcher() { close_session(); }
@@ -176,14 +338,27 @@ void Dispatcher::dispatch(const std::string& method, const Json* params, const J
         return;
     }
     if (method == "$/cancel") {
-        // Solo models.list es larga; con otro id no hace nada.
+        // Solo las largas quedan pendientes; con otro id no hace nada.
         if (const auto bad = check_params(params, {{"id", Param::Type::IntegerOrString}})) {
             fail(id, has_id, RpcError::InvalidParams, *bad);
             return;
         }
-        if (models_id_.has_value() && *models_id_ == params->at("id")) {
-            models_->cancel();
-            cancel_models();
+        const Json& target = params->at("id");
+        std::vector<std::uint64_t> keys;
+        for (const Pending& pending : pending_) {
+            if (pending.id == target) {
+                keys.push_back(pending.key);
+            }
+        }
+        for (const std::uint64_t key : keys) {
+            if (models_key_ == key) {
+                models_->cancel();
+                models_key_.reset();
+            }
+            // Las de addons siguen hasta terminar (cortar systemctl a la mitad
+            // es peor); su resultado ya no se responde.
+            (void)untrack(key);
+            fail(target, true, RpcError::RequestCancelled);
         }
         reply(id, has_id, Json::object());
         return;
@@ -377,6 +552,8 @@ void Dispatcher::dispatch(const std::string& method, const Json* params, const J
                {"reason", std::string{reason_name(*choice.block)}}});
     } else if (method.starts_with("settings.") || method == "models.list") {
         settings(method, params, id, has_id);
+    } else if (method.starts_with("addons.") || method.starts_with("service.")) {
+        addons(method, params, id, has_id);
     } else {
         fail(id, has_id, RpcError::MethodNotFound);
     }
@@ -619,28 +796,323 @@ void Dispatcher::models_list(const cli::ProviderSettings& form, const Json& id, 
         return;
     }
     cancel_models(); // start descarta la anterior sin llamar a su on_done.
-    if (has_id) {
-        models_id_ = id;
-    }
+    const std::uint64_t key = track(id, has_id);
+    models_key_ = key;
     models_->start(form.request_config(session_->config()),
-                   [this](const Result<std::vector<std::string>>& result) {
-                       if (!models_id_.has_value()) {
-                           return; // Era notificación.
+                   [this, key](const Result<std::vector<std::string>>& result) {
+                       if (models_key_ == key) {
+                           models_key_.reset();
                        }
-                       sync(true); // El delta pendiente sale antes que la respuesta.
-                       const Json request = *std::exchange(models_id_, std::nullopt);
-                       if (result.is_ok()) {
-                           reply(request, true, {{"models", result.value()}});
-                       } else {
-                           fail(request, true, RpcError::ValidationFailed,
-                                message_data(cli::models_error_text(result.error())));
-                       }
+                       finish_long(key, false, [&](const Json& request) {
+                           if (result.is_ok()) {
+                               reply(request, true, {{"models", result.value()}});
+                           } else {
+                               fail(request, true, RpcError::ValidationFailed,
+                                    message_data(cli::models_error_text(result.error())));
+                           }
+                       });
                    });
 }
 
 void Dispatcher::cancel_models() {
-    if (models_id_.has_value()) {
-        fail(*std::exchange(models_id_, std::nullopt), true, RpcError::RequestCancelled);
+    if (models_key_.has_value()) {
+        const std::uint64_t key = *std::exchange(models_key_, std::nullopt);
+        if (const std::optional<Json> request = untrack(key)) {
+            fail(*request, true, RpcError::RequestCancelled);
+        }
+    }
+}
+
+void Dispatcher::addons(const std::string& method, const Json* params, const Json& id,
+                        bool has_id) {
+    static constexpr std::array<std::string_view, 13> kMethods{
+        "addons.list",
+        "addons.check_install",
+        "addons.telegram.get",
+        "addons.telegram.check",
+        "addons.telegram.save",
+        "addons.telegram.invite_code",
+        "addons.telegram.invited.list",
+        "addons.telegram.invited.remove",
+        "service.status",
+        "service.apply",
+        "service.restart",
+        "service.disable",
+        "service.reload"};
+    if (std::find(kMethods.begin(), kMethods.end(), method) == kMethods.end()) {
+        fail(id, has_id, RpcError::MethodNotFound);
+        return;
+    }
+    if (!telegram_->available()) {
+        fail(id, has_id, RpcError::Unsupported,
+             message_data(addon_settings::kAddonsUnavailableOnWindows));
+        return;
+    }
+    cli::TelegramAddon& addon = *telegram_;
+    const auto bad_params = [&](const std::optional<Json>& bad) {
+        if (bad.has_value()) {
+            fail(id, has_id, RpcError::InvalidParams, *bad);
+            return true;
+        }
+        return false;
+    };
+    /// name o addon: solo los de known_addons (hoy, telegram).
+    const auto known = [&](std::string_view field) {
+        if (params->at(std::string{field}) == std::string{addon.info().name}) {
+            return true;
+        }
+        fail(id, has_id, RpcError::InvalidParams, {{"fields", {std::string{field}}}});
+        return false;
+    };
+
+    if (method == "addons.list") {
+        if (bad_params(check_params(params, {}))) {
+            return;
+        }
+        const std::optional<std::string> path = addon.environment().locate(addon.info());
+        Json entry = install_json(addon, path);
+        reply(id, has_id, {{"addons", Json::array({std::move(entry)})}});
+    } else if (method == "addons.check_install") {
+        if (bad_params(check_params(params, {{"name"}})) || !known("name")) {
+            return;
+        }
+        const std::uint64_t key = track(id, has_id);
+        addon.check_install([this, key] {
+            finish_long(key, false, [this](const Json& request) {
+                reply(request, true, install_json(*telegram_, telegram_->install()->path));
+            });
+        });
+    } else if (method == "addons.telegram.get") {
+        if (bad_params(check_params(params, {}))) {
+            return;
+        }
+        addon.load();
+        const cli::AddonSecrets& secrets = addon.secrets();
+        Json labels = Json::object();
+        for (std::size_t i = 0; i < cli::kAddonFieldCount; ++i) {
+            const auto field = static_cast<cli::AddonField>(i);
+            labels[std::string{field_name(field)}] = std::string{cli::addon_field_label(field)};
+        }
+        const std::string reason = read_only_reason(addon);
+        reply(id, has_id,
+              {{"form", form_json(addon.saved_form())},
+               {"secrets",
+                {{"token", cli::addon_secret_status(secrets.token, false)},
+                 {"model_key", cli::addon_secret_status(secrets.model_key, false)},
+                 {"search_key", cli::addon_secret_status(secrets.search_key, false)}}},
+               {"labels", std::move(labels)},
+               {"env_note", cli::addon_env_note(addon.environment().env_defined)},
+               {"read_only", addon.read_only()},
+               {"read_only_reason", non_empty_or_null(reason)},
+               {"discarded", addon.discarded()},
+               {"load_error", non_empty_or_null(addon.load_error())}});
+    } else if (method == "addons.telegram.check" || method == "addons.telegram.save") {
+        const bool save = method == "addons.telegram.save";
+        if (bad_params(save ? check_params(params, {{"form", Param::Type::Object},
+                                                    {"discard_confirmed", Param::Type::Boolean,
+                                                     false}})
+                            : check_params(params, {{"form", Param::Type::Object}}))) {
+            return;
+        }
+        std::optional<cli::AddonForm> form;
+        if (bad_params(parse_form(params->at("form"), form))) {
+            return;
+        }
+        addon.load();
+        Json field_errors = Json::object();
+        for (std::size_t i = 0; i < cli::kAddonFieldCount; ++i) {
+            const auto field = static_cast<cli::AddonField>(i);
+            if (const std::optional<std::string> error =
+                    cli::addon_field_error(*form, addon.secrets(), field)) {
+                field_errors[std::string{field_name(field)}] = *error;
+            }
+        }
+        const std::optional<std::string> form_error =
+            cli::addon_form_error(*form, addon.secrets());
+        const bool restart = addon.needs_restart(*form);
+        if (!save) {
+            reply(id, has_id,
+                  {{"field_errors", std::move(field_errors)},
+                   {"form_error", optional_string(form_error)},
+                   {"needs_restart", restart}});
+            return;
+        }
+        if (addon.read_only()) {
+            fail(id, has_id, RpcError::ValidationFailed, message_data(read_only_reason(addon)));
+            return;
+        }
+        if (form_error.has_value()) {
+            fail(id, has_id, RpcError::ValidationFailed,
+                 {{"message", *form_error}, {"field_errors", std::move(field_errors)}});
+            return;
+        }
+        if (!addon.changed(*form)) {
+            reply(id, has_id, {{"needs_restart", false}}); // Como F2: nada que escribir.
+            return;
+        }
+        if (!addon.discarded().empty() && !params->value("discard_confirmed", false)) {
+            fail(id, has_id, RpcError::ConfirmationRequired,
+                 message_data(addon.discard_question()));
+            return;
+        }
+        if (const std::optional<std::string> error = addon.save(*form)) {
+            fail(id, has_id, RpcError::StorageError, message_data(*error));
+            return;
+        }
+        reply(id, has_id, {{"needs_restart", restart}});
+        write_(notification("settings.changed", {{"section", "telegram"}}));
+    } else if (method == "addons.telegram.invite_code") {
+        if (bad_params(check_params(params, {}))) {
+            return;
+        }
+        const Result<std::string> code = cli::TelegramAddon::invite_code();
+        if (code.is_error()) {
+            fail(id, has_id, RpcError::InternalError, message_data(code.error().message));
+        } else {
+            // invite_code, no code: así CHAT_DEBUG_RPC lo tapa (debug_log.cpp).
+            reply(id, has_id, {{"invite_code", code.value()}});
+        }
+    } else if (method == "addons.telegram.invited.list") {
+        if (bad_params(check_params(params, {}))) {
+            return;
+        }
+        addon.load();
+        if (!addon.invited_error().empty()) {
+            fail(id, has_id, RpcError::StorageError, message_data(addon.invited_error()));
+        } else {
+            reply(id, has_id, {{"users", user_list(addon.invited())}});
+        }
+    } else if (method == "addons.telegram.invited.remove") {
+        if (bad_params(check_params(params, {{"user"}}))) {
+            return;
+        }
+        const std::optional<std::int64_t> user = parse_user(params->at("user").get<std::string>());
+        if (!user.has_value()) {
+            fail(id, has_id, RpcError::InvalidParams, {{"fields", {"user"}}});
+            return;
+        }
+        const std::uint64_t key = track(id, has_id);
+        addon.remove_invited(*user, [this, key](const cli::TelegramAddon::Removal& removal) {
+            finish_long(key, true, [this, removal](const Json& request) {
+                if (removal.error.has_value()) {
+                    fail(request, true, RpcError::StorageError, message_data(*removal.error));
+                } else {
+                    reply(request, true,
+                          {{"users", user_list(telegram_->invited())},
+                           {"message", removal.message}});
+                }
+            });
+        });
+    } else {
+        service(method, params, id, has_id);
+    }
+}
+
+void Dispatcher::service(const std::string& method, const Json* params, const Json& id,
+                         bool has_id) {
+    cli::TelegramAddon& addon = *telegram_;
+    const bool apply = method == "service.apply";
+    if (const auto bad = apply ? check_params(params, {{"addon"},
+                                                       {"restart", Param::Type::Boolean, false},
+                                                       {"replace_foreign", Param::Type::Boolean,
+                                                        false}})
+                               : check_params(params, {{"addon"}})) {
+        fail(id, has_id, RpcError::InvalidParams, *bad);
+        return;
+    }
+    if (params->at("addon") != std::string{addon.info().name}) {
+        fail(id, has_id, RpcError::InvalidParams, {{"fields", {"addon"}}});
+        return;
+    }
+    const std::string& chatbot = addon.environment().chatbot_path;
+    std::error_code error;
+    if (!std::filesystem::path{chatbot}.is_absolute() ||
+        !std::filesystem::is_regular_file(chatbot, error)) {
+        fail(id, has_id, RpcError::StorageError,
+             message_data("El servicio arranca chatbot, y no está junto a chatbot-rpc: " +
+                          chatbot + "."));
+        return;
+    }
+    if (!addon.has_service()) {
+        fail(id, has_id, RpcError::Unsupported, message_data(kNoHomeForService));
+        return;
+    }
+    addon.load(); // Activado guardado (apply, restart) y mismatch (status).
+    if (method == "service.restart" && !addon.saved_form().enabled) {
+        fail(id, has_id, RpcError::ValidationFailed, message_data(cli::kRestartNeedsEnabled));
+        return;
+    }
+    const std::uint64_t key = track(id, has_id);
+    // La respuesta de una acción: Done/Failed → {message, ok}; NoSystemd → -32006.
+    const auto action_reply = [this](const Json& request, const cli::ServiceAction& action) {
+        using Kind = cli::ServiceAction::Kind;
+        if (action.kind == Kind::NoSystemd) {
+            fail(request, true, RpcError::Unsupported, message_data(action.message));
+        } else if (action.kind == Kind::Confirm) {
+            fail(request, true, RpcError::ConfirmationRequired, message_data(action.message));
+        } else {
+            reply(request, true, {{"message", action.message}, {"ok", action.kind == Kind::Done}});
+        }
+    };
+    if (method == "service.status") {
+        addon.refresh([this, key] {
+            finish_long(key, false, [this](const Json& request) {
+                reply(request, true, status_json(*telegram_));
+            });
+        });
+    } else if (apply) {
+        addon.apply(params->value("restart", false), params->value("replace_foreign", false),
+                    [this, key, action_reply](const cli::TelegramAddon::Applied& applied) {
+                        finish_long(key, true, [&](const Json& request) {
+                            if (!applied.skipped.empty()) {
+                                reply(request, true,
+                                      {{"message", applied.skipped}, {"ok", false}});
+                            } else {
+                                action_reply(request, applied.action);
+                            }
+                        });
+                    });
+    } else {
+        const auto done = [this, key, action_reply](const cli::ServiceAction& action) {
+            finish_long(key, true, [&](const Json& request) { action_reply(request, action); });
+        };
+        if (method == "service.restart") {
+            addon.restart(done);
+        } else if (method == "service.disable") {
+            addon.disable(done);
+        } else {
+            addon.reload(done);
+        }
+    }
+}
+
+std::uint64_t Dispatcher::track(const Json& id, bool has_id) {
+    const std::uint64_t key = ++next_key_;
+    if (has_id) {
+        pending_.push_back({key, id});
+    }
+    return key;
+}
+
+std::optional<Json> Dispatcher::untrack(std::uint64_t key) {
+    const auto found = std::find_if(pending_.begin(), pending_.end(),
+                                    [key](const Pending& pending) { return pending.key == key; });
+    if (found == pending_.end()) {
+        return std::nullopt;
+    }
+    Json id = std::move(found->id);
+    pending_.erase(found);
+    return id;
+}
+
+void Dispatcher::finish_long(std::uint64_t key, bool service_changed,
+                             const std::function<void(const Json&)>& respond) {
+    sync(true); // El delta pendiente sale antes que la respuesta.
+    if (const std::optional<Json> request = untrack(key)) {
+        respond(*request);
+    }
+    if (service_changed) {
+        write_(notification("service.changed", {{"addon", std::string{telegram_->info().name}}}));
     }
 }
 
@@ -796,12 +1268,20 @@ void Dispatcher::initialize(const Json* params, const Json& id, bool has_id) {
         });
     };
     models_ = std::make_unique<cli::ModelsLoader>(models_transport_, guarded);
+    telegram_ = make_addons_(guarded);
     session_ = make_session_(std::move(guarded), [this](cli::Session::Finished finished) {
         finished_ = std::move(finished);
     });
     state_ = State::Running;
     start_conversation();
     const bool ready = session_->configured();
+    Json capabilities{{"search", true}, {"addons", Json::array()}, {"service", nullptr}};
+    if (telegram_->available()) {
+        for (const addon_settings::AddonInfo& addon : addon_settings::known_addons()) {
+            capabilities["addons"].push_back(std::string{addon.name});
+        }
+        capabilities["service"] = "systemd";
+    }
     reply(id, has_id,
           {{"protocol_version", kProtocolVersion},
            {"server", {{"name", std::string{kServerName}}, {"version", info_.version}}},
@@ -816,8 +1296,7 @@ void Dispatcher::initialize(const Json* params, const Json& id, bool has_id) {
            {"problem", ready ? Json(nullptr) : Json(std::string{cli::kSetupNotice})},
            {"warnings", session_->startup_warnings()},
            // Lo que soporta este servidor; no cambia durante la sesión.
-           {"capabilities",
-            {{"search", true}, {"addons", Json::array()}, {"service", nullptr}}}});
+           {"capabilities", capabilities}});
 }
 
 void Dispatcher::shutdown(const Json& id, bool has_id) {
@@ -833,9 +1312,11 @@ void Dispatcher::shutdown(const Json& id, bool has_id) {
 
 void Dispatcher::close_session() {
     alive_.reset();
-    models_id_.reset(); // Pendiente al apagar o en EOF: sin respuesta, como chat.send.
-    models_.reset();    // Cancela y hace join, antes que la sesión.
-    session_.reset();   // Cancela y hace join.
+    pending_.clear(); // Pendientes al apagar o en EOF: sin respuesta, como chat.send.
+    models_key_.reset();
+    models_.reset();   // Cancela y hace join, antes que la sesión.
+    telegram_.reset(); // Cancela el programa en curso y hace join.
+    session_.reset();  // Cancela y hace join.
     finished_.reset();
     pending_since_.reset();
 }

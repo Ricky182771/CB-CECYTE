@@ -75,7 +75,7 @@ enum class Phase { Idle, Searching, Thinking, Streaming };
 
 /// Un parámetro de un método.
 struct Param {
-    enum class Type { String, Integer, Object, IntegerOrString, Any };
+    enum class Type { String, Integer, Boolean, Object, IntegerOrString, Any };
     std::string_view name;
     Type type = Type::String;
     bool required = true;

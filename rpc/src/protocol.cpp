@@ -192,6 +192,9 @@ std::optional<Json> check_params(const Json* params,
         case Param::Type::Integer:
             ok = found->is_number_integer();
             break;
+        case Param::Type::Boolean:
+            ok = found->is_boolean();
+            break;
         case Param::Type::Object:
             ok = found->is_object();
             break;

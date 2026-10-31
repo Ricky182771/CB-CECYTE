@@ -2,8 +2,7 @@
 #define CHATBOT_CLI_ADDONS_PANEL_H
 
 #include "addon_form.h"
-#include "addon_launcher.h"
-#include "service_control.h"
+#include "telegram_addon.h"
 #include "theme.h"
 
 #include "chatbot/addon_settings/registry.h"
@@ -24,36 +23,12 @@
 
 namespace chatbot::cli {
 
-inline constexpr std::string_view kRestartNeedsEnabled = "Activa el addon y guarda para arrancarlo.";
-
-/// Lo que el panel necesita del sistema: main.cpp lo arma con el real y las
-/// pruebas con procesos falsos y una carpeta temporal.
-struct AddonsEnvironment {
-    Os os = current_os();
-    ServiceWorker::Post post;  ///< Pasa una tarea al hilo de la interfaz.
-    ProcessRunner run;         ///< run_process.
-    AddonLocator locate;       ///< locate_addon.
-    bool portable = false;
-    std::string config_path;
-    std::string credentials_path;
-    std::optional<std::string> data_dir;  ///< default_addon_data_dir; nullopt: sin HOME.
-    std::optional<std::string> unit_path; ///< default_unit_path; nullopt: sin HOME.
-    std::optional<unsigned long> uid;     ///< current_user_id, para loginctl.
-    std::string chatbot_path;             ///< executable_path(): ExecStart de la unidad.
-    std::optional<std::string> xdg_config_home; ///< Solo si es ruta absoluta.
-    std::optional<std::string> xdg_data_home;   ///< Solo si es ruta absoluta.
-    /// Los secretos definidos en el entorno de la app (secrets.h), que el
-    /// servicio no ve.
-    std::vector<std::string_view> env_defined;
-    std::string home; ///< Para mostrar las rutas con ~.
-};
-
 /// F2 → Addons → Telegram (FTXUI): el estado del addon y de su servicio
 /// arriba, fijo, y debajo los campos (con barra si no caben) y los
-/// invitados. Los programas (--config-version, systemctl, loginctl,
-/// journalctl) corren en un ServiceWorker; las preguntas y los resultados
-/// salen en la línea de estado de SettingsScreen. Se usa solo desde el hilo
-/// de la interfaz.
+/// invitados. Lo guardado, guardar y el servicio están en TelegramAddon
+/// (sin FTXUI, lo comparte chatbot-rpc); aquí, el dibujo, el foco, los
+/// textos y las preguntas, que salen en la línea de estado de
+/// SettingsScreen. Se usa solo desde el hilo de la interfaz.
 class AddonsPanel {
 public:
     /// Un aviso para la línea de estado.
@@ -118,10 +93,8 @@ public:
 private:
     [[nodiscard]] bool available() const;
     [[nodiscard]] bool read_only() const;
-    /// El aviso de service_mismatch, si el addon está instalado y es
-    /// compatible; "" si no o si el servicio está como dice Activado.
+    /// TelegramAddon::out_of_sync con la casilla Activado.
     [[nodiscard]] std::string out_of_sync() const;
-    [[nodiscard]] addon_settings::UnitParams unit_params() const;
     void refresh_placeholders();
     void refresh_status();
     void apply_service(bool restart, bool replace_foreign);
@@ -136,20 +109,14 @@ private:
     Notice notice_;
     std::function<void()> retry_save_;
     const addon_settings::AddonInfo& addon_;
-    std::optional<AddonsEnvironment> environment_;
+    /// Sin set_environment, nullptr.
+    std::unique_ptr<TelegramAddon> telegram_;
 
-    addon_settings::TelegramSectionRead read_;
-    std::string load_error_; ///< config.json o credentials.json no se pudieron leer.
-    AddonSecrets secrets_;
-    AddonForm form_;       ///< Lo que editan los componentes.
-    AddonForm saved_form_; ///< Lo de config.json (al abrir o al guardar).
-    std::optional<AddonInstall> install_;  ///< nullopt: aún no se sabe.
-    std::optional<ServiceStatus> service_; ///< nullopt: aún no se sabe.
+    AddonForm form_; ///< Lo que editan los componentes.
     bool status_requested_ = false;
     bool discard_confirmed_ = false;
     std::optional<Question> question_;
     std::vector<std::int64_t> invited_;
-    std::string invited_error_;
     std::vector<std::string> invited_names_;
     int invited_selected_ = 0;
     std::string app_model_; ///< El de la app (open), para "Modelo".
@@ -167,11 +134,6 @@ private:
     ftxui::Component refresh_button_;
     ftxui::Component invited_menu_;
     ftxui::Component root_;
-
-    // control_ antes que worker_: el destructor del worker espera al trabajo
-    // en curso, que usa control_.
-    std::unique_ptr<ServiceControl> control_;
-    std::unique_ptr<ServiceWorker> worker_;
 };
 
 } // namespace chatbot::cli

@@ -16,10 +16,10 @@ Versión del protocolo: **1**.
 | `commands.list`, `commands.run` | 6.5 | Implementado |
 | `blocks.list`, `blocks.get`, `blocks.save` | 6.6 | Implementado |
 | `settings.provider.*`, `models.list`, `settings.system_prompt.*`, `settings.search.*`, `settings.gui.*` | 6.7 | Implementado |
-| `addons.*`, `service.*` | 6.8 | Falta (`-32601`) |
+| `addons.*`, `service.*` (Linux; en Windows `-32006`) | 6.8 | Implementado |
 | Eventos `conversation.entry_added`, `entry_delta`, `entry_updated`, `phase`, `saved`, `closed`; `chat.finished`; `conversations.changed` | 7 | Implementado |
 | Evento `settings.changed` (`provider`, `system_prompt`, `search`, `gui`) | 7 | Implementado |
-| Evento `service.changed`; `settings.changed` con `telegram` | 7 | Falta |
+| Evento `service.changed`; `settings.changed` con `telegram` | 7 | Implementado |
 | `CHAT_DEBUG_RPC` | 10 | Implementado |
 | Windows: stdio en modo binario | 2 | Implementado, probado en la CI con pipes (`tools/check-rpc-pipes.sh`) |
 
@@ -116,13 +116,13 @@ cliente                                  servidor
   "ready":false,                      // hay proveedor, key (o servidor local) y modelo
   "problem":"Configura un proveedor para empezar.",    // null si ready
   "warnings":["Las instrucciones del sistema no son texto; se usan las predeterminadas."],
-  "capabilities":{"search":true,"addons":[],"service":null}}}
+  "capabilities":{"search":true,"addons":["telegram"],"service":"systemd"}}}  // Windows: [] y null
 ```
 
 - Si `protocol_version` no coincide, el servidor responde `-32010 ProtocolMismatch` con `data: {"server": 1}` y el cliente avisa "actualiza la app".
 - `ready: false` es el equivalente de la TUI abriendo F2 con `Configura un proveedor para empezar.`. La carga usa `allow_missing_key_and_model = true`, como la TUI.
 - `warnings` son los avisos de arranque que la TUI manda a la línea de estado, por ejemplo un system prompt que no es cadena. Los avisos de tema y símbolos son solo de la TUI y no aparecen aquí.
-- `capabilities` dice qué soporta este servidor y no cambia durante la sesión. `search: true`: `chat.send` acepta `search` (que haya key o no lo dice `app.status.has_search_key`). `addons` y `service` quedan en `[]` y `null` hasta que existan sus métodos (sección 6.8); en Windows se quedan así.
+- `capabilities` dice qué soporta este servidor y no cambia durante la sesión. `search: true`: `chat.send` acepta `search` (que haya key o no lo dice `app.status.has_search_key`). En Linux, `addons` trae los de `known_addons` (`["telegram"]`) y `service` es `"systemd"` (sección 6.8), aunque el addon no esté instalado; en Windows quedan en `[]` y `null`.
 - `paths.downloads` es la carpeta de `/guardar` y `/exportar`, con su `chatbot/` (no se crea al arrancar).
 
 ---
@@ -149,15 +149,15 @@ Los códigos estándar de JSON-RPC más los de la aplicación, en el rango que J
 | -32601 | MethodNotFound | Método desconocido |
 | -32602 | InvalidParams | Faltan parámetros, sobran o tienen otro tipo (`data.fields`) |
 | -32603 | InternalError | Excepción atrapada en el despachador (no debería pasar) |
-| -32800 | RequestCancelled | La petición se canceló con `$/cancel`, o otro `models.list` la reemplazó |
+| -32800 | RequestCancelled | La petición larga se canceló con `$/cancel`, o otro `models.list` la reemplazó |
 | -32001 | NotInitialized | Falta `initialize` |
 | -32002 | Busy | Hay una respuesta en curso y la operación la necesita libre |
 | -32003 | UnknownConversation | El handle no existe o ya se cerró |
 | -32004 | NotConfigured | `chat.send` sin proveedor ni modelo |
 | -32005 | ValidationFailed | No pasa la validación: configuración, texto vacío, número de bloque o nombre de archivo (`data.message` o `data.fields`) |
-| -32006 | Unsupported | No disponible en esta plataforma (addons en Windows) |
+| -32006 | Unsupported | No disponible: addons en Windows, sin systemd de usuario o sin `HOME` para la unidad (`data.message`) |
 | -32007 | StorageError | No se pudo leer, escribir o borrar un archivo, o no hay carpeta de descargas (`data.message`) |
-| -32008 | ConfirmationRequired | Hay que preguntarle al usuario (unidad de systemd ajena; `data.message`) |
+| -32008 | ConfirmationRequired | Hay que preguntarle al usuario: unidad de systemd ajena o llaves de la sección que se descartarían (`data.message`, el texto de F2) |
 | -32010 | ProtocolMismatch | Versión distinta en `initialize` |
 | -32011 | StartupFailed | El arranque falló (carpeta del modo portable no escribible, `config.json` inválido): `initialize` responde esto con `data.message`, el mismo texto que la TUI imprime al salir |
 
@@ -176,7 +176,14 @@ El texto que la TUI muestra (`[error de autenticación] La key de búsqueda no e
 
 ### Cancelar peticiones largas
 
-`$/cancel` es una notificación con el id de la petición: `{"method":"$/cancel","params":{"id":7}}`. Si es el de un `models.list` pendiente, ese `models.list` responde `-32800` en ese momento y su resultado se descarta; con cualquier otro id no hace nada. `$/cancel` nunca recibe respuesta propia como notificación; si llega con `id`, responde `{}` (después del `-32800`). Con R4 también servirá para `service.*` y `addons.check_install`. Para cancelar una respuesta del modelo se usa `chat.cancel`, porque `chat.send` no es una petición larga.
+Las peticiones **largas** no responden al momento: `models.list`, `addons.check_install`, `addons.telegram.invited.remove` y todas las `service.*`. Puede haber varias pendientes a la vez (por ejemplo, un `models.list` y un `service.status`; también con el mismo id, aunque el cliente no debería repetirlo: `$/cancel` cancela todas las que lo tienen, cada una con su `-32800`), y cada una recibe **exactamente una respuesta**: la suya o `-32800`. La única excepción es `shutdown` (o EOF): las olvida sin responder, como a `chat.send`.
+
+`$/cancel` es una notificación con el id de la petición: `{"method":"$/cancel","params":{"id":7}}`. Si hay una petición larga pendiente con ese id, responde `-32800` en ese momento y su resultado se descarta; con cualquier otro id no hace nada. `$/cancel` nunca recibe respuesta propia como notificación; si llega con `id`, responde `{}` (después del `-32800`).
+
+- `models.list` cancelado se corta (como el que reemplaza otro `models.list`).
+- **Las de addons no se interrumpen:** `check_install`, `invited.remove` y `service.*` corren en el `ServiceWorker` del addon, una a la vez y en orden, y siguen hasta terminar (cada programa tiene su tope de 5 s; cortar `systemctl` a la mitad es peor). Solo se descarta su respuesta: las que emiten `service.changed` lo emiten igual al terminar, porque el estado pudo cambiar. `shutdown` y EOF sí cortan el programa en curso (SIGTERM, 200 ms, SIGKILL).
+
+Para cancelar una respuesta del modelo se usa `chat.cancel`, porque `chat.send` no es una petición larga.
 
 ### Notificaciones
 
@@ -433,13 +440,17 @@ La GUI necesita guardar sus propias cosas (tema claro u oscuro, ancho de la barr
 
 ### 6.8 Addons (solo Linux)
 
-En Windows todos responden `-32006 Unsupported`.
+Usan `TelegramAddon` (`cli/src/telegram_addon.h`), la misma clase que F2 → Addons: leer, revisar y guardar la sección, los invitados y el servicio, con los mismos textos. **Las preguntas (s/n) se quedan en la GUI:** el servidor dice qué hay que preguntar (`-32008` o `needs_restart`) y la GUI pregunta y vuelve a llamar. No tocan la `Session`: funcionan también con una respuesta del chat en curso (en la TUI, F2 no abre entonces por la interfaz, no por el addon).
 
-**`addons.list`** `→ {}` `← {addons: [{name, installed, problem, config_version_ok}]}`
-- Usa `known_addons`, `find_addon_executable` y `addon_install_problem`.
+En Windows todos responden `-32006 Unsupported` y `capabilities` se queda en `addons: []`, `service: null`. En Linux, `capabilities` trae `addons: ["telegram"]` (los de `known_addons`) y `service: "systemd"`: lo que soporta el servidor, no si el addon está instalado.
 
-**`addons.check_install`** `→ {name}` `← igual que un elemento de la lista` · *larga, cancelable*
-- Corre `chatbot-telegram --config-version` (`parse_config_version`).
+Los parámetros `name` y `addon` solo aceptan un nombre de `known_addons` (`"telegram"`); otro da `-32602` con ese campo.
+
+**`addons.list`** `→ {}` `← {addons: [{name, installed, path, problem, config_version_ok}]}`
+- `installed` y `path` salen de buscar el programa junto a `chatbot` (el de la carpeta de `chatbot-rpc`) y, fuera del modo portable, en el `PATH` (`find_addon_executable`). No corre nada: `config_version_ok` es `null` hasta que `addons.check_install` (o `service.status`) lo pregunte, y entonces `problem` es el de `addon_install_problem` (`No instalado: …`, `Incompatible: …` o `""`).
+
+**`addons.check_install`** `→ {name}` `← igual que un elemento de la lista` · *larga*
+- Corre `chatbot-telegram --config-version` (`parse_config_version`): `config_version_ok` ya es `true` o `false`. Un addon incompatible deja la sección en solo lectura.
 
 **`addons.telegram.get`** `→ {}` `←`
 
@@ -450,29 +461,40 @@ En Windows todos responden `-32006 Unsupported`.
                    "concurrent":"2", "idle_minutes":"30", "stale_minutes":"10",
                    "draft_ms":"700", "time_zone":"America/Mexico_City"},
          "remove_model_key":false, "remove_search_key":false},
- "secrets":{"token":"...", "model_key":"...", "search_key":"..."},   // addon_secret_status (enmascarado)
+ "secrets":{"token":"guardada: …abcd", "model_key":"sin configurar", "search_key":"..."},  // addon_secret_status
  "labels":{"token":"Token", "model":"Modelo", ...},   // addon_field_label, para que la GUI no los copie
- "env_note":""}
+ "env_note":"",              // addon_env_note: CHAT_* de la terminal que el servicio no ve
+ "read_only":false,          // error al leer, sección más nueva o addon incompatible
+ "read_only_reason":null,    // el texto de F2, o null
+ "discarded":["rara"],       // llaves que guardar descartaría
+ "load_error":null}          // config.json o credentials.json no se pudieron leer
 ```
 
-Los campos de secretos van vacíos (vacío = se conserva lo guardado), igual que en `AddonForm`. Los nombres de `fields` son los de `AddonField` en snake_case.
+Lee los archivos en cada llamada. Los campos de secretos van vacíos (vacío = se conserva lo guardado), igual que en `AddonForm`; los secretos nunca salen, solo su estado enmascarado. Los nombres de `fields` son los de `AddonField` en snake_case. El `form` que reciben `check` y `save` tiene esta misma forma, con todas sus llaves (`-32602` con `form.…` o `form.fields.…` si falta o sobra una).
 
 **`addons.telegram.check`** `→ {form}` `← {field_errors: {campo: mensaje}, form_error, needs_restart}`
-- Usa `addon_field_error` por campo y `addon_form_error`.
+- `field_errors` solo trae los campos con error (`addon_field_error`); `form_error` es el primero, `"<etiqueta>: <error>"` (`addon_form_error`), o `null`. Ningún mensaje repite un secreto.
 
-**`addons.telegram.save`** `→ {form}` `← {needs_restart}`
-- Escribe `addons.telegram` y los cambios de `credentials.json` (`addon_credential_changes`).
-- Después, la GUI pregunta "¿Reiniciar ahora?" y llama `service.restart`, o `service.reload` si no hace falta reiniciar. Es lo mismo que hace F2.
+**`addons.telegram.save`** `→ {form, discard_confirmed?: false}` `← {needs_restart}`
+- Solo lectura → `-32005` con `read_only_reason`. Errores del formulario → `-32005` con `data.message` (`form_error`) y `data.field_errors`.
+- Si guardar descartaría llaves de la sección y `discard_confirmed` no es `true` → `-32008` con el texto de F2 (`Se descartarán: …. ¿Guardar? (s/n)`); la GUI pregunta y repite con `true`.
+- Escribe primero los cambios de `credentials.json` y después `addons.telegram` (si fallan los secretos, la sección no se escribe), como F2. Un error al escribir → `-32007`. Sin cambios no escribe nada (y tampoco pregunta por las llaves descartadas).
+- Si escribió: `{needs_restart}` y después `settings.changed {section: "telegram"}`. `needs_restart` es el criterio de F2: el cambio lo necesita (token o respuestas a la vez), está activado y el servicio está activo **según el último estado que trajo `service.status` o una acción**; por eso la GUI pide `service.status` al abrir la sección, como F2.
+- **No toca el servicio. Paso obligatorio después de `save`:** `service.apply`, como hace F2 al guardar. Con `needs_restart`, la GUI pregunta "Este cambio necesita reiniciar el bot y se borran las conversaciones en memoria. ¿Reiniciar ahora?" y manda `restart: true` si contesta que sí. Si no lo llama, el servicio sigue como estaba (F2 lo marca como "no coincide" la próxima vez).
 
-**`addons.telegram.invite_code`** `→ {}` `← {code}` (`generate_invite_code`; no guarda nada)
+**`addons.telegram.invite_code`** `→ {}` `← {invite_code}` (`generate_invite_code`; no guarda nada: va al campo `invite_code` del formulario). Si el sistema no da números al azar: `-32603` con `data.message`.
 
 **`addons.telegram.invited.list`** `→ {}` `← {users: ["123456789", ...]}`
+- `invitados.json` dañado o sin `HOME` → `-32007` con el texto de F2.
 
-**`addons.telegram.invited.remove`** `→ {user}` `← {users: [...]}` (`remove_invited` bajo `flock`)
+**`addons.telegram.invited.remove`** `→ {user}` `← {users, message}` · *larga*
+- `user` es una cadena decimal (`-32602` si no es un entero positivo de 64 bits). Quita al momento con `remove_invited` (bajo `flock`) y, si el servicio está activo según el último estado, lo recarga para que el bot deje de dejarlo entrar, como F2. Responde al terminar: `users` es la lista que quedó y `message`, el de F2 (`Se quitó 123.` más el resultado de la recarga). Error del archivo → `-32007`.
 
 #### Servicio de systemd
 
-Todas son *largas y cancelables* (corren `systemctl` con `child_process`).
+Todas son *largas* y corren en el `ServiceWorker` de `TelegramAddon` (`systemctl --user`, `loginctl`, `journalctl` con argumentos fijos y su tope de 5 s cada uno), una a la vez y en orden, junto con `check_install` e `invited.remove`.
+
+La unidad que escribe `chatbot-rpc` es **byte por byte** la de la TUI: su `ExecStart` es **la ruta de `chatbot`** (la TUI, que hace `exec` del addon), no la de `chatbot-rpc`. `chatbot-rpc` usa el `chatbot` de su misma carpeta (`sibling_chatbot_path`), y busca el addon junto a él. En el árbol de compilación también están juntos (`build/<preset>/cli/`). Si ese archivo no existe (o no se supo la ruta de `chatbot-rpc`), todas las `service.*` responden `-32007` con `El servicio arranca chatbot, y no está junto a chatbot-rpc: <ruta>.` Sin `HOME` no hay dónde poner la unidad: `-32006` con `Sin HOME no hay dónde instalar el servicio.`
 
 **`service.status`** `→ {addon}` `←`
 
@@ -481,17 +503,22 @@ Todas son *largas y cancelables* (corren `systemctl` con `child_process`).
  "unit":"current",              // missing | foreign | current | stale (UnitState)
  "linger":true, "last_error":"",
  "summary":"...",              // service_summary
- "problem":"", "mismatch":"",                          // service_problem, service_mismatch
+ "problem":"", "mismatch":"",  // service_problem; service_mismatch con Activado guardado
  "journal_command":"..."}      // journal_command
 ```
+- Como `[Actualizar estado]`: también corre `--config-version`, así `addons.list` y `read_only` quedan al día.
 
-**`service.apply`** `→ {addon, enabled, replace_foreign?: false}` `← {message}`
-- Si hay una unidad ajena y `replace_foreign` es false: `-32008 ConfirmationRequired` con el texto de `kReplaceForeignUnit`. La GUI pregunta y repite con `true`.
-- Sin systemd de usuario: `-32006` con el mensaje de `NoSystemd`.
+**`service.apply`** `→ {addon, restart?: false, replace_foreign?: false}` `← {message, ok}`
+- **Sin `enabled`:** aplica lo guardado en `addons.telegram`, como F2 después de guardar (`ServiceControl::apply`): con Activado, escribe la unidad si falta o está vieja, `daemon-reload`, `enable --now` si no corre, y si ya corría `reload`, o `restart` con `restart: true`; sin Activado, `disable --now` si corre o está habilitado.
+- Activado y el addon no está instalado: no toca el servicio y responde `{message, ok: false}` con el problema (`No instalado: …`; F2 lo muestra como `Guardado. …`). No es un error.
+- Unidad ajena y `replace_foreign` no es `true` → `-32008` con `¿Reemplazar el servicio existente? (s/n)` (`kReplaceForeignUnit`); la GUI pregunta y repite con `true`.
+- Sin systemd de usuario → `-32006` con `No hay systemd de usuario en esta sesión.`
+- `ok: false` si un `systemctl` falló; `message` dice cuál (`No se pudo …`). `message` puede ser `""` si no hubo nada que hacer.
 
-**`service.restart`** · **`service.disable`** · **`service.reload`** `→ {addon}` `← {message}`
+**`service.restart`** · **`service.disable`** · **`service.reload`** `→ {addon}` `← {message, ok}`
+- `restart` con Activado sin guardar → `-32005` con `Activa el addon y guarda para arrancarlo.` (`[Reiniciar]` de F2). `reload` solo recarga si está activo (`message: ""` si no). Sin systemd de usuario → `-32006`.
 
-Todas emiten `service.changed {addon}` al terminar.
+Todas las `service.*` salvo `service.status`, y `invited.remove`, emiten `service.changed {addon}` al terminar, después de su respuesta, **también si se cancelaron o fallaron** (el estado pudo haber cambiado). `service.status` no lo emite, para que una GUI que vuelve a pedir el estado con cada `service.changed` no entre en un ciclo.
 
 ---
 
@@ -507,8 +534,8 @@ Todas emiten `service.changed {addon}` al terminar.
 | `conversation.closed` | `{conversation, reason}` | `replaced` (`new`, `open`), `deleted`, o `shutdown`: siempre en `shutdown` si hay sesión, con o sin respuesta en curso |
 | `chat.finished` | ver abajo | Una vez por cada `chat.send` aceptado, salvo si antes llegó `shutdown` (sección 3) |
 | `conversations.changed` | `{}` | Se guardó, borró o creó un archivo: la GUI vuelve a pedir la lista |
-| `settings.changed` | `{section}` | Se guardó: `provider` / `system_prompt` / `search` / `gui` (`telegram` llega en R4). Sale después de la respuesta y antes de los avisos en el historial |
-| `service.changed` | `{addon}` | Terminó una acción del servicio |
+| `settings.changed` | `{section}` | Se guardó: `provider` / `system_prompt` / `search` / `gui` / `telegram`. Sale después de la respuesta y antes de los avisos en el historial |
+| `service.changed` | `{addon}` | Terminó `service.apply`, `restart`, `disable`, `reload` o `addons.telegram.invited.remove`, aunque se haya cancelado o haya fallado; después de su respuesta (sección 6.8). `service.status` no lo emite |
 
 ```jsonc
 // chat.finished
@@ -589,7 +616,7 @@ La primera entrada del asistente llega con `entry_added` (la crea el primer delt
 
 - Sin red local: solo stdio (sección 2).
 - Los secretos nunca salen del servidor (sección 4). Las pruebas lo vigilan: ninguna respuesta ni evento contiene la key que se mandó (ver 12).
-- **Registro de depuración:** `CHAT_DEBUG_RPC=/ruta` escribe cada línea que entra y sale, con los valores de `api_key`, `token`, `model_key` y `search_key` reemplazados por `"•••"` **antes** de escribir. Igual que `CHAT_DEBUG_SSE`, contiene la conversación: solo para diagnosticar. Nunca está activo por defecto.
+- **Registro de depuración:** `CHAT_DEBUG_RPC=/ruta` escribe cada línea que entra y sale, con los valores de `api_key`, `token`, `model_key`, `search_key` e `invite_code` (también dentro de `form.fields` de `addons.telegram.*`) reemplazados por `"•••"` **antes** de escribir, también el que devuelve `addons.telegram.invite_code`. Igual que `CHAT_DEBUG_SSE`, contiene la conversación: solo para diagnosticar. Nunca está activo por defecto.
 - El servidor no ejecuta nada que mande el cliente. `service.*` solo corre `systemctl` con argumentos fijos, como F2.
 
 ---
@@ -608,7 +635,7 @@ La primera entrada del asistente llega con `entry_added` (la crea el primer delt
 En el repositorio, `chatbot_rpc_tests` (sin red):
 
 1. **Puras:** `LineReader` (tope de 1 MiB, línea partida, `\r\n`, EOF), `diff_entries`, la codificación de `Entry`, `ChatError` y los errores, `check_params` y la redacción de `CHAT_DEBUG_RPC`.
-2. **`Dispatcher`** con la misma `Session` falsa que las pruebas de la TUI (`tests/session_fakes.hpp`) y un reloj falso: secuencias exactas de mensajes (el ejemplo de la sección 8, búsqueda, cancelar en cada fase, `Busy`, 429, `conversation.new`, guardado que falla, deltas agrupados, errores del protocolo), la configuración (`settings.*`, con y sin `CHAT_*` y con una respuesta en curso) y `models.list` con un transporte falso o bloqueante (lista, falla, cancelada, reemplazada, pendiente al `shutdown`); ninguna respuesta ni evento trae la key que se mandó.
+2. **`Dispatcher`** con la misma `Session` falsa que las pruebas de la TUI (`tests/session_fakes.hpp`) y un reloj falso: secuencias exactas de mensajes (el ejemplo de la sección 8, búsqueda, cancelar en cada fase, `Busy`, 429, `conversation.new`, guardado que falla, deltas agrupados, errores del protocolo), la configuración (`settings.*`, con y sin `CHAT_*` y con una respuesta en curso) y `models.list` con un transporte falso o bloqueante (lista, falla, cancelada, reemplazada, pendiente al `shutdown`); `addons.*` y `service.*` con procesos falsos (`tests/fake_system.hpp`, nunca `systemctl` de verdad): `get`, `check`, `save` (bien, con llaves descartadas, solo lectura, errores de campo), invitados con el servicio activo e inactivo, `status`, `apply` (unidad ajena, sin systemd, addon sin instalar, la unidad igual byte por byte a la de la TUI, sin `chatbot` junto a `chatbot-rpc`), `restart`/`disable`/`reload`, `$/cancel` de una de servicio, dos pendientes a la vez y `shutdown` con pendientes; ninguna respuesta ni evento trae la key ni los secretos del bot que se mandaron.
 3. **Proceso real** (solo POSIX): `chatbot-rpc` con pipes y un entorno limpio, sin configuración: `initialize`, `chat.send` → `-32004`, `shutdown`, `exit` → 0; EOF → 0 en menos de 3 s; `exit` sin `shutdown` → 1; toda línea de stdout es JSON-RPC 2.0; sin el aviso de stdin en terminal.
 4. **Windows, en la CI:** `tools/check-rpc-pipes.sh` sobre `chatbot-rpc.exe` con pipes de MSYS2, en una carpeta portable: el ciclo de vida, ningún `\r` en la salida, entrada con `\r\n`, UTF-8 de ida y vuelta con `settings.gui.*`, EOF y stdout solo del protocolo; y en el ZIP, sin MSYS2 en el `PATH`, con y sin `chatbot.portable`. También corre a mano en Linux.
 5. Las tres primeras corren también con `asan` y `tsan`.
@@ -622,10 +649,10 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":2,"method":"conversations.list","params":{}}' \
   '{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}' \
   '{"jsonrpc":"2.0","method":"exit"}' \
-| ./build/dev/rpc/chatbot-rpc | jq -c .
+| ./build/dev/cli/chatbot-rpc | jq -c .
 ```
 
-Para una sesión interactiva: `rlwrap ./build/dev/rpc/chatbot-rpc 2>rpc.log`.
+Para una sesión interactiva: `rlwrap ./build/dev/cli/chatbot-rpc 2>rpc.log`.
 
 ---
 
